@@ -86,29 +86,26 @@ uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#53'
 uci commit dhcp
 
 # -----------------------------
-# 7. nftables TProxy
+# 7. nftables TProxy (исправлено!)
 # -----------------------------
 echo "[5/11] Создаём nft‑правила TProxy..."
 mkdir -p /etc/nftables.d
 
 cat > /etc/nftables.d/30-xray-tproxy.nft << 'EOF'
-table inet xray_tproxy {
+chain xray_tproxy_prerouting {
+    type filter hook prerouting priority mangle; policy accept;
 
-    chain prerouting {
-        type filter hook prerouting priority mangle; policy accept;
+    ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } return
+    ip daddr { 1.1.1.1, 77.88.8.8 } return
 
-        ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } return
-        ip daddr { 1.1.1.1, 77.88.8.8 } return
+    meta mark set 1
 
-        meta mark set 1
+    tcp dport != 53 tproxy to :12345 meta mark set 1
+    udp dport != 53 tproxy to :12345 meta mark set 1
+}
 
-        tcp dport != 53 tproxy to :12345 meta mark set 1
-        udp dport != 53 tproxy to :12345 meta mark set 1
-    }
-
-    chain output {
-        type route hook output priority mangle; policy accept;
-    }
+chain xray_tproxy_output {
+    type route hook output priority mangle; policy accept;
 }
 EOF
 
@@ -151,7 +148,7 @@ python3 "$GENERATOR" \
 # -----------------------------
 echo "[9/11] Настраиваем cron для автообновления..."
 
-CRON_LINE="0 */3 * * * /root/update-xray.sh"
+CRON_LINE="0 */24 * * * /root/update-xray.sh"
 
 grep -qF "$CRON_LINE" /etc/crontabs/root 2>/dev/null || echo "$CRON_LINE" >> /etc/crontabs/root
 
@@ -170,5 +167,5 @@ echo "=== Установка завершена ==="
 echo "Подписка: $SUB_FILE"
 echo "Outbound: $OUTBOUND_JSON"
 echo "Config:   $CONFIG_JSON"
-echo "Cron:     каждые 3 часа"
+echo "Cron:     каждые 24 часа"
 echo
