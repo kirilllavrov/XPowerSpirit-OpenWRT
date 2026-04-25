@@ -34,61 +34,36 @@ if [ -z "$SUB_URL" ]; then
     exit 1
 fi
 
+# -----------------------------
+# 2. Обновление Xray-core
+# -----------------------------
 echo "[1] Обновление Xray-core..." >> "$LOG"
 apk update >> "$LOG" 2>&1
 apk add xray-core >> "$LOG" 2>&1
 
 # -----------------------------
-# 2. Обновление geoip/geosite
+# 3. Обновление geoip/geosite
 # -----------------------------
 echo "[2] Обновление geoip/geosite..." >> "$LOG"
 curl -fsSL "$GEOIP_URL" -o /etc/xray/geoip.dat
 curl -fsSL "$GEOSITE_URL" -o /etc/xray/geosite.dat
 
 # -----------------------------
-# 3. Скачивание подписки
+# 4. Парсинг подписки (исправлено!)
 # -----------------------------
-echo "[3] Скачиваем подписку..." >> "$LOG"
-SUB_DATA=$(curl -fsSL "$SUB_URL" || true)
+echo "[3] Парсим подписку → outbound.json..." >> "$LOG"
 
-if [ -z "$SUB_DATA" ]; then
-    echo "Ошибка: подписка не скачана" >> "$LOG"
+printf '%s\n' "$SUB_URL" | python3 "$PARSER" > "$OUTBOUND_JSON" 2>>"$LOG"
+
+if [ ! -s "$OUTBOUND_JSON" ]; then
+    echo "Ошибка: парсер не создал outbound.json" >> "$LOG"
     exit 1
 fi
 
 # -----------------------------
-# 4. Декодирование Base64
+# 5. Генерация полного config.json
 # -----------------------------
-echo "[4] Декодируем Base64..." >> "$LOG"
-DECODED=$(echo "$SUB_DATA" | base64 -d 2>/dev/null || true)
-
-if [ -z "$DECODED" ]; then
-    echo "Ошибка: подписка не декодируется (Base64)" >> "$LOG"
-    exit 1
-fi
-
-# -----------------------------
-# 5. Извлекаем VLESS
-# -----------------------------
-echo "[5] Извлекаем VLESS..." >> "$LOG"
-VLESS=$(echo "$DECODED" | grep -o 'vless://[^ ]*' | head -n 1)
-
-if [ -z "$VLESS" ]; then
-    echo "Ошибка: VLESS не найден" >> "$LOG"
-    exit 1
-fi
-
-# -----------------------------
-# 6. Парсим VLESS → outbound.json
-# -----------------------------
-echo "[6] Парсим VLESS → outbound.json..." >> "$LOG"
-
-"$PARSER" "$VLESS" > "$OUTBOUND_JSON"
-
-# -----------------------------
-# 7. Генерация полного config.json
-# -----------------------------
-echo "[7] Генерация config.json через генератор..." >> "$LOG"
+echo "[4] Генерация config.json через генератор..." >> "$LOG"
 
 python3 "$GENERATOR" \
     --outbound "$OUTBOUND_JSON" \
@@ -97,9 +72,9 @@ python3 "$GENERATOR" \
     --output "$CONFIG_JSON" >> "$LOG" 2>&1
 
 # -----------------------------
-# 8. Перезапуск Xray
+# 6. Перезапуск Xray
 # -----------------------------
-echo "[8] Перезапуск Xray..." >> "$LOG"
+echo "[5] Перезапуск Xray..." >> "$LOG"
 /etc/init.d/xray restart >> "$LOG" 2>&1
 
 echo "Готово." >> "$LOG"
