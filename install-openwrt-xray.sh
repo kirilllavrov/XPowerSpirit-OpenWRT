@@ -8,7 +8,7 @@ set -e
 REPO_RAW="https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main"
 
 GENERATOR="/root/xray-generate-config.py"
-PARSER="/root/xray-sub-parser.sh"
+PARSER="/root/xray-sub-parser.py"
 UPDATER="/root/update-xray.sh"
 
 OUTBOUND_JSON="/etc/xray/outbound.json"
@@ -70,7 +70,7 @@ echo "[3/11] Скачиваем генератор, парсер и обновл
 curl -fsSL "$REPO_RAW/xray-generate-config.py" -o "$GENERATOR"
 chmod +x "$GENERATOR"
 
-curl -fsSL "$REPO_RAW/xray-sub-parser.sh" -o "$PARSER"
+curl -fsSL "$REPO_RAW/xray-sub-parser.py" -o "$PARSER"
 chmod +x "$PARSER"
 
 curl -fsSL "$REPO_RAW/update-xray.sh" -o "$UPDATER"

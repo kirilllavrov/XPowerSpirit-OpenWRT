@@ -11,7 +11,7 @@ OUTBOUND_JSON="/etc/xray/outbound.json"
 CONFIG_JSON="/etc/xray/config.json"
 
 GENERATOR="/root/xray-generate-config.py"
-PARSER="/root/xray-sub-parser.sh"
+PARSER="/root/xray-sub-parser.py"
 
 # Твои собственные сборки geosite/geoip
 GEOIP_URL="https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat"
