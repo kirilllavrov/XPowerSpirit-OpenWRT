@@ -1,52 +1,127 @@
 #!/usr/bin/env python3
-# xray-generate-config.py
-# Генератор полного Xray config.json для OpenWrt 25.12.x (TProxy)
-# XPowerSpirit-OpenWRT
-
 import json
-import argparse
+import os
 import sys
 
+OUTBOUNDS_FILE = "/tmp/new_outbounds.json"
 
-def load_json(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+# -----------------------------
+# ФИЛЬТР ПО ДОМЕНАМ (ТОЛЬКО WHITELIST)
+# -----------------------------
+DOMAIN_WHITELIST = [
+    "cdn.redcook.ru"
+]
 
 
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+def load_outbounds():
+    if not os.path.exists(OUTBOUNDS_FILE):
+        return []
+
+    try:
+        with open(OUTBOUNDS_FILE, "r") as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                return data
+    except Exception:
+        pass
+
+    return []
 
 
-def build_config(outbound, geoip_path, geosite_path):
-    """
-    Формирует полный config.json для Xray.
-    """
+def filter_by_domain_whitelist(all_obs):
+    """Оставляем только сервера, чей address входит в whitelist."""
+    if not DOMAIN_WHITELIST:
+        return all_obs
 
-    config = {
+    filtered = []
+    for ob in all_obs:
+        vnext = ob.get("settings", {}).get("vnext", [{}])[0]
+        addr = vnext.get("address", "")
+        if addr in DOMAIN_WHITELIST:
+            filtered.append(ob)
+    return filtered
+
+
+def choose_best_server(servers):
+    """Выбираем один сервер по whitelist. Если whitelist пуст — первый."""
+    if not servers:
+        return None
+
+    # Если whitelist пуст — берём первый сервер
+    if not DOMAIN_WHITELIST:
+        return servers[0]
+
+    # Иначе берём первый сервер из whitelist
+    for ob in servers:
+        vnext = ob.get("settings", {}).get("vnext", [{}])[0]
+        addr = vnext.get("address", "")
+        if addr in DOMAIN_WHITELIST:
+            return ob
+
+    # Если ни один не подходит — fallback: первый сервер
+    return servers[0]
+
+
+# -----------------------------
+# БАЗОВЫЙ TPROXY-КОНФИГ
+# -----------------------------
+def base_config(geoip_path, geosite_path):
+    return {
         "log": {
             "loglevel": "warning"
         },
 
         # -----------------------------
-        # DNS через Xray
+        # DNS (из прикреплённого генератора)
         # -----------------------------
         "dns": {
+            "hosts": {
+                "cloudflare-dns.com": "1.1.1.1",
+                "dns.google": "8.8.8.8"
+            },
+            "queryStrategy": "UseIPv4",
+            "enableParallelQuery": True,
+            "disableCache": False,
+            "cacheStrategy": "cacheEnabled",
+            "serveStale": True,
+            "disableFallback": False,
             "servers": [
                 {
-                    "address": "https://1.1.1.1/dns-query",
-                    "domains": ["geosite:geolocation-!cn"]
+                    "address": "195.208.4.1",
+                    "port": 53,
+                    "domains": [
+                        "geosite:category-ru",
+                        "geosite:category-browser",
+                        "geosite:category-mobile",
+                        "geosite:category-cdn-ru",
+                        "geosite:private"
+                    ]
                 },
                 {
-                    "address": "https://77.88.8.8/dns-query",
-                    "domains": ["geosite:cn"]
+                    "address": "195.208.5.1",
+                    "port": 53,
+                    "domains": [
+                        "geosite:category-ru",
+                        "geosite:category-browser",
+                        "geosite:category-mobile",
+                        "geosite:category-cdn-ru",
+                        "geosite:private"
+                    ]
                 },
-                "localhost"
+                {
+                    "address": "https://cloudflare-dns.com/dns-query",
+                    "domains": [
+                        "geosite:category-streaming",
+                        "geosite:category-games"
+                    ]
+                },
+                "https://cloudflare-dns.com/dns-query",
+                "https://dns.google/dns-query"
             ]
         },
 
         # -----------------------------
-        # Inbounds (TProxy)
+        # INBOUNDS (TPROXY)
         # -----------------------------
         "inbounds": [
             {
@@ -80,95 +155,92 @@ def build_config(outbound, geoip_path, geosite_path):
             }
         ],
 
-        # -----------------------------
-        # Outbounds
-        # -----------------------------
-        "outbounds": [
-            outbound,  # основной VLESS из подписки
-            {
-                "tag": "direct",
-                "protocol": "freedom",
-                "settings": {}
-            },
-            {
-                "tag": "block",
-                "protocol": "blackhole",
-                "settings": {}
-            }
-        ],
-
-        # -----------------------------
-        # Маршрутизация
-        # -----------------------------
-        "routing": {
-            "domainStrategy": "IPIfNonMatch",
-            "rules": [
-                {
-                    "type": "field",
-                    "outboundTag": "direct",
-                    "ip": ["geoip:private"]
-                },
-                {
-                    "type": "field",
-                    "outboundTag": "direct",
-                    "domain": ["geosite:cn"]
-                },
-                {
-                    "type": "field",
-                    "outboundTag": "direct",
-                    "ip": ["geoip:cn"]
-                },
-                {
-                    "type": "field",
-                    "outboundTag": "block",
-                    "protocol": ["bittorrent"]
-                }
-            ]
-        },
-
-        # -----------------------------
-        # Путь к geoip/geosite
-        # -----------------------------
-        "policy": {},
-        "stats": {},
-        "api": {
-            "services": ["StatsService"],
-            "tag": "api"
-        },
-        "reverse": {},
-        "fakedns": [],
-        "transport": {},
         "geoip": geoip_path,
         "geosite": geosite_path
     }
 
-    return config
 
-
+# -----------------------------
+# ГЕНЕРАЦИЯ КОНФИГА
+# -----------------------------
 def main():
-    parser = argparse.ArgumentParser(description="Xray config generator for OpenWrt")
-    parser.add_argument("--outbound", required=True, help="Path to outbound.json")
-    parser.add_argument("--geoip", required=True, help="Path to geoip.dat")
-    parser.add_argument("--geosite", required=True, help="Path to geosite.dat")
-    parser.add_argument("--output", required=True, help="Output config.json")
+    if len(sys.argv) != 5:
+        print("Usage: xray-generate-config.py --outbound <file> --geoip <file> --geosite <file> --output <file>")
+        sys.exit(1)
 
-    args = parser.parse_args()
+    args = sys.argv
+    outbound_file = args[args.index("--outbound") + 1]
+    geoip_path = args[args.index("--geoip") + 1]
+    geosite_path = args[args.index("--geosite") + 1]
+    output_path = args[args.index("--output") + 1]
 
+    # Загружаем основной outbound (не используется напрямую)
     try:
-        outbound = load_json(args.outbound)
+        with open(outbound_file, "r") as f:
+            _ = json.load(f)
     except Exception as e:
         print(f"Ошибка чтения outbound.json: {e}")
         sys.exit(1)
 
-    config = build_config(outbound, args.geoip, args.geosite)
+    # Загружаем список всех серверов
+    all_obs = load_outbounds()
+    filtered_obs = filter_by_domain_whitelist(all_obs)
 
-    try:
-        save_json(args.output, config)
-    except Exception as e:
-        print(f"Ошибка записи config.json: {e}")
-        sys.exit(1)
+    cfg = base_config(geoip_path, geosite_path)
 
-    print(f"Готово: {args.output}")
+    # -----------------------------
+    # 0 серверов → direct only
+    # -----------------------------
+    if len(filtered_obs) == 0:
+        cfg["outbounds"] = [
+            {"protocol": "freedom", "tag": "direct"},
+            {"protocol": "blackhole", "tag": "block"}
+        ]
+        cfg["routing"] = {
+            "domainStrategy": "ForceIPv4",
+            "rules": [
+                {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},
+                {"type": "field", "network": "tcp,udp", "outboundTag": "direct"}
+            ]
+        }
+        with open(output_path, "w") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        print(f"Готово: {output_path}")
+        return
+
+    # -----------------------------
+    # 1+ серверов → выбираем один по whitelist
+    # -----------------------------
+    chosen = choose_best_server(filtered_obs)
+    chosen_tag = chosen.get("tag", "proxy")
+
+    cfg["outbounds"] = [
+        chosen,
+        {"protocol": "freedom", "tag": "direct"},
+        {"protocol": "blackhole", "tag": "block"}
+    ]
+
+    cfg["routing"] = {
+        "domainStrategy": "ForceIPv4",
+        "rules": [
+            {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},
+            {"type": "field", "domain": ["geosite:category-streaming", "geosite:category-games"], "outboundTag": chosen_tag},
+            {"type": "field", "ip": ["geoip:ru", "geoip:private"], "outboundTag": "direct"},
+            {"type": "field", "domain": [
+                "geosite:private",
+                "geosite:category-browser",
+                "geosite:category-cdn-ru",
+                "geosite:category-mobile",
+                "geosite:category-ru"
+            ], "outboundTag": "direct"},
+            {"type": "field", "network": "tcp,udp", "outboundTag": chosen_tag}
+        ]
+    }
+
+    with open(output_path, "w") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+    print(f"Готово: {output_path}")
 
 
 if __name__ == "__main__":
