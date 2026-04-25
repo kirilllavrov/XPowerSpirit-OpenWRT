@@ -33,7 +33,7 @@ fi
 # -----------------------------
 # 2. Запрос подписки
 # -----------------------------
-echo -n "Введите URL подписки VLESS: "
+printf "Введите URL подписки VLESS: "
 read SUB_URL
 
 if [ -z "$SUB_URL" ]; then
@@ -120,7 +120,7 @@ echo "[6/11] Добавляем таблицу маршрутизации xray..
 grep -q "100 xray" /etc/iproute2/rt_tables 2>/dev/null || echo "100 xray" >> /etc/iproute2/rt_tables
 
 if [ ! -f /etc/rc.local ]; then
-    echo -e "#!/bin/sh\nexit 0" > /etc/rc.local
+    printf "#!/bin/sh\nexit 0\n" > /etc/rc.local
     chmod +x /etc/rc.local
 fi
 
