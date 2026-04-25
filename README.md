@@ -1,2 +1,2 @@
-# -XPowerSpirit-OpenWRT
+# XPowerSpirit-OpenWRT
 Установка Xray на OpenWRT
