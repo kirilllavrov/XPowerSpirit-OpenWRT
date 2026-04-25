@@ -13,7 +13,6 @@ CONFIG_JSON="/etc/xray/config.json"
 GENERATOR="/root/xray-generate-config.py"
 PARSER="/root/xray-sub-parser.py"
 
-# Твои собственные сборки geosite/geoip
 GEOIP_URL="https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat"
 GEOSITE_URL="https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat"
 
@@ -35,25 +34,48 @@ if [ -z "$SUB_URL" ]; then
 fi
 
 # -----------------------------
-# 2. Обновление Xray-core
+# 2. HWID
+# -----------------------------
+if [ -f /etc/machine-id ]; then
+    HWID="$(cat /etc/machine-id)"
+else
+    HWID="$(uuidgen | tr -d '-')"
+fi
+
+echo "[HWID] $HWID" >> "$LOG"
+
+# -----------------------------
+# 3. Обновление Xray-core
 # -----------------------------
 echo "[1] Обновление Xray-core..." >> "$LOG"
 apk update >> "$LOG" 2>&1
 apk add xray-core >> "$LOG" 2>&1
 
 # -----------------------------
-# 3. Обновление geoip/geosite
+# 4. Обновление geoip/geosite
 # -----------------------------
 echo "[2] Обновление geoip/geosite..." >> "$LOG"
 curl -fsSL "$GEOIP_URL" -o /etc/xray/geoip.dat
 curl -fsSL "$GEOSITE_URL" -o /etc/xray/geosite.dat
 
 # -----------------------------
-# 4. Парсинг подписки (исправлено!)
+# 5. Скачивание подписки (через HWID)
 # -----------------------------
-echo "[3] Парсим подписку → outbound.json..." >> "$LOG"
+echo "[3] Скачиваем подписку..." >> "$LOG"
 
-printf '%s\n' "$SUB_URL" | python3 "$PARSER" > "$OUTBOUND_JSON" 2>>"$LOG"
+SUB_DATA="$(curl -s -L -m 15 -H "User-Agent: Happ" -H "x-hwid: $HWID" "$SUB_URL")"
+
+if [ -z "$SUB_DATA" ]; then
+    echo "Ошибка: подписка не скачана" >> "$LOG"
+    exit 1
+fi
+
+# -----------------------------
+# 6. Парсинг подписки
+# -----------------------------
+echo "[4] Парсим подписку → outbound.json..." >> "$LOG"
+
+printf '%s\n' "$SUB_DATA" | python3 "$PARSER" > "$OUTBOUND_JSON" 2>>"$LOG"
 
 if [ ! -s "$OUTBOUND_JSON" ]; then
     echo "Ошибка: парсер не создал outbound.json" >> "$LOG"
@@ -61,9 +83,9 @@ if [ ! -s "$OUTBOUND_JSON" ]; then
 fi
 
 # -----------------------------
-# 5. Генерация полного config.json
+# 7. Генерация config.json
 # -----------------------------
-echo "[4] Генерация config.json через генератор..." >> "$LOG"
+echo "[5] Генерация config.json..." >> "$LOG"
 
 python3 "$GENERATOR" \
     --outbound "$OUTBOUND_JSON" \
@@ -72,9 +94,9 @@ python3 "$GENERATOR" \
     --output "$CONFIG_JSON" >> "$LOG" 2>&1
 
 # -----------------------------
-# 6. Перезапуск Xray
+# 8. Перезапуск Xray
 # -----------------------------
-echo "[5] Перезапуск Xray..." >> "$LOG"
+echo "[6] Перезапуск Xray..." >> "$LOG"
 /etc/init.d/xray restart >> "$LOG" 2>&1
 
 echo "Готово." >> "$LOG"
