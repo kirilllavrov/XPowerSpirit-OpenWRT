@@ -130,31 +130,15 @@ sed -i '/0.0.0.0\/0 dev lo table xray/d' /etc/rc.local
 sed -i '/^exit 0/i ip rule add fwmark 1 lookup xray\nip route add local 0.0.0.0/0 dev lo table xray\n' /etc/rc.local
 
 # -----------------------------
-# 9. Скачивание и парсинг подписки
+# 9. Парсинг подписки (исправлено!)
 # -----------------------------
-echo "[7/11] Скачиваем подписку..."
-SUB_DATA=$(curl -fsSL "$SUB_URL")
-
-DECODED=$(echo "$SUB_DATA" | base64 -d 2>/dev/null || true)
-if [ -z "$DECODED" ]; then
-    echo "Ошибка: подписка не декодируется (Base64)."
-    exit 1
-fi
-
-VLESS=$(echo "$DECODED" | grep -o 'vless://[^ ]*' | head -n 1)
-
-if [ -z "$VLESS" ]; then
-    echo "Ошибка: VLESS не найден в подписке."
-    exit 1
-fi
-
-echo "[8/11] Парсим VLESS → outbound.json..."
-"$PARSER" "$VLESS" > "$OUTBOUND_JSON"
+echo "[7/11] Парсим подписку → outbound.json..."
+printf '%s\n' "$SUB_URL" | python3 "$PARSER" > "$OUTBOUND_JSON"
 
 # -----------------------------
 # 10. Генерация полного config.json
 # -----------------------------
-echo "[9/11] Генерируем config.json через генератор..."
+echo "[8/11] Генерируем config.json через генератор..."
 
 python3 "$GENERATOR" \
     --outbound "$OUTBOUND_JSON" \
@@ -165,7 +149,7 @@ python3 "$GENERATOR" \
 # -----------------------------
 # 11. Автоматическое добавление cron‑задания
 # -----------------------------
-echo "[10/11] Настраиваем cron для автообновления..."
+echo "[9/11] Настраиваем cron для автообновления..."
 
 CRON_LINE="0 */3 * * * /root/update-xray.sh"
 
@@ -176,7 +160,7 @@ grep -qF "$CRON_LINE" /etc/crontabs/root 2>/dev/null || echo "$CRON_LINE" >> /et
 # -----------------------------
 # 12. Перезапуск сервисов
 # -----------------------------
-echo "[11/11] Перезапуск dnsmasq, firewall, Xray..."
+echo "[10/11] Перезапуск dnsmasq, firewall, Xray..."
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall restart
 /etc/init.d/xray restart
