@@ -52,7 +52,7 @@ echo "[OK] Подписка сохранена в $SUB_FILE"
 # -----------------------------
 echo "[1/11] Устанавливаем пакеты..."
 apk update
-apk add xray-core nftables ca-certificates curl jq python3
+apk add curl xray-core nftables ca-certificates jq python3
 apk add kmod-nft-tproxy kmod-nft-socket kmod-nft-nat kmod-nft-fib || true
 
 # -----------------------------
@@ -67,13 +67,13 @@ curl -fsSL "$GEOSITE_URL" -o /etc/xray/geosite.dat
 # -----------------------------
 echo "[3/11] Скачиваем генератор, парсер и обновлялку..."
 
-curl -fsSL "$REPO_RAW/xray-generate-config.py" -o "$GENERATOR"
+wget -q "$REPO_RAW/xray-generate-config.py" -O "$GENERATOR"
 chmod +x "$GENERATOR"
 
-curl -fsSL "$REPO_RAW/xray-sub-parser.py" -o "$PARSER"
+wget -q "$REPO_RAW/xray-sub-parser.py" -O "$PARSER"
 chmod +x "$PARSER"
 
-curl -fsSL "$REPO_RAW/update-xray.sh" -o "$UPDATER"
+wget -q "$REPO_RAW/update-xray.sh" -O "$UPDATER"
 chmod +x "$UPDATER"
 
 # -----------------------------
@@ -148,7 +148,7 @@ python3 "$GENERATOR" \
 # -----------------------------
 echo "[9/11] Настраиваем cron для автообновления..."
 
-CRON_LINE="0 */24 * * * /root/update-xray.sh"
+CRON_LINE="0 */3 * * * /root/update-xray.sh"
 
 grep -qF "$CRON_LINE" /etc/crontabs/root 2>/dev/null || echo "$CRON_LINE" >> /etc/crontabs/root
 
@@ -167,5 +167,5 @@ echo "=== Установка завершена ==="
 echo "Подписка: $SUB_FILE"
 echo "Outbound: $OUTBOUND_JSON"
 echo "Config:   $CONFIG_JSON"
-echo "Cron:     каждые 24 часа"
+echo "Cron:     каждые 3 часа"
 echo
