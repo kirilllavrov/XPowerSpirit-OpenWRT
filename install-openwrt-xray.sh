@@ -48,7 +48,7 @@ chmod 600 "$SUB_FILE"
 echo "[OK] Подписка сохранена в $SUB_FILE"
 
 # -----------------------------
-# 3. Установка пакетов через apk
+# 3. Установка пакетов
 # -----------------------------
 echo "[1/11] Устанавливаем пакеты..."
 apk update
@@ -86,7 +86,7 @@ uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#53'
 uci commit dhcp
 
 # -----------------------------
-# 7. nftables TProxy (исправлено!)
+# 7. nftables TProxy
 # -----------------------------
 echo "[5/11] Создаём nft‑правила TProxy..."
 mkdir -p /etc/nftables.d
@@ -127,15 +127,31 @@ sed -i '/0.0.0.0\/0 dev lo table xray/d' /etc/rc.local
 sed -i '/^exit 0/i ip rule add fwmark 1 lookup xray\nip route add local 0.0.0.0/0 dev lo table xray\n' /etc/rc.local
 
 # -----------------------------
-# 9. Парсинг подписки (исправлено!)
+# 9. HWID (новое!)
 # -----------------------------
-echo "[7/11] Парсим подписку → outbound.json..."
-printf '%s\n' "$SUB_URL" | python3 "$PARSER" > "$OUTBOUND_JSON"
+echo "[7/11] Генерируем HWID..."
+
+if [ -f /etc/machine-id ]; then
+    HWID="$(cat /etc/machine-id)"
+else
+    HWID="$(uuidgen | tr -d '-')"
+fi
+
+echo "HWID: $HWID"
 
 # -----------------------------
-# 10. Генерация полного config.json
+# 10. Парсинг подписки (через HWID)
 # -----------------------------
-echo "[8/11] Генерируем config.json через генератор..."
+echo "[8/11] Парсим подписку → outbound.json..."
+
+SUB_DATA="$(curl -s -L -m 15 -H "User-Agent: Happ" -H "x-hwid: $HWID" "$SUB_URL")"
+
+printf '%s\n' "$SUB_DATA" | python3 "$PARSER" > "$OUTBOUND_JSON"
+
+# -----------------------------
+# 11. Генерация config.json
+# -----------------------------
+echo "[9/11] Генерируем config.json через генератор..."
 
 python3 "$GENERATOR" \
     --outbound "$OUTBOUND_JSON" \
@@ -144,9 +160,9 @@ python3 "$GENERATOR" \
     --output "$CONFIG_JSON"
 
 # -----------------------------
-# 11. Автоматическое добавление cron‑задания
+# 12. Cron
 # -----------------------------
-echo "[9/11] Настраиваем cron для автообновления..."
+echo "[10/11] Настраиваем cron для автообновления..."
 
 CRON_LINE="0 */3 * * * /root/update-xray.sh"
 
@@ -155,15 +171,16 @@ grep -qF "$CRON_LINE" /etc/crontabs/root 2>/dev/null || echo "$CRON_LINE" >> /et
 /etc/init.d/cron restart
 
 # -----------------------------
-# 12. Перезапуск сервисов
+# 13. Перезапуск сервисов
 # -----------------------------
-echo "[10/11] Перезапуск dnsmasq, firewall, Xray..."
+echo "[11/11] Перезапуск dnsmasq, firewall, Xray..."
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall restart
 /etc/init.d/xray restart
 
 echo
 echo "=== Установка завершена ==="
+echo "HWID:    $HWID"
 echo "Подписка: $SUB_FILE"
 echo "Outbound: $OUTBOUND_JSON"
 echo "Config:   $CONFIG_JSON"
