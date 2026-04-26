@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
 import json
 import sys
-import os
 
-# -----------------------------
-# ФИЛЬТР ПО ДОМЕНАМ (ТОЛЬКО WHITELIST)
-# -----------------------------
 DOMAIN_WHITELIST = [
     "router.freenternet.top"
 ]
 
 def load_outbounds():
-    """Читаем JSON из STDIN и приводим к списку."""
     try:
         data = json.load(sys.stdin)
         if isinstance(data, dict):
@@ -23,7 +18,6 @@ def load_outbounds():
     return []
 
 def filter_by_domain_whitelist(all_obs):
-    """Оставляем только сервера, чей address входит в whitelist."""
     if not DOMAIN_WHITELIST:
         return all_obs
     filtered = []
@@ -35,7 +29,6 @@ def filter_by_domain_whitelist(all_obs):
     return filtered
 
 def choose_best_server(servers):
-    """Выбираем один сервер по whitelist. Если нет совпадений — первый."""
     if not servers:
         return None
     if not DOMAIN_WHITELIST:
@@ -47,7 +40,7 @@ def choose_best_server(servers):
             return ob
     return servers[0]
 
-def base_config(geoip_path, geosite_path):
+def base_config():
     return {
         "log": {
             "loglevel": "warning",
@@ -119,24 +112,20 @@ def base_config(geoip_path, geosite_path):
                     "followRedirect": False
                 }
             }
-        ],
-        "geoip": geoip_path,
-        "geosite": geosite_path
+        ]
     }
 
 def main():
-    if len(sys.argv) != 7:
-        print("Usage: xray-generate-config.py --geoip <file> --geosite <file> --output <file>")
+    if len(sys.argv) != 3:
+        print("Usage: xray-generate-config.py --output <file>")
         sys.exit(1)
 
-    geoip_path = sys.argv[sys.argv.index("--geoip") + 1]
-    geosite_path = sys.argv[sys.argv.index("--geosite") + 1]
     output_path = sys.argv[sys.argv.index("--output") + 1]
 
     all_obs = load_outbounds()
     filtered_obs = filter_by_domain_whitelist(all_obs)
 
-    cfg = base_config(geoip_path, geosite_path)
+    cfg = base_config()
 
     if len(filtered_obs) == 0:
         cfg["outbounds"] = [
