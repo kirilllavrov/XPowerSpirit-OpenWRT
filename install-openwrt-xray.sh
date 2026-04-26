@@ -11,7 +11,6 @@ GENERATOR="/root/xray-generate-config.py"
 PARSER="/root/xray-sub-parser.py"
 UPDATER="/root/update-xray.sh"
 
-OUTBOUND_JSON="/etc/xray/outbound.json"
 CONFIG_JSON="/etc/xray/config.json"
 SUB_FILE="/etc/xray/subscription.url"
 HWID_FILE="/etc/xray/hwid"
@@ -143,32 +142,22 @@ fi
 echo "HWID: $HWID"
 
 # -----------------------------
-# 10. Парсинг подписки
+# 10. Генерация config.json
 # -----------------------------
-echo "[8/11] Парсим подписку → outbound.json..."
+echo "[8/11] Генерируем config.json через парсер и генератор..."
 
-SUB_DATA="$(curl -s -L -m 15 \
+curl -s -L -m 15 \
     -H "User-Agent: Happ" \
     -H "x-hwid: $HWID" \
-    "$SUB_URL")"
-
-printf '%s\n' "$SUB_DATA" | python3 "$PARSER" > "$OUTBOUND_JSON"
-
-# -----------------------------
-# 11. Генерация config.json
-# -----------------------------
-echo "[9/11] Генерируем config.json через генератор..."
-
-python3 "$GENERATOR" \
-    --outbound "$OUTBOUND_JSON" \
+    "$SUB_URL" | python3 "$PARSER" | python3 "$GENERATOR" \
     --geoip /etc/xray/geoip.dat \
     --geosite /etc/xray/geosite.dat \
     --output "$CONFIG_JSON"
 
 # -----------------------------
-# 12. Cron
+# 11. Cron
 # -----------------------------
-echo "[10/11] Настраиваем cron для автообновления..."
+echo "[9/11] Настраиваем cron для автообновления..."
 
 CRON_LINE="0 */3 * * * /root/update-xray.sh"
 
@@ -177,9 +166,9 @@ grep -qF "$CRON_LINE" /etc/crontabs/root 2>/dev/null || echo "$CRON_LINE" >> /et
 /etc/init.d/cron restart
 
 # -----------------------------
-# 13. Перезапуск сервисов
+# 12. Перезапуск сервисов
 # -----------------------------
-echo "[11/11] Перезапуск dnsmasq, firewall, Xray..."
+echo "[10/11] Перезапуск dnsmasq, firewall, Xray..."
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall restart
 /etc/init.d/xray restart
@@ -188,7 +177,6 @@ echo
 echo "=== Установка завершена ==="
 echo "HWID:    $HWID"
 echo "Подписка: $SUB_FILE"
-echo "Outbound: $OUTBOUND_JSON"
 echo "Config:   $CONFIG_JSON"
 echo "Cron:     каждые 3 часа"
 echo

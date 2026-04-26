@@ -1,5 +1,5 @@
 #!/bin/sh
-# update-xray.sh — обновление Xray-core, geosite/geoip, подписки и генерация конфига
+# update-xray.sh — обновление Xray-core, geoip/geosite, подписки и генерация конфига
 # OpenWrt 25.12.x (apk-based)
 
 set -e
@@ -7,7 +7,6 @@ set -e
 LOG="/var/log/xray-update.log"
 
 SUB_FILE="/etc/xray/subscription.url"
-OUTBOUND_JSON="/etc/xray/outbound.json"
 CONFIG_JSON="/etc/xray/config.json"
 HWID_FILE="/etc/xray/hwid"
 
@@ -62,47 +61,27 @@ curl -fsSL "$GEOIP_URL" -o /etc/xray/geoip.dat
 curl -fsSL "$GEOSITE_URL" -o /etc/xray/geosite.dat
 
 # -----------------------------
-# 5. Скачивание подписки
+# 5. Генерация config.json
 # -----------------------------
-echo "[3] Скачиваем подписку..." >> "$LOG"
+echo "[3] Обновляем config.json..." >> "$LOG"
 
-SUB_DATA="$(curl -s -L -m 15 \
+curl -s -L -m 15 \
     -H "User-Agent: Happ" \
     -H "x-hwid: $HWID" \
-    "$SUB_URL")"
-
-if [ -z "$SUB_DATA" ]; then
-    echo "Ошибка: подписка не скачана" >> "$LOG"
-    exit 1
-fi
-
-# -----------------------------
-# 6. Парсинг подписки
-# -----------------------------
-echo "[4] Парсим подписку → outbound.json..." >> "$LOG"
-
-printf '%s\n' "$SUB_DATA" | python3 "$PARSER" > "$OUTBOUND_JSON" 2>>"$LOG"
-
-if [ ! -s "$OUTBOUND_JSON" ]; then
-    echo "Ошибка: парсер не создал outbound.json" >> "$LOG"
-    exit 1
-fi
-
-# -----------------------------
-# 7. Генерация config.json
-# -----------------------------
-echo "[5] Генерация config.json..." >> "$LOG"
-
-python3 "$GENERATOR" \
-    --outbound "$OUTBOUND_JSON" \
+    "$SUB_URL" | python3 "$PARSER" | python3 "$GENERATOR" \
     --geoip /etc/xray/geoip.dat \
     --geosite /etc/xray/geosite.dat \
     --output "$CONFIG_JSON" >> "$LOG" 2>&1
 
+if [ ! -s "$CONFIG_JSON" ]; then
+    echo "Ошибка: генератор не создал config.json" >> "$LOG"
+    exit 1
+fi
+
 # -----------------------------
-# 8. Перезапуск Xray
+# 6. Перезапуск Xray
 # -----------------------------
-echo "[6] Перезапуск Xray..." >> "$LOG"
+echo "[4] Перезапуск Xray..." >> "$LOG"
 /etc/init.d/xray restart >> "$LOG" 2>&1
 
 echo "Готово." >> "$LOG"
