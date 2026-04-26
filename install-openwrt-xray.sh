@@ -1,6 +1,5 @@
 #!/bin/sh
-# install-xray-nft.sh — чистый nftables (без fw4)
-# Установка Xray + TProxy + подписка + geoфайлы + генератор
+# install-xray-nft.sh — nftables + TProxy + policy routing
 # OpenWrt 25.12.x (apk-based)
 
 set -e
@@ -25,20 +24,21 @@ GEOSITE="$GEO_DIR/geosite.dat"
 GEOIP_URL="https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat"
 GEOSITE_URL="https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat"
 
-echo "=== Установка Xray на OpenWrt (чистый nftables) ==="
+echo "=== Установка Xray на OpenWrt (nftables + TProxy + policy routing) ==="
 
-# 1. Проверка root
+# 1. root
 [ "$(id -u)" != "0" ] && { echo "Запускать нужно от root"; exit 1; }
 
-# 2. Подписка
+# 2. подписка
 printf "Введите URL подписки VLESS: "
 read SUB_URL
 [ -z "$SUB_URL" ] && { echo "Ошибка: пустой URL"; exit 1; }
+
 mkdir -p /etc/xray
 echo "$SUB_URL" > "$SUB_FILE"
 chmod 600 "$SUB_FILE"
 
-# 3. Пакеты
+# 3. пакеты
 apk update
 apk add curl xray-core nftables ca-certificates jq python3 ip-full
 apk add kmod-nft-tproxy kmod-nft-socket kmod-nft-nat || true
@@ -59,7 +59,7 @@ uci -q del_list dhcp.@dnsmasq[0].server='127.0.0.1#53'
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#53'
 uci commit dhcp
 
-# 7. nftables ruleset (собственная таблица ip xray)
+# 7. nftables: table ip xray
 cat > /etc/nftables.d/xray.nft << 'EOF'
 table ip xray {
     chain prerouting {
@@ -89,10 +89,9 @@ table ip xray {
 }
 EOF
 
-# загрузка правил
 nft -f /etc/nftables.d/xray.nft
 
-# init-скрипт для автозагрузки nftables
+# 8. init-скрипт для nftables
 cat > /etc/init.d/nft-xray << 'EOF'
 #!/bin/sh /etc/rc.common
 START=15
@@ -100,10 +99,38 @@ start() {
     nft -f /etc/nftables.d/xray.nft
 }
 EOF
+
 chmod +x /etc/init.d/nft-xray
 /etc/init.d/nft-xray enable
 
-# 8. HWID
+# 9. policy routing для TProxy
+# таблица xray
+grep -q "100 xray" /etc/iproute2/rt_tables 2>/dev/null || echo "100 xray" >> /etc/iproute2/rt_tables
+
+# правило fwmark 1 → table xray
+ip rule | grep -q "fwmark 0x1 lookup xray" || ip rule add fwmark 1 lookup xray
+
+# local route в таблице xray
+ip route show table xray | grep -q "local 0.0.0.0/0" || ip route add local 0.0.0.0/0 dev lo table xray
+
+# 10. sysctl для TProxy
+sysctl -w net.ipv4.conf.all.route_localnet=1 >/dev/null
+sysctl -w net.ipv4.ip_forward=1 >/dev/null
+
+# persist sysctl (если есть sysctl.conf)
+if grep -q "route_localnet" /etc/sysctl.conf 2>/dev/null; then
+    sed -i 's/^net.ipv4.conf.all.route_localnet=.*/net.ipv4.conf.all.route_localnet=1/' /etc/sysctl.conf
+else
+    echo "net.ipv4.conf.all.route_localnet=1" >> /etc/sysctl.conf
+fi
+
+if grep -q "ip_forward" /etc/sysctl.conf 2>/dev/null; then
+    sed -i 's/^net.ipv4.ip_forward=.*/net.ipv4.ip_forward=1/' /etc/sysctl.conf
+else
+    echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+fi
+
+# 11. HWID
 if [ -f "$HWID_FILE" ]; then
     HWID="$(cat "$HWID_FILE")"
 else
@@ -112,21 +139,22 @@ else
     chmod 600 "$HWID_FILE"
 fi
 
-# 9. config.json
+# 12. config.json
 curl -s -L -m 15 -H "User-Agent: Happ" -H "x-hwid: $HWID" "$SUB_URL" \
     | python3 "$PARSER" | python3 "$GENERATOR" --output "$CONFIG_JSON"
 
-# 10. cron
+# 13. cron
 CRON_LINE="0 */3 * * * /root/update-xray.sh"
 grep -qF "$CRON_LINE" /etc/crontabs/root 2>/dev/null || echo "$CRON_LINE" >> /etc/crontabs/root
 /etc/init.d/cron restart
 
-# 11. перезапуск сервисов
+# 14. включаем и перезапускаем сервисы
+/etc/init.d/xray enable || true
 /etc/init.d/dnsmasq restart
 /etc/init.d/nft-xray start
 /etc/init.d/xray restart
 
-# 12. диагностика
+# 15. авто-диагностика
 echo
 echo "=== АВТО-ДИАГНОСТИКА ==="
 "$DIAG"
