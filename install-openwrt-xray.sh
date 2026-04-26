@@ -1,6 +1,6 @@
 #!/bin/sh
 # OpenWrt 25.12.x — Xray TProxy (fw4-compatible, IPv4-only)
-# Полный, исправленный установщик
+# Полный исправленный установщик: HWID, UCI-конфиг Xray, TProxy, диагностика
 
 set -e
 
@@ -11,9 +11,10 @@ PARSER="/root/xray-sub-parser.py"
 UPDATER="/root/update-xray.sh"
 DIAG="/root/diagnose-xray-tproxy.sh"
 
-CONFIG_JSON="/etc/xray/config.json"
-SUB_FILE="/etc/xray/subscription.url"
-HWID_FILE="/etc/xray/hwid"
+CONFIG_DIR="/etc/xray"
+CONFIG_JSON="$CONFIG_DIR/config.json"
+SUB_FILE="$CONFIG_DIR/subscription.url"
+HWID_FILE="$CONFIG_DIR/hwid"
 
 echo "=== Установка Xray TProxy (fw4-compatible, IPv4-only) ==="
 
@@ -25,7 +26,7 @@ printf "Введите URL подписки VLESS: "
 read SUB_URL
 [ -z "$SUB_URL" ] && { echo "Ошибка: пустой URL"; exit 1; }
 
-mkdir -p /etc/xray
+mkdir -p "$CONFIG_DIR"
 echo "$SUB_URL" > "$SUB_FILE"
 chmod 600 "$SUB_FILE"
 
@@ -49,7 +50,7 @@ uci -q delete dhcp.@dnsmasq[0].server
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#53'
 uci commit dhcp
 
-# 6. nftables TProxy через ruleset-post (таблица ip xray)
+# 6. nftables TProxy (ruleset-post, table ip xray)
 echo "[6/13] Настраиваем nftables TProxy..."
 mkdir -p /usr/share/nftables.d/ruleset-post
 
@@ -58,9 +59,13 @@ table ip xray {
     chain xray_tproxy {
         type filter hook prerouting priority mangle; policy accept;
 
-        # Bypass — первыми
+        # Bypass DHCP
         iifname "br-lan" udp dport { 67, 68 } return
+
+        # Bypass private/локальные сети
         ip daddr { 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } return
+
+        # Bypass уже помеченного трафика (Xray → наружу)
         meta mark 0xff return
 
         # TProxy для LAN-трафика (IPv4)
@@ -70,7 +75,9 @@ table ip xray {
 }
 EOF
 
-# 7. Policy routing + hotplug
+/etc/init.d/firewall restart || true
+
+# 7. policy routing + hotplug
 echo "[7/13] Настраиваем policy routing..."
 grep -q "100 xray" /etc/iproute2/rt_tables 2>/dev/null || echo "100 xray" >> /etc/iproute2/rt_tables
 
@@ -108,11 +115,13 @@ if [ ! -f "$HWID_FILE" ]; then
 else
     HWID="$(cat "$HWID_FILE")"
 fi
+[ -z "$HWID" ] && HWID="$(hexdump -n 16 -v -e '/1 "%02x"' /dev/urandom)" && echo "$HWID" > "$HWID_FILE" && chmod 600 "$HWID_FILE"
 
 # 10. config.json
 echo "[10/13] Генерация config.json..."
 curl -s -L -m 20 -H "User-Agent: Happ" -H "x-hwid: $HWID" "$SUB_URL" \
     | python3 "$PARSER" | python3 "$GENERATOR" --output "$CONFIG_JSON"
+echo "Готово: $CONFIG_JSON"
 
 # 11. cron
 echo "[11/13] Настраиваем обновление по cron..."
@@ -121,8 +130,14 @@ CRON_LINE="0 */3 * * * /root/update-xray.sh"
 grep -qF "$CRON_LINE" /etc/crontabs/root 2>/dev/null || echo "$CRON_LINE" >> /etc/crontabs/root
 /etc/init.d/cron restart || true
 
-# 12. сервисы
-echo "[12/13] Перезапускаем сервисы..."
+# 12. UCI-конфиг Xray + сервисы
+echo "[12/13] Настраиваем Xray сервис..."
+uci -q delete xray.main
+uci set xray.main=service
+uci set xray.main.enabled='1'
+uci set xray.main.config_file="$CONFIG_JSON"
+uci commit xray
+
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall restart
 /etc/init.d/xray stop 2>/dev/null || true
