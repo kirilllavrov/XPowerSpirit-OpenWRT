@@ -2,9 +2,9 @@
 import json
 import sys
 
-DOMAIN_WHITELIST = [
-    "router.freenternet.top"
-]
+# Убрали жёсткий whitelist — теперь берём первый сервер из подписки
+# Если хочешь оставить только определённые — добавь их сюда
+DOMAIN_WHITELIST = []  # пустой = брать все
 
 def load_outbounds():
     try:
@@ -17,20 +17,10 @@ def load_outbounds():
         return []
     return []
 
-def filter_by_domain_whitelist(all_obs):
-    if not DOMAIN_WHITELIST:
-        return all_obs
-    filtered = []
-    for ob in all_obs:
-        vnext = ob.get("settings", {}).get("vnext", [{}])[0]
-        addr = vnext.get("address", "")
-        if addr in DOMAIN_WHITELIST:
-            filtered.append(ob)
-    return filtered
-
 def choose_best_server(servers):
     if not servers:
         return None
+    # Если whitelist пустой — берём первый
     if not DOMAIN_WHITELIST:
         return servers[0]
     for ob in servers:
@@ -59,35 +49,8 @@ def base_config():
             "serveStale": True,
             "disableFallback": False,
             "servers": [
-                {
-                    "address": "195.208.4.1",
-                    "port": 53,
-                    "domains": [
-                        "geosite:category-ru",
-                        "geosite:category-browser",
-                        "geosite:category-mobile",
-                        "geosite:category-cdn-ru",
-                        "geosite:private"
-                    ]
-                },
-                {
-                    "address": "195.208.5.1",
-                    "port": 53,
-                    "domains": [
-                        "geosite:category-ru",
-                        "geosite:category-browser",
-                        "geosite:category-mobile",
-                        "geosite:category-cdn-ru",
-                        "geosite:private"
-                    ]
-                },
-                {
-                    "address": "https://cloudflare-dns.com/dns-query",
-                    "domains": [
-                        "geosite:category-streaming",
-                        "geosite:category-games"
-                    ]
-                },
+                {"address": "195.208.4.1", "port": 53, "domains": ["geosite:category-ru", "geosite:category-browser", "geosite:category-mobile", "geosite:category-cdn-ru", "geosite:private"]},
+                {"address": "195.208.5.1", "port": 53, "domains": ["geosite:category-ru", "geosite:category-browser", "geosite:category-mobile", "geosite:category-cdn-ru", "geosite:private"]},
                 "https://cloudflare-dns.com/dns-query",
                 "https://dns.google/dns-query"
             ]
@@ -95,22 +58,12 @@ def base_config():
         "inbounds": [
             {
                 "tag": "tproxy-in",
+                "listen": "0.0.0.0",
                 "port": 12345,
                 "protocol": "dokodemo-door",
                 "settings": {"network": "tcp,udp", "followRedirect": True},
                 "streamSettings": {"sockopt": {"tproxy": "tproxy"}},
                 "sniffing": {"enabled": True, "destOverride": ["http", "tls"]}
-            },
-            {
-                "tag": "dns-in",
-                "port": 53,
-                "protocol": "dokodemo-door",
-                "settings": {
-                    "address": "1.1.1.1",
-                    "port": 53,
-                    "network": "udp",
-                    "followRedirect": False
-                }
             }
         ]
     }
@@ -123,11 +76,12 @@ def main():
     output_path = sys.argv[sys.argv.index("--output") + 1]
 
     all_obs = load_outbounds()
-    filtered_obs = filter_by_domain_whitelist(all_obs)
+    chosen = choose_best_server(all_obs)
+    chosen_tag = chosen.get("tag", "proxy") if chosen else "direct"
 
     cfg = base_config()
 
-    if len(filtered_obs) == 0:
+    if not chosen:
         cfg["outbounds"] = [
             {"protocol": "freedom", "tag": "direct"},
             {"protocol": "blackhole", "tag": "block"}
@@ -140,8 +94,6 @@ def main():
             ]
         }
     else:
-        chosen = choose_best_server(filtered_obs)
-        chosen_tag = chosen.get("tag", "proxy")
         cfg["outbounds"] = [
             chosen,
             {"protocol": "freedom", "tag": "direct"},
@@ -154,10 +106,8 @@ def main():
                 {"type": "field", "domain": ["geosite:category-streaming", "geosite:category-games"], "outboundTag": chosen_tag},
                 {"type": "field", "ip": ["geoip:ru", "geoip:private"], "outboundTag": "direct"},
                 {"type": "field", "domain": [
-                    "geosite:private",
-                    "geosite:category-browser",
-                    "geosite:category-cdn-ru",
-                    "geosite:category-mobile",
+                    "geosite:private", "geosite:category-browser",
+                    "geosite:category-cdn-ru", "geosite:category-mobile",
                     "geosite:category-ru"
                 ], "outboundTag": "direct"},
                 {"type": "field", "network": "tcp,udp", "outboundTag": chosen_tag}
