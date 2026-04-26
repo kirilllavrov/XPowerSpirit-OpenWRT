@@ -40,7 +40,7 @@ def try_base64_decode(data: str) -> str:
 
     try:
         decoded = base64.b64decode(data, validate=True).decode("utf-8", errors="ignore")
-        if "vless://" in decoded:
+        if "vless://" in decoded or decoded.strip().startswith("{"):
             return decoded
     except Exception:
         pass
@@ -49,7 +49,7 @@ def try_base64_decode(data: str) -> str:
 
 
 # -----------------------------
-# Парсер VLESS
+# Парсер VLESS URI
 # -----------------------------
 
 def parse_vless_uri(uri: str):
@@ -215,7 +215,16 @@ def main():
     # 2) Если это base64 → декодируем
     data = try_base64_decode(data)
 
-    # 3) Ищем первую vless:// строку
+    # 3) Попытка распарсить JSON Freenternet
+    try:
+        obj = json.loads(data)
+        if isinstance(obj, dict):
+            print(json.dumps(obj, indent=2, ensure_ascii=False))
+            return
+    except Exception:
+        pass
+
+    # 4) Ищем первую vless:// строку
     lines = [l.strip() for l in data.splitlines() if "vless://" in l]
 
     if not lines:
