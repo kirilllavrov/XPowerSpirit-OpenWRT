@@ -1,5 +1,5 @@
 #!/bin/sh
-# install-openwrt-xray.sh — исправленная версия
+# install-openwrt-xray.sh — исправленная версия (fw4 + TProxy + chain-pre)
 # Полная установка Xray + TProxy + подписка + геофайлы + генератор
 # OpenWrt 25.12.x (apk-based)
 
@@ -63,7 +63,7 @@ apk add curl xray-core nftables ca-certificates jq python3
 apk add kmod-nft-tproxy kmod-nft-socket kmod-nft-nat kmod-nft-fib || true
 
 # -----------------------------
-# 4. Установка геофайлов
+# 4. Установка geoip/geosite
 # -----------------------------
 echo "[2/11] Скачиваем geoip/geosite..."
 curl -fsSL "$GEOIP_URL" -o "$GEOIP"
@@ -93,33 +93,33 @@ uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#53'
 uci commit dhcp
 
 # -----------------------------
-# 7. nftables TProxy (исправленные правила)
+# 7. nftables TProxy (fw4‑совместимая архитектура)
 # -----------------------------
 echo "[5/11] Создаём nft‑правила TProxy..."
-mkdir -p /etc/nftables.d
 
-cat > /etc/nftables.d/30-xray-tproxy.nft << 'EOF'
-chain xray_tproxy_prerouting {
-    type filter hook prerouting priority mangle; policy accept;
-
-    # не трогаем локальные сети (src/dst)
+# 7.1 Цепочка TProxy (table-post)
+mkdir -p /usr/share/nftables.d/table-post
+cat > /usr/share/nftables.d/table-post/30-xray-tproxy-chain.nft << 'EOF'
+chain xray_tproxy {
+    # локальные сети — не проксируем
     ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } return
     ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } return
 
-    # не трогаем loopback и link-local
+    # loopback / link-local
     ip daddr { 127.0.0.0/8, 169.254.0.0/16 } return
 
-    # DNS оставляем в покое
+    # DNS не трогаем
     udp dport 53 return
 
-    # только TCP/UDP
+    # TProxy
     meta l4proto { tcp, udp } tproxy to :12345 meta mark set 1
 }
+EOF
 
-chain xray_tproxy_output {
-    type route hook output priority mangle; policy accept;
-    meta l4proto { tcp, udp } meta mark set 1
-}
+# 7.2 Вставка jump в prerouting (chain-pre)
+mkdir -p /usr/share/nftables.d/chain-pre/prerouting
+cat > /usr/share/nftables.d/chain-pre/prerouting/30-xray-tproxy.nft << 'EOF'
+jump xray_tproxy
 EOF
 
 # -----------------------------
@@ -133,7 +133,7 @@ ip rule | grep -q "fwmark 0x1 lookup xray" || ip rule add fwmark 1 lookup xray
 ip route show table xray | grep -q "local 0.0.0.0/0" || ip route add local 0.0.0.0/0 dev lo table xray
 
 # -----------------------------
-# 9. HWID (persistent)
+# 9. HWID
 # -----------------------------
 echo "[7/11] Генерируем HWID..."
 
@@ -193,23 +193,21 @@ if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
     echo "[OK] Конфиг Xray валиден"
 else
     echo "[ERR] Конфиг Xray содержит ошибки!"
-    echo "Проверь что не так:"
-    echo "xray run -test -config $CONFIG_JSON"
 fi
 
-if nft list chain inet fw4 xray_tproxy_prerouting >/dev/null 2>&1; then
-    echo "[OK] nftables: цепочка xray_tproxy_prerouting загружена"
+if nft list chain inet fw4 xray_tproxy >/dev/null 2>&1; then
+    echo "[OK] nftables: цепочка xray_tproxy загружена"
 else
-    echo "[ERR] nftables: цепочка xray_tproxy_prerouting отсутствует!"
+    echo "[ERR] nftables: цепочка xray_tproxy отсутствует!"
 fi
 
 if ip rule | grep -q "fwmark 0x1 lookup xray"; then
-    echo "[OK] Policy routing: правило fwmark → xray активно"
+    echo "[OK] Policy routing активно"
 else
-    echo "[ERR] Policy routing: нет правила fwmark 1 lookup xray!"
+    echo "[ERR] Policy routing отсутствует!"
 fi
 
-if ip route show table xray | grep -q "local 0.0.0.0/0 dev lo"; then
+if ip route show table xray | grep -q "local 0.0.0.0/0"; then
     echo "[OK] Таблица маршрутизации xray корректна"
 else
     echo "[ERR] Таблица маршрутизации xray отсутствует!"
