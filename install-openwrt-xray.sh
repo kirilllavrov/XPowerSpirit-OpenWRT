@@ -30,24 +30,27 @@ echo "$SUB_URL" > "$SUB_FILE"
 chmod 600 "$SUB_FILE"
 
 # 3. пакеты
+echo "[3/13] Устанавливаем пакеты..."
 apk update
 apk add curl xray-core nftables ca-certificates jq python3 ip-full
 apk add kmod-nft-tproxy kmod-nft-socket kmod-nft-nat || true
 
 # 4. скрипты
+echo "[4/13] Скачиваем скрипты..."
 wget -q "$REPO/xray-generate-config.py" -O "$GENERATOR"; chmod +x "$GENERATOR"
 wget -q "$REPO/xray-sub-parser.py" -O "$PARSER"; chmod +x "$PARSER"
 wget -q "$REPO/update-xray.sh" -O "$UPDATER"; chmod +x "$UPDATER"
 wget -q "$REPO/diagnose-xray-tproxy.sh" -O "$DIAG"; chmod +x "$DIAG"
 
 # 5. dnsmasq → Xray
+echo "[5/13] Настраиваем dnsmasq..."
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci -q delete dhcp.@dnsmasq[0].server
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#53'
 uci commit dhcp
 
 # 6. nftables TProxy — ПРАВИЛЬНЫЙ способ (ruleset-post)
-echo "Настройка nftables TProxy..."
+echo "[6/13] Настраиваем nftables TProxy..."
 mkdir -p /usr/share/nftables.d/ruleset-post
 
 cat > /usr/share/nftables.d/ruleset-post/30-xray-tproxy.nft << 'EOF'
@@ -67,6 +70,7 @@ table ip xray {
 EOF
 
 # 7. Policy routing + hotplug (чтобы не слетало после reboot)
+echo "[7/13] Настраиваем policy routing..."
 grep -q "100 xray" /etc/iproute2/rt_tables 2>/dev/null || echo "100 xray" >> /etc/iproute2/rt_tables
 
 cat > /etc/hotplug.d/iface/99-xray-routing << 'EOF'
@@ -87,6 +91,7 @@ ip route flush table xray 2>/dev/null || true
 ip route add local 0.0.0.0/0 dev lo table xray
 
 # 8. sysctl
+echo "[8/13] Настраиваем sysctl..."
 sysctl -w net.ipv4.conf.all.route_localnet=1
 sysctl -w net.ipv4.ip_forward=1
 
@@ -94,6 +99,7 @@ grep -q "net.ipv4.conf.all.route_localnet=1" /etc/sysctl.conf || echo "net.ipv4.
 grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 
 # 9. HWID
+echo "[9/13] Генерируем HWID..."
 if [ ! -f "$HWID_FILE" ]; then
     HWID="$(hexdump -n 16 -v -e '/1 "%02x"' /dev/urandom)"
     echo "$HWID" > "$HWID_FILE"
@@ -103,17 +109,19 @@ else
 fi
 
 # 10. config.json
-echo "Генерация config.json..."
+echo "[10/13] Генерация config.json..."
 curl -s -L -m 20 -H "User-Agent: Happ" -H "x-hwid: $HWID" "$SUB_URL" \
     | python3 "$PARSER" | python3 "$GENERATOR" --output "$CONFIG_JSON"
 
 # 11. cron
+echo "[11/13] Настраиваем обновление по cron..."
 mkdir -p /etc/crontabs
 CRON_LINE="0 */3 * * * /root/update-xray.sh"
 grep -qF "$CRON_LINE" /etc/crontabs/root 2>/dev/null || echo "$CRON_LINE" >> /etc/crontabs/root
 /etc/init.d/cron restart || true
 
 # 12. сервисы
+echo "[12/13] Настраиваем сервисы..."
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall restart
 /etc/init.d/xray stop 2>/dev/null || true
