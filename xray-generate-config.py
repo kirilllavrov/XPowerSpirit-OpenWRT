@@ -164,7 +164,7 @@ def base_config(geoip_path, geosite_path):
 # ГЕНЕРАЦИЯ КОНФИГА
 # -----------------------------
 def main():
-    if len(sys.argv) != 5:
+    if len(sys.argv) != 9:
         print("Usage: xray-generate-config.py --outbound <file> --geoip <file> --geosite <file> --output <file>")
         sys.exit(1)
 
