@@ -100,7 +100,6 @@ table inet fw4 {
     chain xray_tproxy_output {
         type route hook output priority mangle; policy accept;
     }
-}
 EOF
 
 # гарантируем include
