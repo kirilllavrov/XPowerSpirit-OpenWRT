@@ -1,3 +1,4 @@
+
 #!/bin/sh
 # OpenWrt 25.12.x — fw4-compatible TProxy (IPv4-only)
 # Xray + TProxy + fw4 include + policy routing + diagnostics
@@ -59,8 +60,8 @@ chain xray_tproxy {
     type filter hook prerouting priority mangle; policy accept;
 
     # LAN interface
-    iifname "br-lan" meta l4proto tcp tproxy to 127.0.0.1:12345 meta mark set 1 accept
-    iifname "br-lan" meta l4proto udp tproxy to 127.0.0.1:12345 meta mark set 1 accept
+    iifname "br-lan" meta l4proto tcp tproxy ip to 127.0.0.1:12345 meta mark set 1 accept
+    iifname "br-lan" meta l4proto udp tproxy ip to 127.0.0.1:12345 meta mark set 1 accept
 
     # Bypass private networks
     ip daddr { 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } return
