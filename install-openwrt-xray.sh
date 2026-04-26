@@ -123,9 +123,9 @@ echo "[6/11] Добавляем таблицу маршрутизации xray..
 
 grep -q "100 xray" /etc/iproute2/rt_tables 2>/dev/null || echo "100 xray" >> /etc/iproute2/rt_tables
 
-# Применяем сразу (не ждём перезагрузки)
-ip rule add fwmark 1 lookup xray 2>/dev/null || true
-ip route add local 0.0.0.0/0 dev lo table xray 2>/dev/null || true
+# Гарантированное добавление правил и маршрута
+ip rule | grep -q "fwmark 0x1 lookup xray" || ip rule add fwmark 1 lookup xray
+ip route show table xray | grep -q "local 0.0.0.0/0" || ip route add local 0.0.0.0/0 dev lo table xray
 
 # -----------------------------
 # 9. HWID (persistent)
