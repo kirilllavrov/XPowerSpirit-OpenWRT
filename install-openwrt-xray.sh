@@ -174,6 +174,79 @@ echo "[10/11] Перезапуск dnsmasq, firewall, Xray..."
 /etc/init.d/xray restart
 
 echo
+echo "[11/11] Проверяем работу Xray и TProxy..."
+
+# -----------------------------
+# Проверка 1: процесс Xray
+# -----------------------------
+if pgrep -x "xray" >/dev/null; then
+    echo "[OK] Xray запущен"
+else
+    echo "[ERR] Xray НЕ запущен!"
+fi
+
+# -----------------------------
+# Проверка 2: валидность конфига
+# -----------------------------
+if xray run -test -config /etc/xray/config.json >/dev/null 2>&1; then
+    echo "[OK] Конфиг Xray валиден"
+else
+    echo "[ERR] Конфиг Xray содержит ошибки!"
+fi
+
+# -----------------------------
+# Проверка 3: nftables цепочки
+# -----------------------------
+if nft list chain inet fw4 xray_tproxy_prerouting >/dev/null 2>&1; then
+    echo "[OK] nftables: цепочка xray_tproxy_prerouting загружена"
+else
+    echo "[ERR] nftables: цепочка xray_tproxy_prerouting отсутствует!"
+fi
+
+# -----------------------------
+# Проверка 4: policy routing
+# -----------------------------
+if ip rule | grep -q "fwmark 0x1 lookup xray"; then
+    echo "[OK] Policy routing: правило fwmark → xray активно"
+else
+    echo "[ERR] Policy routing: нет правила fwmark 1 lookup xray!"
+fi
+
+if ip route show table xray | grep -q "local 0.0.0.0/0 dev lo"; then
+    echo "[OK] Таблица маршрутизации xray корректна"
+else
+    echo "[ERR] Таблица маршрутизации xray отсутствует!"
+fi
+
+# -----------------------------
+# Проверка 5: DNS перехват
+# -----------------------------
+DNS_XRAY=$(netstat -tulpn 2>/dev/null | grep ":53 " | grep xray)
+DNS_DNSMASQ=$(netstat -tulpn 2>/dev/null | grep ":53 " | grep dnsmasq)
+
+if [ -n "$DNS_XRAY" ] && [ -n "$DNS_DNSMASQ" ]; then
+    echo "[OK] DNS: dnsmasq → Xray работает"
+else
+    echo "[ERR] DNS: нет слушателя 53/udp у Xray или dnsmasq!"
+fi
+
+# -----------------------------
+# Проверка 6: тестовый запрос через Xray
+# -----------------------------
+TEST_IP=$(curl -4 -s --max-time 5 https://ifconfig.me || echo "timeout")
+
+if [ "$TEST_IP" != "timeout" ]; then
+    echo "[OK] Трафик через Xray работает. Внешний IP: $TEST_IP"
+else
+    echo "[ERR] Не удалось выполнить запрос через Xray"
+fi
+
+echo
+echo "=== Диагностика завершена ==="
+echo
+
+
+echo
 echo "=== Установка завершена ==="
 echo "HWID:    $HWID"
 echo "Подписка: $SUB_FILE"

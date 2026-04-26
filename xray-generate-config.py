@@ -49,7 +49,11 @@ def choose_best_server(servers):
 
 def base_config(geoip_path, geosite_path):
     return {
-        "log": {"loglevel": "warning"},
+        "log": {
+            "loglevel": "warning",
+            "access": "/tmp/log/xray-access.log",
+            "error": "/tmp/log/xray-error.log"
+        },
         "dns": {
             "hosts": {
                 "cloudflare-dns.com": "1.1.1.1",
