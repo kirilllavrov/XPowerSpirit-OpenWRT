@@ -10,6 +10,7 @@ REPO_RAW="https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/ma
 GENERATOR="/root/xray-generate-config.py"
 PARSER="/root/xray-sub-parser.py"
 UPDATER="/root/update-xray.sh"
+DIAG="/root/diagnose-xray-tproxy.sh"
 
 CONFIG_JSON="/etc/xray/config.json"
 SUB_FILE="/etc/xray/subscription.url"
@@ -46,10 +47,11 @@ apk add kmod-nft-tproxy kmod-nft-socket kmod-nft-nat || true
 curl -fsSL "$GEOIP_URL" -o "$GEOIP"
 curl -fsSL "$GEOSITE_URL" -o "$GEOSITE"
 
-# 5. генератор/парсер/обновлялка
+# 5. генератор/парсер/обновлялка/диагностика
 wget -q "$REPO_RAW/xray-generate-config.py" -O "$GENERATOR"; chmod +x "$GENERATOR"
 wget -q "$REPO_RAW/xray-sub-parser.py" -O "$PARSER"; chmod +x "$PARSER"
 wget -q "$REPO_RAW/update-xray.sh" -O "$UPDATER"; chmod +x "$UPDATER"
+wget -q "$REPO_RAW/diagnose-xray-tproxy.sh" -O "$DIAG"; chmod +x "$DIAG"
 
 # 6. dnsmasq → Xray
 uci set dhcp.@dnsmasq[0].noresolv='1'
@@ -125,34 +127,11 @@ grep -qF "$CRON_LINE" /etc/crontabs/root 2>/dev/null || echo "$CRON_LINE" >> /et
 /etc/init.d/xray restart
 
 # 12. диагностика
-echo "=== Проверка ==="
-pgrep -x "xray" >/dev/null && echo "[OK] Xray запущен" || echo "[ERR] Xray НЕ запущен!"
-xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1 && echo "[OK] Конфиг Xray валиден" || echo "[ERR] Конфиг Xray содержит ошибки!"
-nft list table ip xray >/dev/null 2>&1 && echo "[OK] nftables: таблица ip xray активна" || echo "[ERR] nftables: таблица ip xray отсутствует!"
+echo
+echo "=== АВТО-ДИАГНОСТИКА ==="
+"$DIAG"
+echo
 
 echo "=== Установка завершена ==="
 echo "HWID: $HWID"
 echo "Config: $CONFIG_JSON"
-
-# -----------------------------
-# 13. Установка диагностического скрипта
-# -----------------------------
-echo "Скачиваем диагностический скрипт..."
-
-DIAG_URL="https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/diagnose-xray-tproxy.sh"
-DIAG_PATH="/root/diagnose-xray-tproxy.sh"
-
-wget -q "$DIAG_URL" -O "$DIAG_PATH"
-chmod +x "$DIAG_PATH"
-
-if [ -f "$DIAG_PATH" ]; then
-    echo "[OK] Диагностический скрипт установлен: $DIAG_PATH"
-else
-    echo "[ERR] Не удалось скачать диагностический скрипт!"
-fi
-
-echo
-echo "=== АВТО-ДИАГНОСТИКА ==="
-"$DIAG_PATH"
-echo
-
