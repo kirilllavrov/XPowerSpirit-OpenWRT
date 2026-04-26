@@ -156,8 +156,6 @@ curl -s -L -m 15 \
     -H "User-Agent: Happ" \
     -H "x-hwid: $HWID" \
     "$SUB_URL" | python3 "$PARSER" | python3 "$GENERATOR" \
-    --geoip "$GEOIP" \
-    --geosite "$GEOSITE" \
     --output "$CONFIG_JSON"
 
 # -----------------------------
