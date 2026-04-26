@@ -1,6 +1,6 @@
 #!/bin/sh
-# OpenWrt 25.12.x — fw4-compatible TProxy (IPv4-only)
-# Исправленная версия: правильный ruleset-post + hotplug + порядок правил
+# OpenWrt 25.12.x — Xray TProxy (fw4-compatible, IPv4-only)
+# Полный, исправленный установщик
 
 set -e
 
@@ -15,7 +15,7 @@ CONFIG_JSON="/etc/xray/config.json"
 SUB_FILE="/etc/xray/subscription.url"
 HWID_FILE="/etc/xray/hwid"
 
-echo "=== Установка Xray TProxy (fw4-compatible, исправлено) ==="
+echo "=== Установка Xray TProxy (fw4-compatible, IPv4-only) ==="
 
 # 1. root
 [ "$(id -u)" != "0" ] && { echo "Запускать нужно от root"; exit 1; }
@@ -49,7 +49,7 @@ uci -q delete dhcp.@dnsmasq[0].server
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#53'
 uci commit dhcp
 
-# 6. nftables TProxy — ПРАВИЛЬНЫЙ способ (ruleset-post)
+# 6. nftables TProxy через ruleset-post (таблица ip xray)
 echo "[6/13] Настраиваем nftables TProxy..."
 mkdir -p /usr/share/nftables.d/ruleset-post
 
@@ -58,21 +58,23 @@ table ip xray {
     chain xray_tproxy {
         type filter hook prerouting priority mangle; policy accept;
 
-        # Bypass правила — обязательно первыми!
-        iifname "br-lan" udp dport {67, 68} return
-        ip daddr {127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16} return
+        # Bypass — первыми
+        iifname "br-lan" udp dport { 67, 68 } return
+        ip daddr { 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } return
         meta mark 0xff return
 
-        # TProxy для LAN трафика
-        iifname "br-lan" meta l4proto { tcp, udp } tproxy to 127.0.0.1:12345 meta mark set 1 accept
+        # TProxy для LAN-трафика (IPv4)
+        iifname "br-lan" meta l4proto tcp tproxy ip to 127.0.0.1:12345 meta mark set 1 accept
+        iifname "br-lan" meta l4proto udp tproxy ip to 127.0.0.1:12345 meta mark set 1 accept
     }
 }
 EOF
 
-# 7. Policy routing + hotplug (чтобы не слетало после reboot)
+# 7. Policy routing + hotplug
 echo "[7/13] Настраиваем policy routing..."
 grep -q "100 xray" /etc/iproute2/rt_tables 2>/dev/null || echo "100 xray" >> /etc/iproute2/rt_tables
 
+mkdir -p /etc/hotplug.d/iface
 cat > /etc/hotplug.d/iface/99-xray-routing << 'EOF'
 #!/bin/sh
 if [ "$ACTION" = ifup ] && [ "$INTERFACE" = lan ]; then
@@ -84,7 +86,6 @@ fi
 EOF
 chmod +x /etc/hotplug.d/iface/99-xray-routing
 
-# Применяем сейчас
 ip rule del fwmark 1 lookup xray 2>/dev/null || true
 ip rule add fwmark 1 lookup xray priority 100
 ip route flush table xray 2>/dev/null || true
@@ -95,8 +96,8 @@ echo "[8/13] Настраиваем sysctl..."
 sysctl -w net.ipv4.conf.all.route_localnet=1
 sysctl -w net.ipv4.ip_forward=1
 
-grep -q "net.ipv4.conf.all.route_localnet=1" /etc/sysctl.conf || echo "net.ipv4.conf.all.route_localnet=1" >> /etc/sysctl.conf
-grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+grep -q "net.ipv4.conf.all.route_localnet=1" /etc/sysctl.conf 2>/dev/null || echo "net.ipv4.conf.all.route_localnet=1" >> /etc/sysctl.conf
+grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf 2>/dev/null || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 
 # 9. HWID
 echo "[9/13] Генерируем HWID..."
@@ -121,7 +122,7 @@ grep -qF "$CRON_LINE" /etc/crontabs/root 2>/dev/null || echo "$CRON_LINE" >> /et
 /etc/init.d/cron restart || true
 
 # 12. сервисы
-echo "[12/13] Настраиваем сервисы..."
+echo "[12/13] Перезапускаем сервисы..."
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall restart
 /etc/init.d/xray stop 2>/dev/null || true
@@ -132,10 +133,9 @@ sleep 2
 # 13. диагностика
 echo
 echo "=== АВТО-ДИАГНОСТИКА ==="
-"$DIAG"
+/root/diagnose-xray-tproxy.sh || true
 echo
 
 echo "=== Установка завершена ==="
 echo "HWID: $HWID"
 echo "Config: $CONFIG_JSON"
-echo "Если порт 12345 не слушается — выполни: /etc/init.d/xray restart"
