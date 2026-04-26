@@ -133,3 +133,26 @@ nft list table ip xray >/dev/null 2>&1 && echo "[OK] nftables: таблица ip
 echo "=== Установка завершена ==="
 echo "HWID: $HWID"
 echo "Config: $CONFIG_JSON"
+
+# -----------------------------
+# 13. Установка диагностического скрипта
+# -----------------------------
+echo "Скачиваем диагностический скрипт..."
+
+DIAG_URL="https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/diagnose-xray-tproxy.sh"
+DIAG_PATH="/root/diagnose-xray-tproxy.sh"
+
+wget -q "$DIAG_URL" -O "$DIAG_PATH"
+chmod +x "$DIAG_PATH"
+
+if [ -f "$DIAG_PATH" ]; then
+    echo "[OK] Диагностический скрипт установлен: $DIAG_PATH"
+else
+    echo "[ERR] Не удалось скачать диагностический скрипт!"
+fi
+
+echo
+echo "=== АВТО-ДИАГНОСТИКА ==="
+"$DIAG_PATH"
+echo
+
