@@ -1,6 +1,6 @@
 #!/bin/sh
-# install-openwrt-xray.sh
-# Полная установка Xray + nftables TProxy + подписка + геофайлы + генератор
+# install-openwrt-xray.sh — финальная версия
+# Полная установка Xray + TProxy + подписка + геофайлы + генератор
 # OpenWrt 25.12.x (apk-based)
 
 set -e
@@ -14,6 +14,13 @@ UPDATER="/root/update-xray.sh"
 CONFIG_JSON="/etc/xray/config.json"
 SUB_FILE="/etc/xray/subscription.url"
 HWID_FILE="/etc/xray/hwid"
+
+# Правильный путь для Xray
+GEO_DIR="/usr/share/xray"
+mkdir -p "$GEO_DIR"
+
+GEOIP="$GEO_DIR/geoip.dat"
+GEOSITE="$GEO_DIR/geosite.dat"
 
 GEOIP_URL="https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat"
 GEOSITE_URL="https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat"
@@ -59,8 +66,8 @@ apk add kmod-nft-tproxy kmod-nft-socket kmod-nft-nat kmod-nft-fib || true
 # 4. Установка геофайлов
 # -----------------------------
 echo "[2/11] Скачиваем geoip/geosite..."
-curl -fsSL "$GEOIP_URL" -o /etc/xray/geoip.dat
-curl -fsSL "$GEOSITE_URL" -o /etc/xray/geosite.dat
+curl -fsSL "$GEOIP_URL" -o "$GEOIP"
+curl -fsSL "$GEOSITE_URL" -o "$GEOSITE"
 
 # -----------------------------
 # 5. Скачивание генератора, парсера и обновлялки
@@ -116,19 +123,9 @@ echo "[6/11] Добавляем таблицу маршрутизации xray..
 
 grep -q "100 xray" /etc/iproute2/rt_tables 2>/dev/null || echo "100 xray" >> /etc/iproute2/rt_tables
 
-if [ ! -f /etc/rc.local ]; then
-    printf "#!/bin/sh\nexit 0\n" > /etc/rc.local
-    chmod +x /etc/rc.local
-fi
-
-sed -i '/fwmark 1 lookup xray/d' /etc/rc.local
-sed -i '/0.0.0.0\/0 dev lo table xray/d' /etc/rc.local
-
-sed -i '/^exit 0/i ip rule add fwmark 1 lookup xray\nip route add local 0.0.0.0/0 dev lo table xray\n' /etc/rc.local
-
-# --- ВАЖНО: сразу применяем правила, чтобы они работали без перезагрузки ---
-ip rule add fwmark 1 lookup xray
-ip route add local 0.0.0.0/0 dev lo table xray
+# Применяем сразу (не ждём перезагрузки)
+ip rule add fwmark 1 lookup xray 2>/dev/null || true
+ip route add local 0.0.0.0/0 dev lo table xray 2>/dev/null || true
 
 # -----------------------------
 # 9. HWID (persistent)
@@ -154,8 +151,8 @@ curl -s -L -m 15 \
     -H "User-Agent: Happ" \
     -H "x-hwid: $HWID" \
     "$SUB_URL" | python3 "$PARSER" | python3 "$GENERATOR" \
-    --geoip /etc/xray/geoip.dat \
-    --geosite /etc/xray/geosite.dat \
+    --geoip "$GEOIP" \
+    --geosite "$GEOSITE" \
     --output "$CONFIG_JSON"
 
 # -----------------------------
@@ -177,41 +174,32 @@ echo "[10/11] Перезапуск dnsmasq, firewall, Xray..."
 /etc/init.d/firewall restart
 /etc/init.d/xray restart
 
+# -----------------------------
+# 13. Диагностика
+# -----------------------------
 echo
 echo "[11/11] Проверяем работу Xray и TProxy..."
 
-# -----------------------------
-# Проверка 1: процесс Xray
-# -----------------------------
 if pgrep -x "xray" >/dev/null; then
     echo "[OK] Xray запущен"
 else
     echo "[ERR] Xray НЕ запущен!"
 fi
 
-# -----------------------------
-# Проверка 2: валидность конфига
-# -----------------------------
-if xray run -test -config /etc/xray/config.json >/dev/null 2>&1; then
+if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
     echo "[OK] Конфиг Xray валиден"
 else
     echo "[ERR] Конфиг Xray содержит ошибки!"
     echo "Проверь что не так:"
-    echo "xray run -test -config /etc/xray/config.json"
+    echo "xray run -test -config $CONFIG_JSON"
 fi
 
-# -----------------------------
-# Проверка 3: nftables цепочки
-# -----------------------------
 if nft list chain inet fw4 xray_tproxy_prerouting >/dev/null 2>&1; then
     echo "[OK] nftables: цепочка xray_tproxy_prerouting загружена"
 else
     echo "[ERR] nftables: цепочка xray_tproxy_prerouting отсутствует!"
 fi
 
-# -----------------------------
-# Проверка 4: policy routing
-# -----------------------------
 if ip rule | grep -q "fwmark 0x1 lookup xray"; then
     echo "[OK] Policy routing: правило fwmark → xray активно"
 else
@@ -223,34 +211,6 @@ if ip route show table xray | grep -q "local 0.0.0.0/0 dev lo"; then
 else
     echo "[ERR] Таблица маршрутизации xray отсутствует!"
 fi
-
-# -----------------------------
-# Проверка 5: DNS перехват
-# -----------------------------
-DNS_XRAY=$(netstat -tulpn 2>/dev/null | grep ":53 " | grep xray)
-DNS_DNSMASQ=$(netstat -tulpn 2>/dev/null | grep ":53 " | grep dnsmasq)
-
-if [ -n "$DNS_XRAY" ] && [ -n "$DNS_DNSMASQ" ]; then
-    echo "[OK] DNS: dnsmasq → Xray работает"
-else
-    echo "[ERR] DNS: нет слушателя 53/udp у Xray или dnsmasq!"
-fi
-
-# -----------------------------
-# Проверка 6: тестовый запрос через Xray
-# -----------------------------
-TEST_IP=$(curl -4 -s --max-time 5 https://ifconfig.me || echo "timeout")
-
-if [ "$TEST_IP" != "timeout" ]; then
-    echo "[OK] Трафик через Xray работает. Внешний IP: $TEST_IP"
-else
-    echo "[ERR] Не удалось выполнить запрос через Xray"
-fi
-
-echo
-echo "=== Диагностика завершена ==="
-echo
-
 
 echo
 echo "=== Установка завершена ==="
