@@ -126,6 +126,10 @@ sed -i '/0.0.0.0\/0 dev lo table xray/d' /etc/rc.local
 
 sed -i '/^exit 0/i ip rule add fwmark 1 lookup xray\nip route add local 0.0.0.0/0 dev lo table xray\n' /etc/rc.local
 
+# --- ВАЖНО: сразу применяем правила, чтобы они работали без перезагрузки ---
+ip rule add fwmark 1 lookup xray
+ip route add local 0.0.0.0/0 dev lo table xray
+
 # -----------------------------
 # 9. HWID (persistent)
 # -----------------------------
@@ -192,6 +196,8 @@ if xray run -test -config /etc/xray/config.json >/dev/null 2>&1; then
     echo "[OK] Конфиг Xray валиден"
 else
     echo "[ERR] Конфиг Xray содержит ошибки!"
+    echo "Проверь что не так:"
+    echo "xray run -test -config /etc/xray/config.json"
 fi
 
 # -----------------------------
