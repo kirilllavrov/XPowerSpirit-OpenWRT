@@ -9,6 +9,7 @@ LOG="/var/log/xray-update.log"
 SUB_FILE="/etc/xray/subscription.url"
 OUTBOUND_JSON="/etc/xray/outbound.json"
 CONFIG_JSON="/etc/xray/config.json"
+HWID_FILE="/etc/xray/hwid"
 
 GENERATOR="/root/xray-generate-config.py"
 PARSER="/root/xray-sub-parser.py"
@@ -34,12 +35,14 @@ if [ -z "$SUB_URL" ]; then
 fi
 
 # -----------------------------
-# 2. HWID
+# 2. HWID (persistent)
 # -----------------------------
-if [ -f /etc/machine-id ]; then
-    HWID="$(cat /etc/machine-id)"
+if [ -f "$HWID_FILE" ]; then
+    HWID="$(cat "$HWID_FILE")"
 else
-    HWID="$(uuidgen | tr -d '-')"
+    HWID="$(hexdump -n 16 -v -e '/1 "%02x"' /dev/urandom)"
+    echo "$HWID" > "$HWID_FILE"
+    chmod 600 "$HWID_FILE"
 fi
 
 echo "[HWID] $HWID" >> "$LOG"
@@ -59,11 +62,14 @@ curl -fsSL "$GEOIP_URL" -o /etc/xray/geoip.dat
 curl -fsSL "$GEOSITE_URL" -o /etc/xray/geosite.dat
 
 # -----------------------------
-# 5. Скачивание подписки (через HWID)
+# 5. Скачивание подписки
 # -----------------------------
 echo "[3] Скачиваем подписку..." >> "$LOG"
 
-SUB_DATA="$(curl -s -L -m 15 -H "User-Agent: Happ" -H "x-hwid: $HWID" "$SUB_URL")"
+SUB_DATA="$(curl -s -L -m 15 \
+    -H "User-Agent: Happ" \
+    -H "x-hwid: $HWID" \
+    "$SUB_URL")"
 
 if [ -z "$SUB_DATA" ]; then
     echo "Ошибка: подписка не скачана" >> "$LOG"

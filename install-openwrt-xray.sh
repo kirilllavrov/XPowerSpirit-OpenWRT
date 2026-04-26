@@ -14,6 +14,7 @@ UPDATER="/root/update-xray.sh"
 OUTBOUND_JSON="/etc/xray/outbound.json"
 CONFIG_JSON="/etc/xray/config.json"
 SUB_FILE="/etc/xray/subscription.url"
+HWID_FILE="/etc/xray/hwid"
 
 GEOIP_URL="https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat"
 GEOSITE_URL="https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat"
@@ -127,24 +128,29 @@ sed -i '/0.0.0.0\/0 dev lo table xray/d' /etc/rc.local
 sed -i '/^exit 0/i ip rule add fwmark 1 lookup xray\nip route add local 0.0.0.0/0 dev lo table xray\n' /etc/rc.local
 
 # -----------------------------
-# 9. HWID (новое!)
+# 9. HWID (persistent)
 # -----------------------------
 echo "[7/11] Генерируем HWID..."
 
-if [ -f /etc/machine-id ]; then
-    HWID="$(cat /etc/machine-id)"
+if [ -f "$HWID_FILE" ]; then
+    HWID="$(cat "$HWID_FILE")"
 else
-    HWID="$(uuidgen | tr -d '-')"
+    HWID="$(hexdump -n 16 -v -e '/1 "%02x"' /dev/urandom)"
+    echo "$HWID" > "$HWID_FILE"
+    chmod 600 "$HWID_FILE"
 fi
 
 echo "HWID: $HWID"
 
 # -----------------------------
-# 10. Парсинг подписки (через HWID)
+# 10. Парсинг подписки
 # -----------------------------
 echo "[8/11] Парсим подписку → outbound.json..."
 
-SUB_DATA="$(curl -s -L -m 15 -H "User-Agent: Happ" -H "x-hwid: $HWID" "$SUB_URL")"
+SUB_DATA="$(curl -s -L -m 15 \
+    -H "User-Agent: Happ" \
+    -H "x-hwid: $HWID" \
+    "$SUB_URL")"
 
 printf '%s\n' "$SUB_DATA" | python3 "$PARSER" > "$OUTBOUND_JSON"
 
