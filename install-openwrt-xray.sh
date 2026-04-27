@@ -123,7 +123,7 @@ PROG=/usr/bin/xray
 
 start_service() {
     procd_open_instance
-    procd_set_param command "$PROG" run -config /etc/xray/config.json"
+    procd_set_param command "$PROG" run -config /etc/xray/config.json
     procd_set_param respawn
     procd_set_param user root
     procd_set_param stderr 1
