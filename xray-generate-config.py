@@ -5,7 +5,7 @@ import os
 
 # Whitelist: если задан, выбираем только серверы из этого списка
 # Пустой = брать первый доступный сервер
-DOMAIN_WHITELIST = [router.freenternet.top] 
+DOMAIN_WHITELIST = ["router.freenternet.top"] 
 
 def load_outbounds():
     """Загружает outbounds из stdin (JSON list или dict)"""
