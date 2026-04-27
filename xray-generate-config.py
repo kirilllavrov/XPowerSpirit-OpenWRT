@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import json
 import sys
+import os
 
-# Убрали жёсткий whitelist — теперь используем все серверы из подписки
-DOMAIN_WHITELIST = []
+# Whitelist: если задан, выбираем только серверы из этого списка
+# Пустой = брать первый доступный сервер
+DOMAIN_WHITELIST = [router.freenternet.top] 
 
 def load_outbounds():
+    """Загружает outbounds из stdin (JSON list или dict)"""
     try:
         data = json.load(sys.stdin)
         if isinstance(data, dict):
@@ -17,18 +20,29 @@ def load_outbounds():
     return []
 
 def choose_best_server(servers):
+    """
+    Выбирает сервер:
+    - Если DOMAIN_WHITELIST задан: возвращает первый сервер, чей address есть в списке
+    - Если список пуст: возвращает первый сервер из подписки
+    - Если не найдено: возвращает None (fallback на direct)
+    """
     if not servers:
         return None
-    if not DOMAIN_WHITELIST:
-        return servers[0]
-    for ob in servers:
-        vnext = ob.get("settings", {}).get("vnext", [{}])[0]
-        addr = vnext.get("address", "")
-        if addr in DOMAIN_WHITELIST:
-            return ob
+    
+    if DOMAIN_WHITELIST:
+        for ob in servers:
+            vnext = ob.get("settings", {}).get("vnext", [{}])[0]
+            addr = vnext.get("address", "")
+            if addr in DOMAIN_WHITELIST:
+                return ob
+        # Ни один сервер из вайтлиста не найден
+        return None
+    
+    # Без вайтлиста — берём первый
     return servers[0]
 
 def base_config():
+    """Базовая конфигурация (лог, DNS, inbounds)"""
     return {
         "log": {
             "loglevel": "warning",
@@ -112,16 +126,17 @@ def main():
     if len(sys.argv) != 3:
         print("Usage: xray-generate-config.py --output <file>")
         sys.exit(1)
-
+    
     output_path = sys.argv[sys.argv.index("--output") + 1]
-
+    
     all_obs = load_outbounds()
     chosen = choose_best_server(all_obs)
     chosen_tag = chosen.get("tag", "proxy") if chosen else "direct"
-
+    
     cfg = base_config()
-
+    
     if not chosen:
+        # Нет подходящего сервера — режим fallback (только direct/block)
         cfg["outbounds"] = [
             {"protocol": "freedom", "tag": "direct"},
             {"protocol": "blackhole", "tag": "block"}
@@ -129,29 +144,17 @@ def main():
         cfg["routing"] = {
             "domainStrategy": "ForceIPv4",
             "rules": [
-                {
-                    "type": "field",
-                    "domain": ["geosite:category-ads"],
-                    "outboundTag": "block"
-                },
-                {
-                    "type": "field",
-                    "inboundTag": ["dns-in"],
-                    "outboundTag": "direct"
-                },
-                {
-                    "type": "field",
-                    "network": "tcp,udp",
-                    "outboundTag": "direct"
-                }
+                {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},
+                {"type": "field", "inboundTag": ["dns-in"], "outboundTag": "direct"},
+                {"type": "field", "network": "tcp,udp", "outboundTag": "direct"}
             ]
         }
     else:
-        # Добавляем sockopt mark 255, чтобы Xray сам не попадал в TProxy
+        # Добавляем sockopt mark 255, чтобы исходящий трафик Xray не попадал в TProxy
         if "streamSettings" not in chosen:
             chosen["streamSettings"] = {}
         chosen["streamSettings"]["sockopt"] = {"mark": 255}
-
+        
         cfg["outbounds"] = [
             chosen,
             {
@@ -161,33 +164,30 @@ def main():
             },
             {"protocol": "blackhole", "tag": "block"}
         ]
-
+        
+        # Правила маршрутизации: ПОРЯДОК КРИТИЧЕН!
         cfg["routing"] = {
             "domainStrategy": "ForceIPv4",
             "rules": [
+                # 1. Блокировка рекламы (сначала)
                 {
                     "type": "field",
                     "domain": ["geosite:category-ads"],
                     "outboundTag": "block"
                 },
+                # 2. DNS-трафик — ВСЕГДА напрямую (фикс петли резолвинга!)
                 {
                     "type": "field",
                     "inboundTag": ["dns-in"],
                     "outboundTag": "direct"
                 },
+                # 3. Частные IP — напрямую (до catch-all, чтобы не проксировать 192.168.1.1)
                 {
                     "type": "field",
-                    "domain": [
-                        "geosite:category-streaming",
-                        "geosite:category-games"
-                    ],
-                    "outboundTag": chosen_tag
-                },
-                {
-                    "type": "field",
-                    "ip": ["geoip:ru", "geoip:private"],
+                    "ip": ["geoip:private"],
                     "outboundTag": "direct"
                 },
+                # 4. Русские домены и сервисы — напрямую
                 {
                     "type": "field",
                     "domain": [
@@ -199,6 +199,13 @@ def main():
                     ],
                     "outboundTag": "direct"
                 },
+                # 5. Стриминг/игры — через прокси (опционально, можно убрать)
+                {
+                    "type": "field",
+                    "domain": ["geosite:category-streaming", "geosite:category-games"],
+                    "outboundTag": chosen_tag
+                },
+                # 6. Catch-all: всё остальное — через прокси
                 {
                     "type": "field",
                     "network": "tcp,udp",
@@ -206,10 +213,9 @@ def main():
                 }
             ]
         }
-
+    
     with open(output_path, "w") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
-
     print(f"Готово: {output_path}")
 
 if __name__ == "__main__":
