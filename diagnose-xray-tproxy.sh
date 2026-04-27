@@ -84,6 +84,8 @@ fi
 # 10. Быстрый DNS-тест
 echo -e "\n[10] Локальный DNS-тест:"
 nslookup google.com 127.0.0.1 2>/dev/null | grep -q "Address:" && _ok "Xray DNS отвечает" || _warn "Локальный DNS не отвечает"
+echo -e "\n[10] 1.1.1.1 DNS-тест:"
+nslookup google.com 1.1.1.1 2>/dev/null | grep -q "Address:" && _ok "Xray DNS отвечает" || _warn "1.1.1.1 DNS не отвечает"
 
 # === АВТО-РЕКОМЕНДАЦИИ ===
 echo -e "\n🔧 РЕКОМЕНДАЦИИ:"
@@ -100,3 +102,6 @@ if grep -q '"mark": 255' "$CFG" 2>/dev/null; then
     echo "[OK] Конфиг валиден. Если сайты не грузятся → очистите DNS-кэш на клиенте."
 fi
 echo "=== END ==="
+
+echo " На клиенте (Windows / Linux)"
+echo "curl -v --interface 192.168.1.138 http://ipinfo.io/ip"
