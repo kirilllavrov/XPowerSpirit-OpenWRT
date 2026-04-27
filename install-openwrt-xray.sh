@@ -1,8 +1,8 @@
 #!/bin/sh
 # OpenWrt 25.12.x — fw4-compatible TProxy (IPv4-only)
-# Финальная исправленная версия — все проблемы учтены
+# Финальная версия с исправлениями по официальному гайду V2Fly
 
-echo "=== Установка Xray TProxy (финальная исправленная версия) ==="
+echo "=== Установка Xray TProxy (финальная версия) ==="
 
 [ "$(id -u)" != "0" ] && { echo "Запускать нужно от root"; exit 1; }
 
@@ -45,7 +45,7 @@ uci -q delete dhcp.@dnsmasq[0].server
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#53'
 uci commit dhcp
 
-# 5. nftables TProxy (чистая версия без дублирования)
+# 5. nftables TProxy (согласно официальному гайду)
 echo "[5] Настройка nftables TProxy..."
 mkdir -p /usr/share/nftables.d/ruleset-post
 
@@ -54,13 +54,20 @@ table ip xray {
     chain xray_tproxy {
         type filter hook prerouting priority mangle; policy accept;
 
-        # Bypass — строго первыми
-        iifname "br-lan" udp dport {67, 68} return
+        udp dport {67, 68} return
         ip daddr {127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16} return
         meta mark 0xff return
 
-        # TProxy для LAN трафика
-        iifname "br-lan" meta l4proto { tcp, udp } tproxy to 127.0.0.1:12345 meta mark set 1 accept
+        meta l4proto { tcp, udp } tproxy to 127.0.0.1:12345 meta mark set 1 accept
+    }
+
+    chain xray_output {
+        type route hook output priority mangle; policy accept;
+
+        ip daddr {127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16} return
+        meta mark 0xff return
+
+        meta l4proto { tcp, udp } mark set 1 accept
     }
 }
 EOF
@@ -92,7 +99,7 @@ sysctl -w net.ipv4.ip_forward=1
 grep -q route_localnet /etc/sysctl.conf || echo "net.ipv4.conf.all.route_localnet=1" >> /etc/sysctl.conf
 grep -q ip_forward /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 
-# 8. Geo файлы + генерация config + исправления
+# 8. Geo + config
 echo "[8] Geo файлы + генерация config.json..."
 mkdir -p "$GEO_DIR"
 curl -fsSL https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat -o "$GEO_DIR/geoip.dat"
@@ -109,26 +116,8 @@ fi
 curl -s -L -m 20 -H "User-Agent: Happ" -H "x-hwid: $HWID" "$SUB_URL" \
     | python3 "$PARSER" | python3 "$GENERATOR" --output "$CONFIG_JSON"
 
-# Исправляем config: добавляем listen + удаляем dns-in
-python3 - << 'PY'
-import json
-with open('/etc/xray/config.json') as f:
-    cfg = json.load(f)
-
-for ib in cfg.get('inbounds', []):
-    if ib.get('tag') == 'tproxy-in':
-        ib['listen'] = '0.0.0.0'
-        break
-
-cfg['inbounds'] = [ib for ib in cfg.get('inbounds', []) if ib.get('tag') != 'dns-in']
-
-with open('/etc/xray/config.json', 'w') as f:
-    json.dump(cfg, f, indent=2, ensure_ascii=False)
-print("Config исправлен (listen + dns-in удалён)")
-PY
-
-# 9. Init скрипт Xray (запуск от root)
-echo "[9] Исправляем init скрипт Xray..."
+# 9. Init скрипт Xray
+echo "[9] Настройка init скрипта Xray..."
 cat > /etc/init.d/xray << 'EOF'
 #!/bin/sh /etc/rc.common
 START=99
@@ -151,11 +140,10 @@ service_triggers() {
 EOF
 chmod +x /etc/init.d/xray
 
-# 10. Cron + финальный перезапуск
-echo "[10] Cron + перезапуск сервисов..."
+# 10. Финальный запуск
+echo "[10] Запуск сервисов..."
 mkdir -p /etc/crontabs
-CRON_LINE="0 */3 * * * /root/update-xray.sh"
-grep -qF "$CRON_LINE" /etc/crontabs/root 2>/dev/null || echo "$CRON_LINE" >> /etc/crontabs/root
+echo "0 */3 * * * /root/update-xray.sh" >> /etc/crontabs/root
 /etc/init.d/cron restart || true
 
 /etc/init.d/dnsmasq restart
@@ -168,6 +156,4 @@ echo "=== АВТО-ДИАГНОСТИКА ==="
 echo
 
 echo "=== Установка завершена ==="
-echo "Теперь порт 12345 должен слушаться."
-echo "Если counters всё ещё 0 — выполни:"
-echo "    nft delete table ip xray && /etc/init.d/firewall restart"
+echo "Проверьте counters после теста трафика из LAN."

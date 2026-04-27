@@ -2,9 +2,8 @@
 import json
 import sys
 
-# Убрали жёсткий whitelist — теперь берём первый сервер из подписки
-# Если хочешь оставить только определённые — добавь их сюда
-DOMAIN_WHITELIST = []  # пустой = брать все
+# Убрали жёсткий whitelist — теперь используем все серверы из подписки
+DOMAIN_WHITELIST = []
 
 def load_outbounds():
     try:
@@ -20,7 +19,6 @@ def load_outbounds():
 def choose_best_server(servers):
     if not servers:
         return None
-    # Если whitelist пустой — берём первый
     if not DOMAIN_WHITELIST:
         return servers[0]
     for ob in servers:
@@ -49,8 +47,12 @@ def base_config():
             "serveStale": True,
             "disableFallback": False,
             "servers": [
-                {"address": "195.208.4.1", "port": 53, "domains": ["geosite:category-ru", "geosite:category-browser", "geosite:category-mobile", "geosite:category-cdn-ru", "geosite:private"]},
-                {"address": "195.208.5.1", "port": 53, "domains": ["geosite:category-ru", "geosite:category-browser", "geosite:category-mobile", "geosite:category-cdn-ru", "geosite:private"]},
+                {"address": "195.208.4.1", "port": 53,
+                 "domains": ["geosite:category-ru", "geosite:category-browser",
+                             "geosite:category-mobile", "geosite:category-cdn-ru", "geosite:private"]},
+                {"address": "195.208.5.1", "port": 53,
+                 "domains": ["geosite:category-ru", "geosite:category-browser",
+                             "geosite:category-mobile", "geosite:category-cdn-ru", "geosite:private"]},
                 "https://cloudflare-dns.com/dns-query",
                 "https://dns.google/dns-query"
             ]
@@ -58,7 +60,7 @@ def base_config():
         "inbounds": [
             {
                 "tag": "tproxy-in",
-                "listen": "0.0.0.0",
+                "listen": "0.0.0.0",                    # важно для стабильности
                 "port": 12345,
                 "protocol": "dokodemo-door",
                 "settings": {"network": "tcp,udp", "followRedirect": True},
@@ -94,11 +96,17 @@ def main():
             ]
         }
     else:
+        # Добавляем sockopt mark 255, чтобы Xray сам не попадал в TProxy
+        if "streamSettings" not in chosen:
+            chosen["streamSettings"] = {}
+        chosen["streamSettings"]["sockopt"] = {"mark": 255}
+
         cfg["outbounds"] = [
             chosen,
-            {"protocol": "freedom", "tag": "direct"},
+            {"protocol": "freedom", "tag": "direct", "streamSettings": {"sockopt": {"mark": 255}}},
             {"protocol": "blackhole", "tag": "block"}
         ]
+
         cfg["routing"] = {
             "domainStrategy": "ForceIPv4",
             "rules": [
@@ -107,8 +115,7 @@ def main():
                 {"type": "field", "ip": ["geoip:ru", "geoip:private"], "outboundTag": "direct"},
                 {"type": "field", "domain": [
                     "geosite:private", "geosite:category-browser",
-                    "geosite:category-cdn-ru", "geosite:category-mobile",
-                    "geosite:category-ru"
+                    "geosite:category-cdn-ru", "geosite:category-mobile", "geosite:category-ru"
                 ], "outboundTag": "direct"},
                 {"type": "field", "network": "tcp,udp", "outboundTag": chosen_tag}
             ]

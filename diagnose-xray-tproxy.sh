@@ -1,99 +1,76 @@
 #!/bin/sh
+# Xray TProxy Deep Diagnostics — улучшенная версия
 
 echo "=== Xray TProxy DEEP DIAGNOSTICS ==="
 
-# 1. Xray process
-echo
+# 1. Процессы Xray
 echo "[1] Xray process:"
 pgrep -a xray || echo "Xray НЕ запущен"
 
-# 2. Проверка, какой конфиг реально использует init.d
+# 2. Порт 12345
 echo
-echo "[2] UCI config (/etc/config/xray):"
-uci show xray 2>/dev/null || echo "UCI-конфиг отсутствует!"
+echo "[2] Listening on port 12345:"
+netstat -tulnp 2>/dev/null | grep 12345 || ss -tulnp 2>/dev/null | grep 12345 || echo "Порт 12345 НЕ слушается!"
 
-# 3. Проверка config.json на ошибки
+# 3. Inbound tproxy-in
 echo
-echo "[3] Проверка config.json (xray run -test):"
-xray run -test -config /etc/xray/config.json 2>&1 | sed 's/^/    /'
+echo "[3] Проверка inbound tproxy-in:"
+grep -A 20 '"tag": "tproxy-in"' /etc/xray/config.json 2>/dev/null || echo "В config.json нет inbound tproxy-in!"
 
-# 4. Проверка слушает ли порт 12345
+# 4. nftables — полная информация
 echo
-echo "[4] Listening on port 12345:"
-netstat -tulnp 2>/dev/null | grep 12345 || echo "Порт 12345 НЕ слушается!"
-
-# 5. Проверка конфликта DNS (порт 53)
-echo
-echo "[5] Конфликт порта 53:"
-netstat -tulnp 2>/dev/null | grep ":53" || echo "Порт 53 свободен"
-
-# 6. Проверка inbound tproxy-in
-echo
-echo "[6] Проверка inbound tproxy-in:"
-grep -R "tproxy" /etc/xray/config.json || echo "В config.json нет inbound с tproxy!"
-
-# 7. nftables: порядок prerouting
-echo
-echo "[7] Порядок prerouting в ruleset:"
-nft list ruleset | grep -n "prerouting" | sed 's/^/    /'
-
-# 8. nftables table ip xray
-echo
-echo "[8] nftables table ip xray:"
+echo "[4] nftables table ip xray:"
 nft list table ip xray 2>/dev/null || echo "Таблица ip xray отсутствует!"
 
-# 9. nftables counters
 echo
-echo "[9] nftables counters (цепочка xray_tproxy):"
-nft -a list chain ip xray xray_tproxy 2>/dev/null | grep -E "packets|bytes" || echo "Нет счётчиков — пакеты НЕ попадают в цепочку!"
+echo "[5] nftables chain xray_tproxy (счётчики):"
+nft -a list chain ip xray xray_tproxy 2>/dev/null || echo "Цепочка xray_tproxy отсутствует!"
 
-# 10. Проверка fw4 include
+# 6. Порядок правил в prerouting
 echo
-echo "[10] Проверка fw4 include:"
-ls -l /usr/share/nftables.d/ruleset-post/ | sed 's/^/    /'
+echo "[6] Порядок prerouting chains:"
+nft list ruleset | grep -E "prerouting|hook prerouting" -A 5
 
-# 11. Проверка policy routing
+# 7. ip rule и route
 echo
-echo "[11] ip rule:"
-ip rule || echo "ip rule не работает"
+echo "[7] ip rule:"
+ip rule show
 
 echo
-echo "[12] ip route table xray:"
-ip route show table xray || echo "Таблица маршрутизации xray пуста!"
+echo "[8] ip route table xray:"
+ip route show table xray 2>/dev/null || echo "Таблица xray отсутствует или пуста!"
 
-# 12. sysctl
+# 8. sysctl
 echo
-echo "[13] sysctl route_localnet:"
+echo "[9] sysctl route_localnet:"
 sysctl net.ipv4.conf.all.route_localnet
 
-echo
-echo "[14] sysctl ip_forward:"
+echo "[10] sysctl ip_forward:"
 sysctl net.ipv4.ip_forward
 
-# 13. DNS test
+# 9. DNS
 echo
-echo "[15] DNS test через Xray:"
+echo "[11] DNS test через Xray:"
 nslookup google.com 127.0.0.1 || echo "DNS через Xray НЕ работает!"
 
-# 14. DHCP test
+# 10. Трафик
 echo
-echo "[16] DHCP test:"
-udhcpc -n -q -t 1 || echo "DHCP НЕ работает — nftables может ломать DHCP!"
+echo "[12] Трафик на lo:12345 (tcpdump 5 сек):"
+timeout 5 tcpdump -ni lo port 12345 -c 10 2>/dev/null || echo "На lo:12345 пакетов НЕТ!"
 
-# 15. Проверка трафика на br-lan до TProxy
 echo
-echo "[17] Трафик на br-lan (tcpdump 3 сек):"
-timeout 3 tcpdump -ni br-lan 2>/dev/null | head || echo "Нет трафика на br-lan!"
+echo "[13] Трафик на br-lan (tcpdump 5 сек, только новые соединения):"
+timeout 5 tcpdump -ni br-lan 'tcp or udp' -c 5 2>/dev/null || echo "Трафик на br-lan не пойман"
 
-# 16. Проверка трафика до Xray
+# 11. Логи Xray
 echo
-echo "[18] Трафик на lo:12345 (tcpdump 3 сек):"
-timeout 3 tcpdump -ni lo port 12345 2>/dev/null || echo "На lo:12345 НЕТ пакетов!"
+echo "[14] Последние логи Xray:"
+logread | grep -i xray | tail -15 || echo "Логов Xray нет"
 
-# 17. Логи Xray
+# 12. Интерфейсы
 echo
-echo "[19] Логи Xray:"
-tail -n 50 /tmp/log/xray-error.log 2>/dev/null || echo "Логов нет"
+echo "[15] Сетевые интерфейсы:"
+ip -br link show | grep -E 'br-lan|lan|eth'
 
 echo
 echo "=== END ==="
