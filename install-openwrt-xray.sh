@@ -1,9 +1,8 @@
 #!/bin/sh
 # OpenWrt 25.12.x — Xray TProxy (IPv4-only)
-# Финальная версия: DNS→1053 + правильный fw4 hook
+# Исправленная версия: надежный init-скрипт для nftables вместо хуков fw4
 
-echo "=== Установка Xray TProxy (финальная версия) ==="
-
+echo "=== Установка Xray TProxy (исправленная версия) ==="
 [ "$(id -u)" != "0" ] && { echo "Запускать нужно от root"; exit 1; }
 
 REPO="https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main"
@@ -11,7 +10,6 @@ GENERATOR="/root/xray-generate-config.py"
 PARSER="/root/xray-sub-parser.py"
 UPDATER="/root/update-xray.sh"
 DIAG="/root/diagnose-xray-tproxy.sh"
-
 CONFIG_DIR="/etc/xray"
 CONFIG_JSON="$CONFIG_DIR/config.json"
 SUB_FILE="$CONFIG_DIR/subscription.url"
@@ -22,69 +20,99 @@ GEO_DIR="/usr/share/xray"
 printf "Введите URL подписки VLESS: "
 read SUB_URL
 [ -z "$SUB_URL" ] && { echo "Ошибка: пустой URL"; exit 1; }
-
 mkdir -p "$CONFIG_DIR"
 echo "$SUB_URL" > "$SUB_FILE"
 chmod 600 "$SUB_FILE"
 
 # 2. Пакеты
+echo "[1] Установка пакетов..."
 apk update
-apk add curl xray-core nftables ca-certificates jq python3 ip-full
+apk add curl xray-core nftables ca-certificates jq python3 ip-full dnsmasq-full
+# Важно: устанавливаем модули ядра для TProxy
 apk add kmod-nft-tproxy kmod-nft-socket kmod-nft-nat || true
 
 # 3. Скрипты
+echo "[2] Загрузка скриптов..."
 wget -q "$REPO/xray-generate-config.py" -O "$GENERATOR"; chmod +x "$GENERATOR"
 wget -q "$REPO/xray-sub-parser.py" -O "$PARSER"; chmod +x "$PARSER"
 wget -q "$REPO/update-xray.sh" -O "$UPDATER"; chmod +x "$UPDATER"
 wget -q "$REPO/diagnose-xray-tproxy.sh" -O "$DIAG"; chmod +x "$DIAG"
 
 # 4. dnsmasq → Xray:1053
+echo "[3] Настройка DNS..."
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci -q delete dhcp.@dnsmasq[0].server
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#1053'
 uci commit dhcp
 
-# 5. nftables TProxy
-mkdir -p /usr/share/nftables.d/ruleset-post
+# 5. Создание надежного init-скрипта для правил nftables
+echo "[4] Создание сервиса правил фаервола..."
+cat > /etc/init.d/xray-tproxy-rules << 'EOF'
+#!/bin/sh /etc/rc.common
+START=95
+STOP=10
 
-cat > /usr/share/nftables.d/ruleset-post/30-xray-tproxy.nft << 'EOF'
-table ip xray {
-    chain xray_tproxy {
-        type filter hook prerouting priority mangle; policy accept;
+start() {
+    # Очищаем старое, если есть
+    nft delete table ip xray 2>/dev/null
+    
+    # Создаем таблицу
+    nft add table ip xray
+    nft 'add chain ip xray xray_tproxy { type filter hook prerouting priority mangle; policy accept; }'
+    
+    # 1. Исключаем трафик самого Xray (mark 255 = 0xff) - ВАЖНО: первое правило!
+    nft 'add rule ip xray xray_tproxy meta mark 0x000000ff return'
+    
+    # 2. Исключаем DHCP
+    nft 'add rule ip xray xray_tproxy udp dport { 67, 68 } return'
+    
+    # 3. Исключаем локальные адреса
+    nft 'add rule ip xray xray_tproxy ip daddr { 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } return'
+    
+    # 4. Перехват TProxy
+    nft 'add rule ip xray xray_tproxy meta l4proto { tcp, udp } tproxy ip to 127.0.0.1:12345 meta mark set 0x00000001 accept'
 
-        udp dport {67, 68} return
-        ip daddr {127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16} return
-        meta mark 0xff return
+    # Маршрутизация
+    ip rule del fwmark 1 lookup xray 2>/dev/null || true
+    ip rule add fwmark 1 lookup xray priority 100
+    ip route flush table xray 2>/dev/null || true
+    ip route add local 0.0.0.0/0 dev lo table xray
+    
+    # Вставляем прыжок в fw4, если его нет
+    if ! nft list chain inet fw4 mangle_prerouting 2>/dev/null | grep -q "jump xray_tproxy"; then
+        nft insert rule inet fw4 mangle_prerouting jump xray_tproxy
+    fi
+}
 
-        meta l4proto { tcp, udp } tproxy ip to 127.0.0.1:12345 meta mark set 1 accept
-    }
+stop() {
+    nft delete table ip xray 2>/dev/null
+    ip rule del fwmark 1 lookup xray 2>/dev/null || true
+    ip route flush table xray 2>/dev/null || true
+    # Удаляем прыжок из fw4
+    HANDLE=$(nft -a list chain inet fw4 mangle_prerouting 2>/dev/null | grep "jump xray_tproxy" | grep -o "handle [0-9]*" | awk '{print $2}')
+    if [ -n "$HANDLE" ]; then
+        nft delete rule inet fw4 mangle_prerouting handle $HANDLE
+    fi
 }
 EOF
+chmod +x /etc/init.d/xray-tproxy-rules
+/etc/init.d/xray-tproxy-rules enable
 
-# 6. ВСТАВКА В FW4 (главное исправление)
-mkdir -p /usr/share/nftables.d/chain-pre/mangle_prerouting
+# Удаляем старые конфликтующие файлы хуков, если они остались от прошлых установок
+rm -f /usr/share/nftables.d/chain-pre/mangle_prerouting/30-xray-tproxy.nft
+rm -f /usr/share/nftables.d/ruleset-post/30-xray-tproxy.nft
 
-cat > /usr/share/nftables.d/chain-pre/mangle_prerouting/30-xray-tproxy.nft << 'EOF'
-jump xray_tproxy
-EOF
-
-# 7. Policy routing
+# 6. Policy routing (таблица маршрутизации)
 grep -q "100 xray" /etc/iproute2/rt_tables || echo "100 xray" >> /etc/iproute2/rt_tables
 
-ip rule del fwmark 1 lookup xray 2>/dev/null || true
-ip rule add fwmark 1 lookup xray priority 100
-
-ip route flush table xray 2>/dev/null || true
-ip route add local 0.0.0.0/0 dev lo table xray
-
-# 8. sysctl
+# 7. sysctl
 sysctl -w net.ipv4.conf.all.route_localnet=1
 sysctl -w net.ipv4.ip_forward=1
-
 grep -q route_localnet /etc/sysctl.conf || echo "net.ipv4.conf.all.route_localnet=1" >> /etc/sysctl.conf
 grep -q ip_forward /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 
-# 9. Geo + config.json
+# 8. Geo + config.json
+echo "[5] Генерация конфигурации..."
 mkdir -p "$GEO_DIR"
 curl -fsSL https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat -o "$GEO_DIR/geoip.dat"
 curl -fsSL https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat -o "$GEO_DIR/geosite.dat"
@@ -94,15 +122,19 @@ echo "$HWID" > "$HWID_FILE"
 chmod 600 "$HWID_FILE"
 
 curl -s -L -m 20 -H "x-hwid: $HWID" "$SUB_URL" \
-    | python3 "$PARSER" | python3 "$GENERATOR" --output "$CONFIG_JSON"
+| python3 "$PARSER" | python3 "$GENERATOR" --output "$CONFIG_JSON"
 
-# 10. init.d Xray
+if [ ! -s "$CONFIG_JSON" ]; then
+    echo "Ошибка: не удалось создать config.json"
+    exit 1
+fi
+
+# 9. init.d Xray
 cat > /etc/init.d/xray << 'EOF'
 #!/bin/sh /etc/rc.common
 START=99
 USE_PROCD=1
 PROG=/usr/bin/xray
-
 start_service() {
     procd_open_instance
     procd_set_param command "$PROG" run -config /etc/xray/config.json
@@ -113,12 +145,21 @@ start_service() {
     procd_close_instance
 }
 EOF
-
 chmod +x /etc/init.d/xray
 
-# 11. Запуск
+# 10. Запуск служб в правильном порядке
+echo "[6] Запуск служб..."
 /etc/init.d/dnsmasq restart
+/etc/init.d/xray-tproxy-rules start
 /etc/init.d/firewall restart
 /etc/init.d/xray restart
 
+echo ""
+echo "=== Установка завершена ==="
+echo "Запуск диагностики через 5 секунд..."
+sleep 10
 /root/diagnose-xray-tproxy.sh
+
+echo ""
+echo "=== Диагностика завершена ==="
+echo ""
