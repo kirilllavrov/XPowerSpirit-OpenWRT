@@ -1,6 +1,6 @@
 #!/bin/sh
 # OpenWrt 25.12.x — Xray TProxy (IPv4-only)
-# Финальная версия: надёжный init-скрипт, оптимизированные пакеты, устранены гонки с fw4
+# Финальная версия: DNS port 53 исключён, надёжный init-скрипт, нет гонок с fw4
 
 echo "=== Установка Xray TProxy (финальная версия) ==="
 [ "$(id -u)" != "0" ] && { echo "Запускать нужно от root"; exit 1; }
@@ -64,8 +64,9 @@ start() {
 
     # 1. Исключаем трафик самого Xray (mark 255 = 0xff)
     nft 'add rule ip xray xray_tproxy meta mark 0x000000ff return'
-    # 2. Исключаем DHCP
-    nft 'add rule ip xray xray_tproxy udp dport { 67, 68 } return'
+    # 2. ИСКЛЮЧАЕМ DNS и DHCP (критично для работы сайтов!)
+    nft 'add rule ip xray xray_tproxy udp dport { 53, 67, 68 } return'
+    nft 'add rule ip xray xray_tproxy tcp dport 53 return'
     # 3. Исключаем локальные/частные сети
     nft 'add rule ip xray xray_tproxy ip daddr { 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } return'
     # 4. Перехват TProxy
@@ -87,7 +88,7 @@ INITEOF
 chmod +x /etc/init.d/xray-tproxy-rules
 /etc/init.d/xray-tproxy-rules enable
 
-# 7. Policy routing (таблица маршрутизации)
+# 7. Policy routing
 grep -q "100 xray" /etc/iproute2/rt_tables || echo "100 xray" >> /etc/iproute2/rt_tables
 
 # 8. sysctl
