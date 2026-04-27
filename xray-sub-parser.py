@@ -7,6 +7,9 @@ import urllib.request
 import re
 
 
+# -----------------------------
+# НОРМАЛИЗАЦИЯ ТЕГОВ
+# -----------------------------
 def normalize_tag(tag: str) -> str:
     tag = urlparse.unquote(tag)
     tag = tag.replace(" ", "_")
@@ -15,27 +18,59 @@ def normalize_tag(tag: str) -> str:
     return tag or "proxy"
 
 
-def try_download(url: str) -> str:
-    if url.startswith("http://") or url.startswith("https://"):
+# -----------------------------
+# ЗАГРУЗКА URL
+# -----------------------------
+def try_download(data: str) -> str:
+    if data.startswith("http://") or data.startswith("https://"):
         try:
-            with urllib.request.urlopen(url, timeout=10) as r:
+            with urllib.request.urlopen(data, timeout=10) as r:
                 return r.read().decode("utf-8", errors="ignore")
         except Exception:
-            return url
-    return url
+            return data
+    return data
 
 
+# -----------------------------
+# УМНОЕ BASE64
+# -----------------------------
 def try_base64_decode(data: str) -> str:
     data = data.strip()
-    try:
-        decoded = base64.b64decode(data, validate=True).decode("utf-8", errors="ignore")
-        return decoded
-    except Exception:
+
+    # Если уже содержит vless:// — не трогаем
+    if "vless://" in data:
         return data
 
+    # Пробуем декодировать
+    try:
+        decoded = base64.b64decode(data, validate=True).decode("utf-8", errors="ignore")
+        if "vless://" in decoded:
+            return decoded
+    except Exception:
+        pass
 
-def parse_vless_uri(uri: str):
+    return data
+
+
+# -----------------------------
+# SAFE JSON PARSER FOR extra=
+# -----------------------------
+def parse_extra_json(extra_raw: str):
+    if not extra_raw:
+        return None
+    try:
+        decoded = urlparse.unquote(extra_raw)
+        return json.loads(decoded)
+    except Exception:
+        return None
+
+
+# -----------------------------
+# ПАРСЕР VLESS
+# -----------------------------
+def parse_vless_uri(uri: str, idx: int):
     parsed = urlparse.urlparse(uri)
+
     if parsed.scheme.lower() != "vless":
         return None
 
@@ -43,25 +78,30 @@ def parse_vless_uri(uri: str):
     host = parsed.hostname or ""
     port = parsed.port or 443
 
+    # ТЕГ
     fragment = parsed.fragment or ""
-    tag = normalize_tag(fragment) if fragment else "proxy"
+    tag = normalize_tag(fragment) if fragment else f"proxy-vless-{idx}"
 
+    # QUERY
     q = urlparse.parse_qs(parsed.query)
 
     def get_param(key, default=None):
         v = q.get(key)
         return v[0] if v else default
 
+    # БАЗОВЫЕ ПОЛЯ
     uuid = user
     encryption = get_param("encryption", "none")
     flow = get_param("flow", None)
 
+    # ТРАНСПОРТ
     network = get_param("type", "tcp").lower()
     if network in ("h2", "http2"):
         network = "http"
     if network not in ("tcp", "ws", "grpc", "http", "xhttp"):
         network = "tcp"
 
+    # SECURITY
     security = get_param("security", "none").lower()
     if security in ("tls", "xtls"):
         security_mode = "tls"
@@ -76,23 +116,19 @@ def parse_vless_uri(uri: str):
     alpn = [x.strip() for x in alpn_raw.split(",")] if alpn_raw else None
     allow_insecure = get_param("allowInsecure", "0") in ("1", "true", "yes")
 
+    # REALITY
     pbk = get_param("pbk", None)
     sid = get_param("sid", None)
     spx = get_param("spx", None)
 
+    # WS / HTTP / XHTTP / gRPC
     path = get_param("path", "/")
     host_header = get_param("host", None)
-    grpc_service = get_param("serviceName", None)
+    grpc_service = get_param("serviceName", None) or get_param("grpc-service-name", None)
     xhttp_mode = get_param("mode", None)
-
     extra_raw = get_param("extra", None)
-    extra_json = None
-    if extra_raw:
-        try:
-            extra_json = json.loads(extra_raw)
-        except Exception:
-            extra_json = {"raw": extra_raw}
 
+    # SETTINGS
     user_obj = {"id": uuid, "encryption": encryption}
     if flow:
         user_obj["flow"] = flow
@@ -107,8 +143,10 @@ def parse_vless_uri(uri: str):
         ]
     }
 
+    # STREAM SETTINGS
     stream = {"network": network}
 
+    # TLS / REALITY
     if security_mode == "tls":
         stream["security"] = "tls"
         tls = {}
@@ -126,9 +164,9 @@ def parse_vless_uri(uri: str):
         if sid: reality["shortId"] = sid
         if spx: reality["spiderX"] = spx
         if fp: reality["fingerprint"] = fp
-        if allow_insecure: reality["allowInsecure"] = True
         stream["realitySettings"] = reality
 
+    # NETWORK-SPECIFIC
     if network == "ws":
         ws = {"path": path}
         if host_header:
@@ -153,8 +191,11 @@ def parse_vless_uri(uri: str):
             xhttp["host"] = [host_header]
         if xhttp_mode:
             xhttp["mode"] = xhttp_mode
-        if extra_json:
-            xhttp["extra"] = extra_json
+
+        extra_obj = parse_extra_json(extra_raw)
+        if extra_obj:
+            xhttp["extra"] = extra_obj
+
         stream["xhttpSettings"] = xhttp
 
     return {
@@ -165,6 +206,9 @@ def parse_vless_uri(uri: str):
     }
 
 
+# -----------------------------
+# MAIN
+# -----------------------------
 def main():
     raw = sys.stdin.read().strip()
     if not raw:
@@ -174,13 +218,17 @@ def main():
     data = try_download(raw)
     data = try_base64_decode(data)
 
-    lines = [l.strip() for l in data.splitlines() if "vless://" in l]
+    lines = [l.strip() for l in data.splitlines() if l.strip()]
 
     outbounds = []
+    idx = 0
+
     for line in lines:
-        ob = parse_vless_uri(line)
-        if ob:
-            outbounds.append(ob)
+        if line.startswith("vless://"):
+            ob = parse_vless_uri(line, idx)
+            if ob:
+                outbounds.append(ob)
+                idx += 1
 
     print(json.dumps(outbounds, indent=2, ensure_ascii=False))
 

@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 import json
 import sys
-import os
 
-# Whitelist: если задан, выбираем только серверы из этого списка
-# Пустой = брать первый доступный сервер
-DOMAIN_WHITELIST = ["router.freenternet.top"] 
+# -----------------------------
+# НАСТРОЙКИ
+# -----------------------------
+DOMAIN_WHITELIST = ["router.freenternet.top"]
 
+
+# -----------------------------
+# ЗАГРУЗКА OUTBOUNDS
+# -----------------------------
 def load_outbounds():
     """Загружает outbounds из stdin (JSON list или dict)"""
     try:
@@ -19,30 +23,84 @@ def load_outbounds():
         return []
     return []
 
+
+# -----------------------------
+# ВЫБОР ЛУЧШЕГО СЕРВЕРА
+# -----------------------------
+def extract_address(ob):
+    """Достаёт host из settings.vnext"""
+    try:
+        return ob["settings"]["vnext"][0]["address"]
+    except Exception:
+        return None
+
+
+def extract_sni(ob):
+    """Достаёт SNI из streamSettings"""
+    try:
+        return ob["streamSettings"]["tlsSettings"]["serverName"]
+    except Exception:
+        return None
+
+
+def extract_host_header(ob):
+    """Достаёт Host из ws/http/xhttp"""
+    try:
+        ws = ob["streamSettings"].get("wsSettings")
+        if ws and "headers" in ws:
+            return ws["headers"].get("Host")
+    except Exception:
+        pass
+
+    try:
+        http = ob["streamSettings"].get("httpSettings")
+        if http and "host" in http:
+            return http["host"][0]
+    except Exception:
+        pass
+
+    try:
+        xhttp = ob["streamSettings"].get("xhttpSettings")
+        if xhttp and "host" in xhttp:
+            return xhttp["host"][0]
+    except Exception:
+        pass
+
+    return None
+
+
 def choose_best_server(servers):
     """
     Выбирает сервер:
-    - Если DOMAIN_WHITELIST задан: возвращает первый сервер, чей address есть в списке
-    - Если список пуст: возвращает первый сервер из подписки
-    - Если не найдено: возвращает None (fallback на direct)
+    - проверяет address
+    - проверяет SNI
+    - проверяет Host header
     """
     if not servers:
         return None
-    
+
     if DOMAIN_WHITELIST:
         for ob in servers:
-            vnext = ob.get("settings", {}).get("vnext", [{}])[0]
-            addr = vnext.get("address", "")
+            addr = extract_address(ob)
+            sni = extract_sni(ob)
+            host = extract_host_header(ob)
+
             if addr in DOMAIN_WHITELIST:
                 return ob
-        # Ни один сервер из вайтлиста не найден
+            if sni in DOMAIN_WHITELIST:
+                return ob
+            if host in DOMAIN_WHITELIST:
+                return ob
+
         return None
-    
-    # Без вайтлиста — берём первый
+
     return servers[0]
 
+
+# -----------------------------
+# БАЗОВАЯ КОНФИГУРАЦИЯ
+# -----------------------------
 def base_config():
-    """Базовая конфигурация (лог, DNS, inbounds)"""
     return {
         "log": {
             "loglevel": "warning",
@@ -122,21 +180,24 @@ def base_config():
         ]
     }
 
+
+# -----------------------------
+# MAIN
+# -----------------------------
 def main():
     if len(sys.argv) != 3:
         print("Usage: xray-generate-config.py --output <file>")
         sys.exit(1)
-    
+
     output_path = sys.argv[sys.argv.index("--output") + 1]
-    
+
     all_obs = load_outbounds()
     chosen = choose_best_server(all_obs)
     chosen_tag = chosen.get("tag", "proxy") if chosen else "direct"
-    
+
     cfg = base_config()
-    
+
     if not chosen:
-        # Нет подходящего сервера — режим fallback (только direct/block)
         cfg["outbounds"] = [
             {"protocol": "freedom", "tag": "direct"},
             {"protocol": "blackhole", "tag": "block"}
@@ -150,11 +211,10 @@ def main():
             ]
         }
     else:
-        # Добавляем sockopt mark 255, чтобы исходящий трафик Xray не попадал в TProxy
-        if "streamSettings" not in chosen:
-            chosen["streamSettings"] = {}
-        chosen["streamSettings"]["sockopt"] = {"mark": 255}
-        
+        # Добавляем mark=255, не ломая структуру
+        ss = chosen.setdefault("streamSettings", {})
+        ss.setdefault("sockopt", {})["mark"] = 255
+
         cfg["outbounds"] = [
             chosen,
             {
@@ -164,30 +224,13 @@ def main():
             },
             {"protocol": "blackhole", "tag": "block"}
         ]
-        
-        # Правила маршрутизации: ПОРЯДОК КРИТИЧЕН!
+
         cfg["routing"] = {
             "domainStrategy": "ForceIPv4",
             "rules": [
-                # 1. Блокировка рекламы (сначала)
-                {
-                    "type": "field",
-                    "domain": ["geosite:category-ads"],
-                    "outboundTag": "block"
-                },
-                # 2. DNS-трафик — ВСЕГДА напрямую (фикс петли резолвинга!)
-                {
-                    "type": "field",
-                    "inboundTag": ["dns-in"],
-                    "outboundTag": "direct"
-                },
-                # 3. Частные IP — напрямую (до catch-all, чтобы не проксировать 192.168.1.1)
-                {
-                    "type": "field",
-                    "ip": ["geoip:private"],
-                    "outboundTag": "direct"
-                },
-                # 4. Русские домены и сервисы — напрямую
+                {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},
+                {"type": "field", "inboundTag": ["dns-in"], "outboundTag": "direct"},
+                {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
                 {
                     "type": "field",
                     "domain": [
@@ -199,24 +242,20 @@ def main():
                     ],
                     "outboundTag": "direct"
                 },
-                # 5. Стриминг/игры — через прокси (опционально, можно убрать)
                 {
                     "type": "field",
                     "domain": ["geosite:category-streaming", "geosite:category-games"],
                     "outboundTag": chosen_tag
                 },
-                # 6. Catch-all: всё остальное — через прокси
-                {
-                    "type": "field",
-                    "network": "tcp,udp",
-                    "outboundTag": chosen_tag
-                }
+                {"type": "field", "network": "tcp,udp", "outboundTag": chosen_tag}
             ]
         }
-    
+
     with open(output_path, "w") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
+
     print(f"Готово: {output_path}")
+
 
 if __name__ == "__main__":
     main()
