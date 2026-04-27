@@ -30,6 +30,7 @@ chmod 600 "$SUB_FILE"
 
 # 3. Скрипты
 echo "[1] Загрузка скриптов..."
+mkdir -p "$GEO_DIR"
 wget -q "$REPO/xray-generate-config.py" -O "$GENERATOR"; chmod +x "$GENERATOR"
 wget -q "$REPO/xray-sub-parser.py" -O "$PARSER"; chmod +x "$PARSER"
 wget -q "$REPO/update-xray.sh" -O "$UPDATER"; chmod +x "$UPDATER"
@@ -95,7 +96,6 @@ grep -q ip_forward /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysc
 
 # 9. Geo + HWID + config.json
 echo "[5] Генерация конфигурации..."
-mkdir -p "$GEO_DIR"
 curl -fsSL https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat -o "$GEO_DIR/geoip.dat"
 curl -fsSL https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat -o "$GEO_DIR/geosite.dat"
 
