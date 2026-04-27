@@ -1,6 +1,5 @@
 #!/bin/sh
 # OpenWrt 25.12.x — Xray TProxy (IPv4-only)
-# Финальная версия: DNS port 53 исключён, надёжный init-скрипт, нет гонок с fw4
 
 echo "=== Установка Xray TProxy (финальная версия) ==="
 [ "$(id -u)" != "0" ] && { echo "Запускать нужно от root"; exit 1; }
@@ -34,7 +33,7 @@ echo "[1] Загрузка скриптов..."
 wget -q "$REPO/xray-generate-config.py" -O "$GENERATOR"; chmod +x "$GENERATOR"
 wget -q "$REPO/xray-sub-parser.py" -O "$PARSER"; chmod +x "$PARSER"
 wget -q "$REPO/update-xray.sh" -O "$UPDATER"; chmod +x "$UPDATER"
-wget -q "$REPO/diagnose-xray-tproxy.sh" -O "$DIAG"; chmod +x "$DIAG"
+#wget -q "$REPO/diagnose-xray-tproxy.sh" -O "$DIAG"; chmod +x "$DIAG"
 
 # 4. dnsmasq → Xray:1053
 echo "[2] Настройка DNS..."
@@ -43,7 +42,7 @@ uci -q delete dhcp.@dnsmasq[0].server
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#1053'
 uci commit dhcp
 
-# 6. Создаём надёжный init-скрипт для правил nftables
+# 6. Создаём init-скрипт для правил nftables
 echo "[3] Создание сервиса правил фаервола..."
 cat > /etc/init.d/xray-tproxy-rules << 'INITEOF'
 #!/bin/sh /etc/rc.common
@@ -94,7 +93,7 @@ sysctl -w net.ipv4.ip_forward=1
 grep -q route_localnet /etc/sysctl.conf || echo "net.ipv4.conf.all.route_localnet=1" >> /etc/sysctl.conf
 grep -q ip_forward /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 
-# 9. Geo + config.json
+# 9. Geo + HWID + config.json
 echo "[5] Генерация конфигурации..."
 mkdir -p "$GEO_DIR"
 curl -fsSL https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat -o "$GEO_DIR/geoip.dat"
@@ -140,10 +139,10 @@ echo "[7] Запуск служб..."
 
 echo ""
 echo "=== Установка завершена ==="
-echo "Запуск диагностики через 5 секунд..."
-sleep 5
-/root/diagnose-xray-tproxy.sh
+#echo "Запуск диагностики через 5 секунд..."
+#sleep 5
+#/root/diagnose-xray-tproxy.sh
 
-echo ""
-echo "=== Диагностика завершена ==="
-echo ""
+#echo ""
+#echo "=== Диагностика завершена ==="
+#echo ""
