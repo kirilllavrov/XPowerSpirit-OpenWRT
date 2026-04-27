@@ -76,7 +76,7 @@ def base_config():
         "inbounds": [
             {
                 "tag": "tproxy-in",
-                "listen": "0.0.0.0",  # важно для стабильности
+                "listen": "0.0.0.0",
                 "port": 12345,
                 "protocol": "dokodemo-door",
                 "settings": {
@@ -173,7 +173,7 @@ def main():
                 {
                     "type": "field",
                     "inboundTag": ["dns-in"],
-                    "outboundTag": chosen_tag
+                    "outboundTag": "direct"
                 },
                 {
                     "type": "field",
