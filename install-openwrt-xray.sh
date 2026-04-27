@@ -1,6 +1,6 @@
 #!/bin/sh
 # OpenWrt 25.12.x — fw4-compatible TProxy (IPv4-only)
-# Финальная версия с исправлениями по официальному гайду V2Fly
+# Финальная версия с правильным включением в fw4 mangle_prerouting
 
 echo "=== Установка Xray TProxy (финальная версия) ==="
 
@@ -45,34 +45,31 @@ uci -q delete dhcp.@dnsmasq[0].server
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#53'
 uci commit dhcp
 
-# 5. nftables TProxy (согласно официальному гайду)
+# 5. nftables — правильное включение в fw4 (mangle_prerouting)
 echo "[5] Настройка nftables TProxy..."
 mkdir -p /usr/share/nftables.d/ruleset-post
 
 cat > /usr/share/nftables.d/ruleset-post/30-xray-tproxy.nft << 'EOF'
-table ip xray {
-    chain xray_tproxy {
-        type filter hook prerouting priority mangle; policy accept;
+# TProxy для fw4 — добавляется в mangle_prerouting
+chain xray_tproxy {
+    # Bypass
+    udp dport {67, 68} return
+    ip daddr {127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16} return
+    meta mark 0xff return
 
-        udp dport {67, 68} return
-        ip daddr {127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16} return
-        meta mark 0xff return
-
-        meta l4proto { tcp, udp } tproxy to 127.0.0.1:12345 meta mark set 1 accept
-    }
-
-    chain xray_output {
-        type route hook output priority mangle; policy accept;
-
-        ip daddr {127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16} return
-        meta mark 0xff return
-
-        meta l4proto { tcp, udp } mark set 1 accept
-    }
+    # TProxy
+    meta l4proto { tcp, udp } tproxy to 127.0.0.1:12345 meta mark set 1 accept
 }
+
+# Добавляем jump в prerouting mangle (если fw4 поддерживает)
 EOF
 
-# 6. Policy routing + hotplug
+# Добавляем include в fw4 (более надёжный способ)
+cat > /usr/share/nftables.d/chain-pre/mangle_prerouting/30-xray.nft << 'EOF'
+jump xray_tproxy
+EOF
+
+# 6. Policy routing
 echo "[6] Настройка policy routing..."
 grep -q "100 xray" /etc/iproute2/rt_tables 2>/dev/null || echo "100 xray" >> /etc/iproute2/rt_tables
 
@@ -156,4 +153,3 @@ echo "=== АВТО-ДИАГНОСТИКА ==="
 echo
 
 echo "=== Установка завершена ==="
-echo "Проверьте counters после теста трафика из LAN."
