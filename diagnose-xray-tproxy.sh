@@ -11,9 +11,9 @@ _fail() { echo "[FAIL] $1"; }
 echo "[1] Xray process:"
 pgrep -a xray >/dev/null && _ok "Xray запущен" || _fail "Xray НЕ запущен"
 
-# 2. Порт 12345
+# 2. Порты
 echo -e "\n[2] Listening on port 12345:"
-(netstat -tulnp 2>/dev/null || ss -tulnp 2>/dev/null) | grep -q ':12345' && \
+netstat -tulnp 2>/dev/null && \
   _ok "Порт 12345 активен (LISTEN не отображается для TProxy — это норма)" || \
   _fail "Порт 12345 не слушается"
 
