@@ -27,6 +27,7 @@ chmod 600 "$SUB_FILE"
 #echo "[1] Установка пакетов..."
 #apk update
 #apk add curl xray-core ca-certificates python3 kmod-nft-tproxy
+# xray-core - берем с github
 
 # 3. Скрипты
 echo "[1] Загрузка скриптов..."
@@ -34,7 +35,6 @@ mkdir -p "$GEO_DIR"
 wget -q "$REPO/xray-generate-config.py" -O "$GENERATOR"; chmod +x "$GENERATOR"
 wget -q "$REPO/xray-sub-parser.py" -O "$PARSER"; chmod +x "$PARSER"
 wget -q "$REPO/update-xray.sh" -O "$UPDATER"; chmod +x "$UPDATER"
-#wget -q "$REPO/diagnose-xray-tproxy.sh" -O "$DIAG"; chmod +x "$DIAG"
 
 # 4. dnsmasq → Xray:1053
 echo "[2] Настройка DNS..."
@@ -130,9 +130,9 @@ start_service() {
 XRAYEOF
 chmod +x /etc/init.d/xray
 
-# 11. Cron: автообновление каждые 12 часов
+# 11. Cron: автообновление в 2.30 ночи
 echo "[7] Настройка автообновления (cron)..."
-CRON_ENTRY="0 0,12 * * * $UPDATER"
+CRON_ENTRY="30 2 * * * $UPDATER"
 # Проверяем, нет ли уже такой задачи (чтобы не дублировать)
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
     (crontab -l 2>/dev/null; echo "$CRON_ENTRY") | crontab -
@@ -150,10 +150,3 @@ echo "[8] Запуск служб..."
 
 echo ""
 echo "=== Установка завершена ==="
-#echo "Запуск диагностики через 5 секунд..."
-#sleep 5
-#/root/diagnose-xray-tproxy.sh
-
-#echo ""
-#echo "=== Диагностика завершена ==="
-#echo ""
