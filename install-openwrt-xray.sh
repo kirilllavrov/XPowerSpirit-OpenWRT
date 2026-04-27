@@ -1,8 +1,8 @@
 #!/bin/sh
 # OpenWrt 25.12.x — fw4-compatible TProxy (IPv4-only)
-# Финальная версия с правильным включением в fw4 mangle_prerouting
+# Финальная стабильная версия
 
-echo "=== Установка Xray TProxy (финальная версия) ==="
+echo "=== Установка Xray TProxy (стабильная версия) ==="
 
 [ "$(id -u)" != "0" ] && { echo "Запускать нужно от root"; exit 1; }
 
@@ -45,35 +45,29 @@ uci -q delete dhcp.@dnsmasq[0].server
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#53'
 uci commit dhcp
 
-# 5. nftables — правильное включение в fw4 (mangle_prerouting)
+# 5. nftables TProxy — исправленный вариант без синтаксических ошибок
 echo "[5] Настройка nftables TProxy..."
 mkdir -p /usr/share/nftables.d/ruleset-post
 
-cat > /usr/share/nftables.d/ruleset-post/30-xray-tproxy.nft << 'EOF'
-# TProxy для fw4 — добавляется в mangle_prerouting
-chain xray_tproxy {
-    # Bypass
-    udp dport {67, 68} return
-    ip daddr {127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16} return
-    meta mark 0xff return
+cat > /usr/share/nftables.d/ruleset-post/30-xray-tproxy.nft << 'NFT'
+table ip xray {
+    chain xray_tproxy {
+        type filter hook prerouting priority mangle; policy accept;
 
-    # TProxy
-    meta l4proto { tcp, udp } tproxy to 127.0.0.1:12345 meta mark set 1 accept
+        udp dport {67, 68} return
+        ip daddr {127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16} return
+        meta mark 0xff return
+
+        meta l4proto { tcp, udp } tproxy to 127.0.0.1:12345 meta mark set 1 accept
+    }
 }
-
-# Добавляем jump в prerouting mangle (если fw4 поддерживает)
-EOF
-
-# Добавляем include в fw4 (более надёжный способ)
-cat > /usr/share/nftables.d/chain-pre/mangle_prerouting/30-xray.nft << 'EOF'
-jump xray_tproxy
-EOF
+NFT
 
 # 6. Policy routing
 echo "[6] Настройка policy routing..."
 grep -q "100 xray" /etc/iproute2/rt_tables 2>/dev/null || echo "100 xray" >> /etc/iproute2/rt_tables
 
-cat > /etc/hotplug.d/iface/99-xray-routing << 'EOF'
+cat > /etc/hotplug.d/iface/99-xray-routing << 'HP'
 #!/bin/sh
 if [ "$ACTION" = ifup ] && [ "$INTERFACE" = lan ]; then
     ip rule del fwmark 1 lookup xray 2>/dev/null || true
@@ -81,7 +75,7 @@ if [ "$ACTION" = ifup ] && [ "$INTERFACE" = lan ]; then
     ip route flush table xray 2>/dev/null || true
     ip route add local 0.0.0.0/0 dev lo table xray
 fi
-EOF
+HP
 chmod +x /etc/hotplug.d/iface/99-xray-routing
 
 ip rule del fwmark 1 lookup xray 2>/dev/null || true
@@ -115,7 +109,7 @@ curl -s -L -m 20 -H "User-Agent: Happ" -H "x-hwid: $HWID" "$SUB_URL" \
 
 # 9. Init скрипт Xray
 echo "[9] Настройка init скрипта Xray..."
-cat > /etc/init.d/xray << 'EOF'
+cat > /etc/init.d/xray << 'INIT'
 #!/bin/sh /etc/rc.common
 START=99
 USE_PROCD=1
@@ -134,7 +128,7 @@ start_service() {
 service_triggers() {
     procd_add_reload_trigger "xray"
 }
-EOF
+INIT
 chmod +x /etc/init.d/xray
 
 # 10. Финальный запуск
