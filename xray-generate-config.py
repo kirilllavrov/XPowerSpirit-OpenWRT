@@ -47,12 +47,28 @@ def base_config():
             "serveStale": True,
             "disableFallback": False,
             "servers": [
-                {"address": "195.208.4.1", "port": 53,
-                 "domains": ["geosite:category-ru", "geosite:category-browser",
-                             "geosite:category-mobile", "geosite:category-cdn-ru", "geosite:private"]},
-                {"address": "195.208.5.1", "port": 53,
-                 "domains": ["geosite:category-ru", "geosite:category-browser",
-                             "geosite:category-mobile", "geosite:category-cdn-ru", "geosite:private"]},
+                {
+                    "address": "195.208.4.1",
+                    "port": 53,
+                    "domains": [
+                        "geosite:category-ru",
+                        "geosite:category-browser",
+                        "geosite:category-mobile",
+                        "geosite:category-cdn-ru",
+                        "geosite:private"
+                    ]
+                },
+                {
+                    "address": "195.208.5.1",
+                    "port": 53,
+                    "domains": [
+                        "geosite:category-ru",
+                        "geosite:category-browser",
+                        "geosite:category-mobile",
+                        "geosite:category-cdn-ru",
+                        "geosite:private"
+                    ]
+                },
                 "https://cloudflare-dns.com/dns-query",
                 "https://dns.google/dns-query"
             ]
@@ -60,12 +76,34 @@ def base_config():
         "inbounds": [
             {
                 "tag": "tproxy-in",
-                "listen": "0.0.0.0",                    # важно для стабильности
+                "listen": "0.0.0.0",  # важно для стабильности
                 "port": 12345,
                 "protocol": "dokodemo-door",
-                "settings": {"network": "tcp,udp", "followRedirect": True},
-                "streamSettings": {"sockopt": {"tproxy": "tproxy"}},
-                "sniffing": {"enabled": True, "destOverride": ["http", "tls"]}
+                "settings": {
+                    "network": "tcp,udp",
+                    "followRedirect": True
+                },
+                "streamSettings": {
+                    "sockopt": {
+                        "tproxy": "tproxy"
+                    }
+                },
+                "sniffing": {
+                    "enabled": True,
+                    "destOverride": ["http", "tls"]
+                }
+            },
+            {
+                "tag": "dns-in",
+                "listen": "127.0.0.1",
+                "port": 1053,
+                "protocol": "dokodemo-door",
+                "settings": {
+                    "address": "1.1.1.1",
+                    "port": 53,
+                    "network": "udp",
+                    "followRedirect": False
+                }
             }
         ]
     }
@@ -91,8 +129,21 @@ def main():
         cfg["routing"] = {
             "domainStrategy": "ForceIPv4",
             "rules": [
-                {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},
-                {"type": "field", "network": "tcp,udp", "outboundTag": "direct"}
+                {
+                    "type": "field",
+                    "domain": ["geosite:category-ads"],
+                    "outboundTag": "block"
+                },
+                {
+                    "type": "field",
+                    "inboundTag": ["dns-in"],
+                    "outboundTag": "direct"
+                },
+                {
+                    "type": "field",
+                    "network": "tcp,udp",
+                    "outboundTag": "direct"
+                }
             ]
         }
     else:
@@ -103,21 +154,56 @@ def main():
 
         cfg["outbounds"] = [
             chosen,
-            {"protocol": "freedom", "tag": "direct", "streamSettings": {"sockopt": {"mark": 255}}},
+            {
+                "protocol": "freedom",
+                "tag": "direct",
+                "streamSettings": {"sockopt": {"mark": 255}}
+            },
             {"protocol": "blackhole", "tag": "block"}
         ]
 
         cfg["routing"] = {
             "domainStrategy": "ForceIPv4",
             "rules": [
-                {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},
-                {"type": "field", "domain": ["geosite:category-streaming", "geosite:category-games"], "outboundTag": chosen_tag},
-                {"type": "field", "ip": ["geoip:ru", "geoip:private"], "outboundTag": "direct"},
-                {"type": "field", "domain": [
-                    "geosite:private", "geosite:category-browser",
-                    "geosite:category-cdn-ru", "geosite:category-mobile", "geosite:category-ru"
-                ], "outboundTag": "direct"},
-                {"type": "field", "network": "tcp,udp", "outboundTag": chosen_tag}
+                {
+                    "type": "field",
+                    "domain": ["geosite:category-ads"],
+                    "outboundTag": "block"
+                },
+                {
+                    "type": "field",
+                    "inboundTag": ["dns-in"],
+                    "outboundTag": chosen_tag
+                },
+                {
+                    "type": "field",
+                    "domain": [
+                        "geosite:category-streaming",
+                        "geosite:category-games"
+                    ],
+                    "outboundTag": chosen_tag
+                },
+                {
+                    "type": "field",
+                    "ip": ["geoip:ru", "geoip:private"],
+                    "outboundTag": "direct"
+                },
+                {
+                    "type": "field",
+                    "domain": [
+                        "geosite:private",
+                        "geosite:category-browser",
+                        "geosite:category-cdn-ru",
+                        "geosite:category-mobile",
+                        "geosite:category-ru"
+                    ],
+                    "outboundTag": "direct"
+                },
+                {
+                    "type": "field",
+                    "network": "tcp,udp",
+                    "outboundTag": chosen_tag
+                }
             ]
         }
 

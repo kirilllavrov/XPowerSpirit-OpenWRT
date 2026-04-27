@@ -1,8 +1,8 @@
 #!/bin/sh
 # OpenWrt 25.12.x — fw4-compatible TProxy (IPv4-only)
-# Финальная стабильная версия
+# Финальная стабильная версия с DNS через Xray:1053
 
-echo "=== Установка Xray TProxy (стабильная версия) ==="
+echo "=== Установка Xray TProxy (стабильная версия, DNS→1053) ==="
 
 [ "$(id -u)" != "0" ] && { echo "Запускать нужно от root"; exit 1; }
 
@@ -38,14 +38,14 @@ wget -q "$REPO/xray-sub-parser.py" -O "$PARSER" && chmod +x "$PARSER"
 wget -q "$REPO/update-xray.sh" -O "$UPDATER" && chmod +x "$UPDATER"
 wget -q "$REPO/diagnose-xray-tproxy.sh" -O "$DIAG" && chmod +x "$DIAG"
 
-# 4. dnsmasq
-echo "[4] Настраиваем dnsmasq..."
+# 4. dnsmasq → Xray:1053
+echo "[4] Настраиваем dnsmasq (upstream → 127.0.0.1#1053)..."
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci -q delete dhcp.@dnsmasq[0].server
-uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#53'
+uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#1053'
 uci commit dhcp
 
-# 5. nftables TProxy — исправленный вариант без синтаксических ошибок
+# 5. nftables TProxy — IPv4, tproxy ip
 echo "[5] Настройка nftables TProxy..."
 mkdir -p /usr/share/nftables.d/ruleset-post
 
@@ -54,11 +54,17 @@ table ip xray {
     chain xray_tproxy {
         type filter hook prerouting priority mangle; policy accept;
 
+        # DHCP не трогаем
         udp dport {67, 68} return
+
+        # Локальные/приватные сети не проксируем
         ip daddr {127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16} return
+
+        # Трафик с mark 0xff (от Xray) не трогаем
         meta mark 0xff return
 
-        meta l4proto { tcp, udp } tproxy to 127.0.0.1:12345 meta mark set 1 accept
+        # Основной TProxy для LAN-трафика
+        meta l4proto { tcp, udp } tproxy ip to 127.0.0.1:12345 meta mark set 1 accept
     }
 }
 NFT
@@ -117,7 +123,7 @@ PROG=/usr/bin/xray
 
 start_service() {
     procd_open_instance
-    procd_set_param command "$PROG" run -config /etc/xray/config.json
+    procd_set_param command "$PROG" run -config /etc/xray/config.json"
     procd_set_param respawn
     procd_set_param user root
     procd_set_param stderr 1
@@ -134,7 +140,7 @@ chmod +x /etc/init.d/xray
 # 10. Финальный запуск
 echo "[10] Запуск сервисов..."
 mkdir -p /etc/crontabs
-echo "0 */3 * * * /root/update-xray.sh" >> /etc/crontabs/root
+grep -q "/root/update-xray.sh" /etc/crontabs/root 2>/dev/null || echo "0 */3 * * * /root/update-xray.sh" >> /etc/crontabs/root
 /etc/init.d/cron restart || true
 
 /etc/init.d/dnsmasq restart
@@ -143,7 +149,6 @@ echo "0 */3 * * * /root/update-xray.sh" >> /etc/crontabs/root
 
 echo
 echo "=== АВТО-ДИАГНОСТИКА ==="
-"$DIAG"
+"$DIAG" || true
 echo
-
 echo "=== Установка завершена ==="
