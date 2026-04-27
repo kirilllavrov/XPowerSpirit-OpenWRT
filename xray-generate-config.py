@@ -3,7 +3,9 @@ import json
 import sys
 
 # Убрали жёсткий whitelist — теперь используем все серверы из подписки
-DOMAIN_WHITELIST = []
+DOMAIN_WHITELIST = [
+    router.freenternet.top
+]
 
 def load_outbounds():
     try:
