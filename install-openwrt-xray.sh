@@ -1,6 +1,6 @@
 #!/bin/sh
 # OpenWrt 25.12.x — Xray TProxy (IPv4-only)
-# Исправленная версия: надежный init-скрипт для nftables вместо хуков fw4
+# Исправленная версия: надёжная вставка jump в fw4 + минимальные пакеты
 
 echo "=== Установка Xray TProxy (исправленная версия) ==="
 [ "$(id -u)" != "0" ] && { echo "Запускать нужно от root"; exit 1; }
@@ -24,12 +24,10 @@ mkdir -p "$CONFIG_DIR"
 echo "$SUB_URL" > "$SUB_FILE"
 chmod 600 "$SUB_FILE"
 
-# 2. Пакеты
+# 2. Пакеты (минимальный набор)
 echo "[1] Установка пакетов..."
-apk update
-apk add curl xray-core nftables ca-certificates jq python3 ip-full dnsmasq-full
-# Важно: устанавливаем модули ядра для TProxy
-apk add kmod-nft-tproxy kmod-nft-socket kmod-nft-nat || true
+#apk update
+#apk add curl xray-core nftables ca-certificates python3 ip-full dnsmasq kmod-nft-tproxy
 
 # 3. Скрипты
 echo "[2] Загрузка скриптов..."
@@ -45,7 +43,11 @@ uci -q delete dhcp.@dnsmasq[0].server
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#1053'
 uci commit dhcp
 
-# 5. Создание надежного init-скрипта для правил nftables
+# 5. Удаляем старые конфликтующие файлы хуков
+rm -f /usr/share/nftables.d/chain-pre/mangle_prerouting/30-xray-tproxy.nft
+rm -f /usr/share/nftables.d/ruleset-post/30-xray-tproxy.nft
+
+# 6. Создаём надёжный init-скрипт для правил nftables
 echo "[4] Создание сервиса правил фаервола..."
 cat > /etc/init.d/xray-tproxy-rules << 'EOF'
 #!/bin/sh /etc/rc.common
@@ -53,14 +55,20 @@ START=95
 STOP=10
 
 start() {
+    # Ждём, пока fw4 создаст таблицу (макс. 15 сек)
+    for i in $(seq 1 15); do
+        nft list table inet fw4 >/dev/null 2>&1 && break
+        sleep 1
+    done
+    
     # Очищаем старое, если есть
     nft delete table ip xray 2>/dev/null
     
-    # Создаем таблицу
+    # Создаём таблицу xray
     nft add table ip xray
     nft 'add chain ip xray xray_tproxy { type filter hook prerouting priority mangle; policy accept; }'
     
-    # 1. Исключаем трафик самого Xray (mark 255 = 0xff) - ВАЖНО: первое правило!
+    # 1. Исключаем трафик самого Xray (mark 255 = 0xff) — ПЕРВОЕ ПРАВИЛО!
     nft 'add rule ip xray xray_tproxy meta mark 0x000000ff return'
     
     # 2. Исключаем DHCP
@@ -78,9 +86,11 @@ start() {
     ip route flush table xray 2>/dev/null || true
     ip route add local 0.0.0.0/0 dev lo table xray
     
-    # Вставляем прыжок в fw4, если его нет
-    if ! nft list chain inet fw4 mangle_prerouting 2>/dev/null | grep -q "jump xray_tproxy"; then
-        nft insert rule inet fw4 mangle_prerouting jump xray_tproxy
+    # Вставляем jump в fw4 ТОЛЬКО если таблица существует
+    if nft list table inet fw4 >/dev/null 2>&1; then
+        if ! nft list chain inet fw4 mangle_prerouting 2>/dev/null | grep -q "jump xray_tproxy"; then
+            nft insert rule inet fw4 mangle_prerouting jump xray_tproxy
+        fi
     fi
 }
 
@@ -88,30 +98,26 @@ stop() {
     nft delete table ip xray 2>/dev/null
     ip rule del fwmark 1 lookup xray 2>/dev/null || true
     ip route flush table xray 2>/dev/null || true
-    # Удаляем прыжок из fw4
+    # Удаляем jump из fw4
     HANDLE=$(nft -a list chain inet fw4 mangle_prerouting 2>/dev/null | grep "jump xray_tproxy" | grep -o "handle [0-9]*" | awk '{print $2}')
     if [ -n "$HANDLE" ]; then
-        nft delete rule inet fw4 mangle_prerouting handle $HANDLE
+        nft delete rule inet fw4 mangle_prerouting handle $HANDLE 2>/dev/null || true
     fi
 }
 EOF
 chmod +x /etc/init.d/xray-tproxy-rules
 /etc/init.d/xray-tproxy-rules enable
 
-# Удаляем старые конфликтующие файлы хуков, если они остались от прошлых установок
-rm -f /usr/share/nftables.d/chain-pre/mangle_prerouting/30-xray-tproxy.nft
-rm -f /usr/share/nftables.d/ruleset-post/30-xray-tproxy.nft
-
-# 6. Policy routing (таблица маршрутизации)
+# 7. Policy routing (таблица маршрутизации)
 grep -q "100 xray" /etc/iproute2/rt_tables || echo "100 xray" >> /etc/iproute2/rt_tables
 
-# 7. sysctl
+# 8. sysctl
 sysctl -w net.ipv4.conf.all.route_localnet=1
 sysctl -w net.ipv4.ip_forward=1
 grep -q route_localnet /etc/sysctl.conf || echo "net.ipv4.conf.all.route_localnet=1" >> /etc/sysctl.conf
 grep -q ip_forward /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 
-# 8. Geo + config.json
+# 9. Geo + config.json
 echo "[5] Генерация конфигурации..."
 mkdir -p "$GEO_DIR"
 curl -fsSL https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat -o "$GEO_DIR/geoip.dat"
@@ -129,7 +135,8 @@ if [ ! -s "$CONFIG_JSON" ]; then
     exit 1
 fi
 
-# 9. init.d Xray
+# 10. init.d Xray
+echo "[6] Настройка автозапуска Xray..."
 cat > /etc/init.d/xray << 'EOF'
 #!/bin/sh /etc/rc.common
 START=99
@@ -147,8 +154,8 @@ start_service() {
 EOF
 chmod +x /etc/init.d/xray
 
-# 10. Запуск служб в правильном порядке
-echo "[6] Запуск служб..."
+# 11. Запуск служб в правильном порядке
+echo "[7] Запуск служб..."
 /etc/init.d/dnsmasq restart
 /etc/init.d/xray-tproxy-rules start
 /etc/init.d/firewall restart
@@ -157,7 +164,7 @@ echo "[6] Запуск служб..."
 echo ""
 echo "=== Установка завершена ==="
 echo "Запуск диагностики через 5 секунд..."
-sleep 10
+sleep 5
 /root/diagnose-xray-tproxy.sh
 
 echo ""
