@@ -5,9 +5,9 @@ echo "=== Установка Xray TProxy (финальная версия) ==="
 [ "$(id -u)" != "0" ] && { echo "Запускать нужно от root"; exit 1; }
 
 REPO="https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main"
-GENERATOR="/root/xray-generate-config.py"
-PARSER="/root/xray-sub-parser.py"
-UPDATER="/root/update-xray.sh"
+GENERATOR="/usr/share/xray/xray-generate-config.py"
+PARSER="/usr/share/xray/xray-sub-parser.py"
+UPDATER="/usr/share/xray/update-xray.sh"
 DIAG="/root/diagnose-xray-tproxy.sh"
 CONFIG_DIR="/etc/xray"
 CONFIG_JSON="$CONFIG_DIR/config.json"
@@ -130,8 +130,19 @@ start_service() {
 XRAYEOF
 chmod +x /etc/init.d/xray
 
-# 11. Запуск служб в правильном порядке
-echo "[7] Запуск служб..."
+# 11. Cron: автообновление каждые 12 часов
+echo "[7] Настройка автообновления (cron)..."
+CRON_ENTRY="0 0,12 * * * $UPDATER"
+# Проверяем, нет ли уже такой задачи (чтобы не дублировать)
+if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
+    (crontab -l 2>/dev/null; echo "$CRON_ENTRY") | crontab -
+    echo "  → Добавлено в crontab: $CRON_ENTRY"
+else
+    echo "  → Cron-задача уже существует, пропускаем"
+fi
+
+# 12. Запуск служб в правильном порядке
+echo "[8] Запуск служб..."
 /etc/init.d/dnsmasq restart
 /etc/init.d/xray-tproxy-rules start
 /etc/init.d/firewall restart

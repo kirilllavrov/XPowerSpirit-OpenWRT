@@ -5,14 +5,14 @@
 
 set -e
 
-LOG="/var/log/xray-update.log"
+LOG="/tmp/log/xray-update.log"
 
 SUB_FILE="/etc/xray/subscription.url"
 CONFIG_JSON="/etc/xray/config.json"
 HWID_FILE="/etc/xray/hwid"
 
-GENERATOR="/root/xray-generate-config.py"
-PARSER="/root/xray-sub-parser.py"
+GENERATOR="/usr/share/xray/xray-generate-config.py"
+PARSER="/usr/share/xray/xray-sub-parser.py"
 
 GEO_DIR="/usr/share/xray"
 GEOIP="$GEO_DIR/geoip.dat"
