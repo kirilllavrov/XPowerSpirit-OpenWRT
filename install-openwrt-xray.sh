@@ -82,15 +82,19 @@ ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/X
 ZIP_DEST="$TMP_DIR/xray.zip"
 SHA_FILE="$STATE_DIR/xray.zip.sha256sum"
 
+extract_sha256() {
+    grep '^SHA2-256' "$1" \
+        | sed 's/.*= *//' \
+        | tr -cd '0-9a-fA-F' \
+        | cut -c1-64
+}
+
 curl -f -H "Cache-Control: no-cache" -s -L -o "$STATE_DIR/xray.dgst" "${ZIP_URL}.dgst" || {
     echo "❌ Ошибка скачивания .dgst файла"
     exit 1
 }
 
-REMOTE_SHA=$(grep -E 'SHA2-256|SHA256' "$STATE_DIR/xray.dgst" \
-    | head -n1 \
-    | sed 's/.*= *//' \
-    | tr -d '[:space:]')
+REMOTE_SHA=$(extract_sha256 "$STATE_DIR/xray.dgst")
 
 if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
     echo "✓ Xray ZIP уже скачан — пропускаем"
