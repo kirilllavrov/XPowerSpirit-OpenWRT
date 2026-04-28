@@ -84,15 +84,12 @@ def choose_best_server(servers):
     
     Возвращает None если серверов нет или они не подходят
     """
-    # Пустой список или None
     if not servers:
         return None
     
-    # Нормализация: убеждаемся что это список
     if not isinstance(servers, list):
         servers = [servers]
     
-    # Всё ещё пусто?
     if not servers:
         return None
 
@@ -109,10 +106,8 @@ def choose_best_server(servers):
             if host in DOMAIN_WHITELIST:
                 return ob
 
-        # Не нашли в whitelist, но сервера есть - берём первый
         return servers[0]
 
-    # Нет whitelist - берём первый сервер
     return servers[0] if servers else None
 
 
@@ -127,10 +122,6 @@ def base_config():
             "error": "/tmp/log/xray-error.log"
         },
         "dns": {
-            "hosts": {
-                "cloudflare-dns.com": "1.1.1.1",
-                "dns.google": "8.8.8.8"
-            },
             "queryStrategy": "UseIPv4",
             "enableParallelQuery": True,
             "disableCache": False,
@@ -138,39 +129,8 @@ def base_config():
             "serveStale": True,
             "disableFallback": False,
             "servers": [
-                {
-                    "address": "195.208.4.1",
-                    "port": 53,
-                    "domains": [
-                        "geosite:category-ru",
-                        "geosite:category-browser",
-                        "geosite:category-mobile",
-                        "geosite:category-cdn-ru",
-                        "geosite:private"
-                    ]
-                },
-                {
-                    "address": "195.208.5.1",
-                    "port": 53,
-                    "domains": [
-                        "geosite:category-ru",
-                        "geosite:category-browser",
-                        "geosite:category-mobile",
-                        "geosite:category-cdn-ru",
-                        "geosite:private"
-                    ]
-                },
                 "https://cloudflare-dns.com/dns-query",
-                "https://dns.google/dns-query",
-                # Fallback plain DNS
-                {
-                    "address": "8.8.8.8",
-                    "port": 53
-                },
-                {
-                    "address": "1.1.1.1",
-                    "port": 53
-                }
+                "https://dns.google/resolve"
             ]
         },
         "inbounds": [
@@ -199,7 +159,7 @@ def base_config():
                 "port": 1053,
                 "protocol": "dokodemo-door",
                 "settings": {
-                    "address": "1.1.1.1",
+                    "address": "127.0.0.1",
                     "port": 53,
                     "network": "udp",
                     "followRedirect": False
@@ -213,22 +173,14 @@ def base_config():
 # ФОРМИРОВАНИЕ RULES
 # -----------------------------
 def build_rules(chosen_tag, has_proxy):
-    """Формирует список правил маршрутизации"""
     rules = [
-        # Блокировка рекламы
         {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},
-        
-        # DNS-запросы от dns-in идут напрямую
         {"type": "field", "inboundTag": ["dns-in"], "outboundTag": "direct"},
-        
-        # Явное правило для DoH-серверов (предотвращает петлю)
         {
             "type": "field",
             "domain": ["full:cloudflare-dns.com", "full:dns.google"],
             "outboundTag": "direct"
         },
-        
-        # Весь DNS-трафик (порт 53) напрямую
         {
             "type": "field",
             "port": 53,
@@ -238,10 +190,7 @@ def build_rules(chosen_tag, has_proxy):
     ]
     
     if has_proxy:
-        # Приватные IP напрямую
         rules.append({"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"})
-        
-        # Российские и локальные домены напрямую
         rules.append({
             "type": "field",
             "domain": [
@@ -253,18 +202,13 @@ def build_rules(chosen_tag, has_proxy):
             ],
             "outboundTag": "direct"
         })
-        
-        # Стриминг и игры через прокси
         rules.append({
             "type": "field",
             "domain": ["geosite:category-streaming", "geosite:category-games"],
             "outboundTag": chosen_tag
         })
-        
-        # Всё остальное через прокси
         rules.append({"type": "field", "network": "tcp,udp", "outboundTag": chosen_tag})
     else:
-        # Если нет прокси, всё напрямую
         rules.append({"type": "field", "network": "tcp,udp", "outboundTag": "direct"})
     
     return rules
@@ -280,16 +224,10 @@ def main():
 
     output_path = sys.argv[sys.argv.index("--output") + 1]
 
-    # Загружаем outbounds
     all_obs = load_outbounds()
-    
-    # Пытаемся выбрать сервер
     chosen = choose_best_server(all_obs)
     
-    # ===== КЛЮЧЕВАЯ ЛОГИКА =====
-    # Если сервер НЕ выбран (нет серверов ИЛИ не прошёл whitelist)
     if chosen is None:
-        # DIRECT режим - без прокси
         cfg = base_config()
         cfg["outbounds"] = [
             {"protocol": "freedom", "tag": "direct"},
@@ -299,19 +237,12 @@ def main():
             "domainStrategy": "ForceIPv4",
             "rules": build_rules("direct", False)
         }
-        
-        # Логируем в stderr (не ломает JSON pipeline)
         print("⚠️  Нет доступных серверов. Создан DIRECT-конфиг.", file=sys.stderr)
     else:
-        # Нормальный режим с прокси
         cfg = base_config()
         chosen_tag = chosen.get("tag", "proxy")
-        
-        # Добавляем mark=255
         ss = chosen.setdefault("streamSettings", {})
         ss.setdefault("sockopt", {})["mark"] = 255
-        
-        # Убеждаемся что есть tag
         if "tag" not in chosen:
             chosen["tag"] = "proxy"
         
@@ -324,15 +255,12 @@ def main():
             },
             {"protocol": "blackhole", "tag": "block"}
         ]
-        
         cfg["routing"] = {
             "domainStrategy": "ForceIPv4",
             "rules": build_rules(chosen_tag, True)
         }
-        
         print(f"✅ Выбран сервер: {chosen_tag}", file=sys.stderr)
     
-    # Сохраняем конфиг
     with open(output_path, "w") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
     
