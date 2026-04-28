@@ -11,6 +11,8 @@ SUB_FILE="/etc/xray/subscription.url"
 CONFIG_JSON="/etc/xray/config.json"
 HWID_FILE="/etc/xray/hwid"
 
+TMP_DIR="/tmp/xray_install"
+
 GENERATOR="/usr/share/xray/xray-generate-config.py"
 PARSER="/usr/share/xray/xray-sub-parser.py"
 
@@ -56,7 +58,6 @@ case "$ARCH" in
   *) MACHINE="64" ;;
 esac
 
-TMP_DIR="/tmp/xray_install"
 mkdir -p "$TMP_DIR"
 
 ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/Xray-linux-${MACHINE}.zip"
@@ -69,7 +70,7 @@ cp "$TMP_DIR/xray" /usr/bin/xray
 chmod 755 /usr/bin/xray
 
 rm -rf "$TMP_DIR"
-echo "✓ Xray установлен (версия $LATEST_VERSION)" >> "$LOG"
+echo "✓ Xray установлен (версия $LATEST_VERSION)"
 
 # 4. geoip/geosite
 echo "[2] Обновление geoip/geosite..." >> "$LOG"

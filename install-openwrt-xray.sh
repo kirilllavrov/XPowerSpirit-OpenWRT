@@ -8,11 +8,11 @@ REPO="https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main"
 GENERATOR="/usr/share/xray/xray-generate-config.py"
 PARSER="/usr/share/xray/xray-sub-parser.py"
 UPDATER="/usr/share/xray/update-xray.sh"
-DIAG="/root/diagnose-xray-tproxy.sh"
 CONFIG_DIR="/etc/xray"
 CONFIG_JSON="$CONFIG_DIR/config.json"
 SUB_FILE="$CONFIG_DIR/subscription.url"
 HWID_FILE="$CONFIG_DIR/hwid"
+TMP_DIR="/tmp/xray_install"
 GEO_DIR="/usr/share/xray"
 
 # 1. Подписка
@@ -37,7 +37,6 @@ case "$ARCH" in
   *) MACHINE="64" ;;
 esac
 
-TMP_DIR="/tmp/xray_install"
 mkdir -p "$TMP_DIR"
 
 ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/Xray-linux-${MACHINE}.zip"
@@ -60,11 +59,8 @@ wget -q "$REPO/xray-sub-parser.py" -O "$PARSER"; chmod +x "$PARSER"
 wget -q "$REPO/update-xray.sh" -O "$UPDATER"; chmod +x "$UPDATER"
 echo "✓ Скрипты загружены"
 
-# 4. Настройка dnsmasq
+# 4. Настройка dnsmasq и DoH
 echo "[2] Настройка DNS (dnsmasq → DoH)..."
-
-apk update
-apk add https-dns-proxy
 
 uci set https-dns-proxy.@https-dns-proxy[0].resolver_url='https://cloudflare-dns.com/dns-query'
 uci set https-dns-proxy.@https-dns-proxy[0].listen_addr='127.0.0.1'
