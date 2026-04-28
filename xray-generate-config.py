@@ -84,7 +84,6 @@ def choose_best_server(servers):
     
     Возвращает None если серверов нет или они не подходят
     """
-    # Пустой список или None
     if not servers:
         return None
     
@@ -92,7 +91,6 @@ def choose_best_server(servers):
     if not isinstance(servers, list):
         servers = [servers]
     
-    # Всё ещё пусто?
     if not servers:
         return None
 
@@ -109,15 +107,13 @@ def choose_best_server(servers):
             if host in DOMAIN_WHITELIST:
                 return ob
 
-        # Не нашли в whitelist, но сервера есть - берём первый
         return servers[0]
 
-    # Нет whitelist - берём первый сервер
     return servers[0] if servers else None
 
 
 # -----------------------------
-# БАЗОВАЯ КОНФИГУРАЦИЯ
+# БАЗОВАЯ КОНФИГУРАЦИЯ (С FAKEDNS И SKIPFALLBACK)
 # -----------------------------
 def base_config():
     return {
@@ -138,6 +134,13 @@ def base_config():
             "serveStale": True,
             "disableFallback": False,
             "servers": [
+                # === FAKEDNS (главный для TProxy) ===
+                "fakedns",
+                
+                # === Локальный DNS (через Xray) ===
+                "localhost",
+                
+                # === Российские DNS только для .ru доменов ===
                 {
                     "address": "195.208.4.1",
                     "port": 53,
@@ -160,16 +163,29 @@ def base_config():
                         "geosite:private"
                     ]
                 },
-                "https://cloudflare-dns.com/dns-query",
-                "https://dns.google/dns-query",
-                # Fallback plain DNS
+                
+                # === DoH (защищённые, с skipFallback) ===
+                {
+                    "address": "https://cloudflare-dns.com/dns-query",
+                    "domains": ["geosite:geolocation-!ru"],
+                    "skipFallback": True
+                },
+                {
+                    "address": "https://dns.google/dns-query",
+                    "domains": ["geosite:geolocation-!ru"],
+                    "skipFallback": True
+                },
+                
+                # === Fallback plain DNS ===
                 {
                     "address": "8.8.8.8",
-                    "port": 53
+                    "port": 53,
+                    "skipFallback": True
                 },
                 {
                     "address": "1.1.1.1",
-                    "port": 53
+                    "port": 53,
+                    "skipFallback": True
                 }
             ]
         },
@@ -190,7 +206,8 @@ def base_config():
                 },
                 "sniffing": {
                     "enabled": True,
-                    "destOverride": ["http", "tls"]
+                    "destOverride": ["http", "tls", "fakedns"],
+                    "metadataOnly": False
                 }
             },
             {
@@ -233,6 +250,12 @@ def build_rules(chosen_tag, has_proxy):
             "type": "field",
             "port": 53,
             "network": "udp",
+            "outboundTag": "direct"
+        },
+        {
+            "type": "field",
+            "port": 53,
+            "network": "tcp",
             "outboundTag": "direct"
         }
     ]
@@ -286,8 +309,7 @@ def main():
     # Пытаемся выбрать сервер
     chosen = choose_best_server(all_obs)
     
-    # ===== КЛЮЧЕВАЯ ЛОГИКА =====
-    # Если сервер НЕ выбран (нет серверов ИЛИ не прошёл whitelist)
+    # КЛЮЧЕВАЯ ЛОГИКА: Если сервер НЕ выбран
     if chosen is None:
         # DIRECT режим - без прокси
         cfg = base_config()
@@ -296,22 +318,20 @@ def main():
             {"protocol": "blackhole", "tag": "block"}
         ]
         cfg["routing"] = {
-            "domainStrategy": "ForceIPv4",
+            "domainStrategy": "IPIfNonMatch",
             "rules": build_rules("direct", False)
         }
         
-        # Логируем в stderr (не ломает JSON pipeline)
         print("⚠️  Нет доступных серверов. Создан DIRECT-конфиг.", file=sys.stderr)
     else:
         # Нормальный режим с прокси
         cfg = base_config()
         chosen_tag = chosen.get("tag", "proxy")
         
-        # Добавляем mark=255
+        # Добавляем mark=255 для TProxy
         ss = chosen.setdefault("streamSettings", {})
         ss.setdefault("sockopt", {})["mark"] = 255
         
-        # Убеждаемся что есть tag
         if "tag" not in chosen:
             chosen["tag"] = "proxy"
         
@@ -326,11 +346,11 @@ def main():
         ]
         
         cfg["routing"] = {
-            "domainStrategy": "ForceIPv4",
+            "domainStrategy": "IPIfNonMatch",
             "rules": build_rules(chosen_tag, True)
         }
         
-        print(f"✅ Выбран сервер: {chosen_tag}", file=sys.stderr)
+        print(f"✅ Выбран сервер: {chosen_tag} ({extract_address(chosen)})", file=sys.stderr)
     
     # Сохраняем конфиг
     with open(output_path, "w") as f:
