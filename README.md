@@ -3,7 +3,7 @@
 ### Зависимые пакеты
 ```bash
 apk update
-apk add curl ca-certificates python3 kmod-nft-tproxy kmod-nft-socket unzip
+apk add curl ca-certificates python3 kmod-nft-tproxy kmod-nft-socket unzip https-dns-proxy
 ```
 #### Установка Xray на OpenWRT
 ```bash
