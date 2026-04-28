@@ -26,8 +26,12 @@ chmod 600 "$SUB_FILE"
 # 2. Пакеты (минимальный рабочий набор) - уже установленно
 #echo "[1] Установка пакетов..."
 #apk update
-#apk add curl xray-core ca-certificates python3 kmod-nft-tproxy
+#apk add curl xray-core ca-certificates python3 kmod-nft-tproxy unzip - это встроено в прошивку
 # xray-core - берем с github
+
+echo "[+] Устанавливаем вспомогательные пакеты..."
+opkg update
+opkg install unzip
 
 # 2. Установка Xray из GitHub
 echo "[+] Устанавливаем Xray..."
@@ -51,11 +55,12 @@ ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/X
 curl -L -o "$TMP_DIR/xray.zip" "$ZIP_URL"
 unzip -q "$TMP_DIR/xray.zip" -d "$TMP_DIR"
 
-install -m 755 "$TMP_DIR/xray" /usr/bin/xray
-install -m 755 "$TMP_DIR/xrayctl" /usr/bin/xrayctl
+# Устанавливаем основной бинарник
+cp "$TMP_DIR/xray" /usr/bin/xray
+chmod 755 /usr/bin/xray
 
 rm -rf "$TMP_DIR"
-echo "✓ Xray установлен"
+echo "✓ Xray установлен (версия $LATEST_VERSION)"
 
 # 3. Скрипты
 echo "[1] Загрузка скриптов..."
