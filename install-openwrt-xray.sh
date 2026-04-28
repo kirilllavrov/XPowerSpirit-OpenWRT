@@ -106,6 +106,7 @@ stop() {
     ip route flush table xray 2>/dev/null || true
 }
 INITEOF
+
 chmod +x /etc/init.d/xray-tproxy-rules
 /etc/init.d/xray-tproxy-rules enable
 echo "✓ nftables настроили"
@@ -174,9 +175,9 @@ fi
 # 12. Запуск служб в правильном порядке
 echo "[8] Запуск служб..."
 /etc/init.d/dnsmasq restart
-/etc/init.d/xray-tproxy-rules start
 /etc/init.d/firewall restart
-/etc/init.d/xray restart
+/etc/init.d/xray-tproxy-rules start
+/etc/init.d/xray start
 echo "✓ Перезапустили службы"
 
 sleep 3
