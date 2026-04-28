@@ -60,13 +60,33 @@ wget -q "$REPO/xray-sub-parser.py" -O "$PARSER"; chmod +x "$PARSER"
 wget -q "$REPO/update-xray.sh" -O "$UPDATER"; chmod +x "$UPDATER"
 echo "✓ Скрипты загружены"
 
-# 4. dnsmasq → Xray:1053
-echo "[2] Настройка DNS..."
+# 4. Настройка dnsmasq
+echo "[2] Настройка DNS (dnsmasq → DoH)..."
+
+opkg update
+opkg install https-dns-proxy
+sleep 2
+
+uci set https-dns-proxy.@https-dns-proxy[0].resolver_url='https://cloudflare-dns.com/dns-query'
+uci set https-dns-proxy.@https-dns-proxy[0].listen_addr='127.0.0.1'
+uci set https-dns-proxy.@https-dns-proxy[0].listen_port='5053'
+
+uci add https-dns-proxy https-dns-proxy
+uci set https-dns-proxy.@https-dns-proxy[-1].resolver_url='https://dns.google/dns-query'
+uci set https-dns-proxy.@https-dns-proxy[-1].listen_addr='127.0.0.1'
+uci set https-dns-proxy.@https-dns-proxy[-1].listen_port='5054'
+
+uci commit https-dns-proxy
+/etc/init.d/https-dns-proxy restart
+
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci -q delete dhcp.@dnsmasq[0].server
-uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#1053'
+uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5053'
+uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5054'
 uci commit dhcp
-echo "✓ dnsmasq настроили"
+/etc/init.d/dnsmasq restart
+
+echo "✓ dnsmasq настроен на DoH"
 
 # 6. Создаём init-скрипт для правил nftables
 echo "[3] Создание сервиса правил фаервола..."
