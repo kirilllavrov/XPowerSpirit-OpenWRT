@@ -1,7 +1,5 @@
 #!/bin/sh
 # update-xray.sh — промышленная версия
-# Обновление Xray-core, geoip/geosite, подписки и config.json
-# OpenWrt 25.12.x
 
 set -e
 
@@ -29,9 +27,6 @@ mkdir -p "$STATE_DIR" "$TMP_DIR"
 
 echo "===== $(date) =====" >> "$LOG"
 
-# ---------------------------------------------------------
-# SHA-парсер
-# ---------------------------------------------------------
 extract_sha256() {
     grep '^SHA2-256' "$1" \
         | sed 's/.*= *//' \
@@ -39,30 +34,17 @@ extract_sha256() {
         | cut -c1-64
 }
 
-# ---------------------------------------------------------
-# Проверка HWID
-# ---------------------------------------------------------
-if [ ! -f "$HWID_FILE" ]; then
-    echo "[ERR] Нет HWID-файла $HWID_FILE — запусти install" >> "$LOG"
-    exit 1
-fi
+# HWID
+[ -f "$HWID_FILE" ] || { echo "[ERR] Нет HWID" >> "$LOG"; exit 1; }
 HWID="$(cat "$HWID_FILE")"
 
-# ---------------------------------------------------------
-# Проверка подписки
-# ---------------------------------------------------------
-if [ ! -f "$SUB_FILE" ]; then
-    echo "[ERR] Нет файла подписки $SUB_FILE" >> "$LOG"
-    exit 1
-fi
-
+# Подписка
+[ -f "$SUB_FILE" ] || { echo "[ERR] Нет subscription.url" >> "$LOG"; exit 1; }
 SUB_URL="$(cat "$SUB_FILE")"
 [ -z "$SUB_URL" ] && { echo "[ERR] Пустой URL подписки" >> "$LOG"; exit 1; }
 
-# ---------------------------------------------------------
-# Обновление Xray
-# ---------------------------------------------------------
-LATEST_VERSION=$(curl -f -H "Cache-Control: no-cache" -s https://api.github.com/repos/XTLS/Xray-core/releases/latest \
+# Версия Xray
+LATEST_VERSION=$(curl -H "Cache-Control: no-cache" -s https://api.github.com/repos/XTLS/Xray-core/releases/latest \
     | grep '"tag_name"' | cut -d '"' -f 4)
 
 [ -z "$LATEST_VERSION" ] && { echo "[ERR] Не удалось получить версию Xray" >> "$LOG"; exit 1; }
@@ -79,7 +61,9 @@ ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/X
 ZIP_DEST="$TMP_DIR/xray.zip"
 SHA_FILE="$STATE_DIR/xray.zip.sha256sum"
 
-curl -f -H "Cache-Control: no-cache" -s -L -o "$STATE_DIR/xray.dgst" "${ZIP_URL}.dgst"
+# Скачиваем .dgst (без -f!)
+curl -H "Cache-Control: no-cache" -s -L -o "$STATE_DIR/xray.dgst" "${ZIP_URL}.dgst"
+
 REMOTE_SHA=$(extract_sha256 "$STATE_DIR/xray.dgst")
 
 if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
@@ -89,7 +73,7 @@ else
     curl -f -H "Cache-Control: no-cache" -L -o "$ZIP_DEST" "$ZIP_URL"
 
     LOCAL_SHA=$(sha256sum "$ZIP_DEST" | awk '{print $1}')
-    [ "$LOCAL_SHA" = "$REMOTE_SHA" ] || { echo "[ERR] SHA256 mismatch Xray ZIP" >> "$LOG"; exit 1; }
+    [ "$LOCAL_SHA" = "$REMOTE_SHA" ] || { echo "[ERR] SHA mismatch Xray ZIP" >> "$LOG"; exit 1; }
 
     echo "$REMOTE_SHA" > "$SHA_FILE"
 
@@ -100,15 +84,13 @@ else
     echo "✓ Xray обновлён до $LATEST_VERSION" >> "$LOG"
 fi
 
-# ---------------------------------------------------------
 # Обновление geodata
-# ---------------------------------------------------------
 update_geo() {
     local URL="$1"
     local DEST="$2"
     local SHA_FILE="${STATE_DIR}/$(basename "$DEST").sha256sum"
 
-    curl -f -H "Cache-Control: no-cache" -s -L -o "${DEST}.dgst" "${URL}.dgst"
+    curl -H "Cache-Control: no-cache" -s -L -o "${DEST}.dgst" "${URL}.dgst"
     REMOTE_SHA=$(extract_sha256 "${DEST}.dgst")
 
     if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
@@ -128,13 +110,11 @@ update_geo() {
 update_geo "$GEOIP_URL" "$GEOIP"
 update_geo "$GEOSITE_URL" "$GEOSITE"
 
-# ---------------------------------------------------------
 # Генерация config.json
-# ---------------------------------------------------------
 TMP_CONFIG="/tmp/xray-config.json"
 SUB_RAW="/tmp/xray-sub.raw"
 
-curl -f -H "Cache-Control: no-cache" -s -L -m 20 \
+curl -H "Cache-Control: no-cache" -s -L -m 20 \
     -H "User-Agent: Happ" \
     -H "x-hwid: $HWID" \
     "$SUB_URL" > "$SUB_RAW"

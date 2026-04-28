@@ -61,6 +61,13 @@ chmod 600 "$SUB_FILE"
 # ---------------------------------------------------------
 echo "[+] Устанавливаем Xray..."
 
+extract_sha256() {
+    grep '^SHA2-256' "$1" \
+        | sed 's/.*= *//' \
+        | tr -cd '0-9a-fA-F' \
+        | cut -c1-64
+}
+
 LATEST_VERSION=$(curl -f -H "Cache-Control: no-cache" -s https://api.github.com/repos/XTLS/Xray-core/releases/latest \
     | grep '"tag_name"' | cut -d '"' -f 4)
 
@@ -82,17 +89,8 @@ ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/X
 ZIP_DEST="$TMP_DIR/xray.zip"
 SHA_FILE="$STATE_DIR/xray.zip.sha256sum"
 
-extract_sha256() {
-    grep '^SHA2-256' "$1" \
-        | sed 's/.*= *//' \
-        | tr -cd '0-9a-fA-F' \
-        | cut -c1-64
-}
-
-curl -f -H "Cache-Control: no-cache" -s -L -o "$STATE_DIR/xray.dgst" "${ZIP_URL}.dgst" || {
-    echo "❌ Ошибка скачивания .dgst файла"
-    exit 1
-}
+# .dgst скачиваем БЕЗ -f
+curl -H "Cache-Control: no-cache" -s -L -o "$STATE_DIR/xray.dgst" "${ZIP_URL}.dgst"
 
 REMOTE_SHA=$(extract_sha256 "$STATE_DIR/xray.dgst")
 
@@ -100,19 +98,16 @@ if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
     echo "✓ Xray ZIP уже скачан — пропускаем"
 else
     echo "→ Скачиваем Xray ZIP (${LATEST_VERSION})..."
-    curl -f -H "Cache-Control: no-cache" -L -o "$ZIP_DEST" "$ZIP_URL" || {
-        echo "❌ Ошибка скачивания Xray ZIP"
-        exit 1
-    }
-    
+    curl -f -H "Cache-Control: no-cache" -L -o "$ZIP_DEST" "$ZIP_URL"
+
     LOCAL_SHA=$(sha256sum "$ZIP_DEST" | awk '{print $1}')
     if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
         echo "❌ Ошибка SHA: ожидалось $REMOTE_SHA, получено $LOCAL_SHA"
         exit 1
     fi
-    
+
     echo "$REMOTE_SHA" > "$SHA_FILE"
-    
+
     unzip -q "$ZIP_DEST" -d "$TMP_DIR"
     cp "$TMP_DIR/xray" /usr/bin/xray
     chmod 755 /usr/bin/xray
