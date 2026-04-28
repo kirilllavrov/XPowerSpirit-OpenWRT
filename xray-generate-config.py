@@ -165,16 +165,8 @@ def base_config():
                 },
                 
                 # === DoH (защищённые, с skipFallback) ===
-                {
-                    "address": "https://cloudflare-dns.com/dns-query",
-                    "domains": ["geosite:geolocation-!ru"],
-                    "skipFallback": True
-                },
-                {
-                    "address": "https://dns.google/dns-query",
-                    "domains": ["geosite:geolocation-!ru"],
-                    "skipFallback": True
-                },
+                "https://cloudflare-dns.com/dns-query",
+                "https://dns.google/dns-query",
                 
                 # === Fallback plain DNS ===
                 {
