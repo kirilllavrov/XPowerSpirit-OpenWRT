@@ -33,7 +33,7 @@ chmod 600 "$SUB_FILE"
 # 2. Вспомогательные пакеты
 echo "[+] Устанавливаем вспомогательные пакеты..."
 apk update
-apk add unzip curl ca-certificates
+apk add unzip
 
 # 3. Установка Xray из GitHub
 echo "[+] Устанавливаем Xray..."
