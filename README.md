@@ -15,6 +15,3 @@ chmod +x install-openwrt-xray.sh
 ```bash
 ./install-openwrt-xray.sh
 ```
-```bash
-curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/install-openwrt-xray.sh | sh
-```
