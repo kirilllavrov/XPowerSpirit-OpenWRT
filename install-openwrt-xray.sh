@@ -199,7 +199,11 @@ else
 fi
 
 echo "Проверяем Xray process:"
-pgrep -a xray >/dev/null && _ok "✓ Xray запущен" || _fail "Xray НЕ запущен"
+if pgrep -a xray >/dev/null; then
+    echo "✓ Xray запущен"
+else
+    echo "✗ Xray НЕ запущен"
+fi
 
 echo ""
 echo "=== Установка завершена ==="
