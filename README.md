@@ -1,5 +1,10 @@
 # XPowerSpirit-OpenWRT
 ## Полная установка Xray + nftables TProxy + подписка + геофайлы + update
+### Зависимые пакеты
+```bash
+apk update
+apk add curl ca-certificates python3 kmod-nft-tproxy unzip
+```
 #### Установка Xray на OpenWRT
 ```bash
 wget https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/install-openwrt-xray.sh
