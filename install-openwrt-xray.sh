@@ -63,9 +63,8 @@ echo "✓ Скрипты загружены"
 # 4. Настройка dnsmasq
 echo "[2] Настройка DNS (dnsmasq → DoH)..."
 
-opkg update
-opkg install https-dns-proxy
-sleep 2
+apk update
+apk add https-dns-proxy
 
 uci set https-dns-proxy.@https-dns-proxy[0].resolver_url='https://cloudflare-dns.com/dns-query'
 uci set https-dns-proxy.@https-dns-proxy[0].listen_addr='127.0.0.1'
@@ -75,16 +74,13 @@ uci add https-dns-proxy https-dns-proxy
 uci set https-dns-proxy.@https-dns-proxy[-1].resolver_url='https://dns.google/dns-query'
 uci set https-dns-proxy.@https-dns-proxy[-1].listen_addr='127.0.0.1'
 uci set https-dns-proxy.@https-dns-proxy[-1].listen_port='5054'
-
 uci commit https-dns-proxy
-/etc/init.d/https-dns-proxy restart
 
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci -q delete dhcp.@dnsmasq[0].server
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5053'
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5054'
 uci commit dhcp
-/etc/init.d/dnsmasq restart
 
 echo "✓ dnsmasq настроен на DoH"
 
@@ -194,6 +190,7 @@ fi
 
 # 12. Запуск служб в правильном порядке
 echo "[8] Запуск служб..."
+/etc/init.d/https-dns-proxy restart
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall restart
 /etc/init.d/xray-tproxy-rules start
