@@ -171,11 +171,10 @@ CRON_ENTRY="30 2 * * * $UPDATER"
 # Проверяем, нет ли уже такой задачи (чтобы не дублировать)
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
     (crontab -l 2>/dev/null; echo "$CRON_ENTRY") | crontab -
-    echo "  → Добавлено в crontab: $CRON_ENTRY"
+    echo "  → ✓ Добавлено в crontab: $CRON_ENTRY"
 else
     echo "  → Cron-задача уже существует, пропускаем"
 fi
-echo "✓ Cron: автообновление в 2.30 ночи настроили"
 
 # 12. Запуск служб в правильном порядке
 echo "[8] Запуск служб..."
@@ -184,6 +183,18 @@ echo "[8] Запуск служб..."
 /etc/init.d/firewall restart
 /etc/init.d/xray restart
 echo "✓ Перезапустили службы"
+
+sleep 3
+
+if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
+    echo "[OK] Конфиг Xray валиден"
+else
+    echo "[ERR] Конфиг НЕ валиден, откат!" >> "$LOG"
+    exit 1
+fi
+
+echo "Проверяем Xray process:"
+pgrep -a xray >/dev/null && _ok "✓ Xray запущен" || _fail "Xray НЕ запущен"
 
 echo ""
 echo "=== Установка завершена ==="
