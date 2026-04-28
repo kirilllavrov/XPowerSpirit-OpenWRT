@@ -1,7 +1,7 @@
 #!/bin/sh
-# update-xray.sh — финальная версия без симлинков
+# update-xray.sh — версия с установкой из GitHub
 # Обновление Xray-core, geoip/geosite, подписки и генерация конфига
-# OpenWrt 25.12.x (apk-based)
+# OpenWrt 25.12.x
 
 set -e
 
@@ -30,11 +30,7 @@ if [ ! -f "$SUB_FILE" ]; then
 fi
 
 SUB_URL=$(cat "$SUB_FILE")
-
-if [ -z "$SUB_URL" ]; then
-    echo "Ошибка: пустой URL подписки" >> "$LOG"
-    exit 1
-fi
+[ -z "$SUB_URL" ] && { echo "Ошибка: пустой URL подписки" >> "$LOG"; exit 1; }
 
 # 2. HWID
 if [ -f "$HWID_FILE" ]; then
@@ -44,25 +40,45 @@ else
     echo "$HWID" > "$HWID_FILE"
     chmod 600 "$HWID_FILE"
 fi
-
 echo "[HWID] $HWID" >> "$LOG"
 
-# 3. xray-core
+# 3. Xray-core (GitHub)
 echo "[1] Обновление Xray-core..." >> "$LOG"
-apk update >> "$LOG" 2>&1
-apk add xray-core >> "$LOG" 2>&1
+
+LATEST_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest \
+    | grep '"tag_name"' | cut -d '"' -f 4)
+
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64|amd64) MACHINE="64" ;;
+  aarch64) MACHINE="arm64-v8a" ;;
+  armv7l) MACHINE="arm32-v7a" ;;
+  *) MACHINE="64" ;;
+esac
+
+TMP_DIR="/tmp/xray_install"
+mkdir -p "$TMP_DIR"
+
+ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/Xray-linux-${MACHINE}.zip"
+
+curl -L -o "$TMP_DIR/xray.zip" "$ZIP_URL"
+unzip -q "$TMP_DIR/xray.zip" -d "$TMP_DIR"
+
+install -m 755 "$TMP_DIR/xray" /usr/bin/xray
+[ -f "$TMP_DIR/xrayctl" ] && install -m 755 "$TMP_DIR/xrayctl" /usr/bin/xrayctl
+
+rm -rf "$TMP_DIR"
+
+echo "✓ Xray обновлён до $LATEST_VERSION" >> "$LOG"
 
 # 4. geoip/geosite
 echo "[2] Обновление geoip/geosite..." >> "$LOG"
-
 mkdir -p "$GEO_DIR"
-
 curl -fsSL "$GEOIP_URL" -o "$GEOIP"
 curl -fsSL "$GEOSITE_URL" -o "$GEOSITE"
 
 # 5. config.json
 echo "[3] Обновляем config.json..." >> "$LOG"
-
 TMP_CONFIG="/tmp/xray-config.json"
 
 curl -s -L -m 15 \

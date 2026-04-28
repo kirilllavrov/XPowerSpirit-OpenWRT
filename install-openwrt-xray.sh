@@ -29,12 +29,41 @@ chmod 600 "$SUB_FILE"
 #apk add curl xray-core ca-certificates python3 kmod-nft-tproxy
 # xray-core - берем с github
 
+# 2. Установка Xray из GitHub
+echo "[+] Устанавливаем Xray..."
+
+LATEST_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest \
+    | grep '"tag_name"' | cut -d '"' -f 4)
+
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64|amd64) MACHINE="64" ;;
+  aarch64) MACHINE="arm64-v8a" ;;
+  armv7l) MACHINE="arm32-v7a" ;;
+  *) MACHINE="64" ;;
+esac
+
+TMP_DIR="/tmp/xray_install"
+mkdir -p "$TMP_DIR"
+
+ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/Xray-linux-${MACHINE}.zip"
+
+curl -L -o "$TMP_DIR/xray.zip" "$ZIP_URL"
+unzip -q "$TMP_DIR/xray.zip" -d "$TMP_DIR"
+
+install -m 755 "$TMP_DIR/xray" /usr/bin/xray
+install -m 755 "$TMP_DIR/xrayctl" /usr/bin/xrayctl
+
+rm -rf "$TMP_DIR"
+echo "✓ Xray установлен"
+
 # 3. Скрипты
 echo "[1] Загрузка скриптов..."
 mkdir -p "$GEO_DIR"
 wget -q "$REPO/xray-generate-config.py" -O "$GENERATOR"; chmod +x "$GENERATOR"
 wget -q "$REPO/xray-sub-parser.py" -O "$PARSER"; chmod +x "$PARSER"
 wget -q "$REPO/update-xray.sh" -O "$UPDATER"; chmod +x "$UPDATER"
+echo "✓ Скрипты загружены"
 
 # 4. dnsmasq → Xray:1053
 echo "[2] Настройка DNS..."
@@ -42,6 +71,7 @@ uci set dhcp.@dnsmasq[0].noresolv='1'
 uci -q delete dhcp.@dnsmasq[0].server
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#1053'
 uci commit dhcp
+echo "✓ dnsmasq настроили"
 
 # 6. Создаём init-скрипт для правил nftables
 echo "[3] Создание сервиса правил фаервола..."
@@ -83,9 +113,11 @@ stop() {
 INITEOF
 chmod +x /etc/init.d/xray-tproxy-rules
 /etc/init.d/xray-tproxy-rules enable
+echo "✓ nftables настроили"
 
 # 7. Policy routing
 grep -q "100 xray" /etc/iproute2/rt_tables || echo "100 xray" >> /etc/iproute2/rt_tables
+echo "✓ routing настроили"
 
 # 8. sysctl
 echo "[4] Настройка sysctl..."
@@ -93,6 +125,7 @@ sysctl -w net.ipv4.conf.all.route_localnet=1
 sysctl -w net.ipv4.ip_forward=1
 grep -q route_localnet /etc/sysctl.conf || echo "net.ipv4.conf.all.route_localnet=1" >> /etc/sysctl.conf
 grep -q ip_forward /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+echo "✓ sysctl настроили"
 
 # 9. Geo + HWID + config.json
 echo "[5] Генерация конфигурации..."
@@ -110,6 +143,7 @@ if [ ! -s "$CONFIG_JSON" ]; then
     echo "Ошибка: не удалось создать config.json"
     exit 1
 fi
+echo "✓ Geo + HWID + config.json настроили"
 
 # 10. init.d Xray
 echo "[6] Настройка автозапуска Xray..."
@@ -129,6 +163,7 @@ start_service() {
 }
 XRAYEOF
 chmod +x /etc/init.d/xray
+echo "✓ init.d Xray настроили"
 
 # 11. Cron: автообновление в 2.30 ночи
 echo "[7] Настройка автообновления (cron)..."
@@ -140,6 +175,7 @@ if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
 else
     echo "  → Cron-задача уже существует, пропускаем"
 fi
+echo "✓ Cron: автообновление в 2.30 ночи настроили"
 
 # 12. Запуск служб в правильном порядке
 echo "[8] Запуск служб..."
@@ -147,6 +183,7 @@ echo "[8] Запуск служб..."
 /etc/init.d/xray-tproxy-rules start
 /etc/init.d/firewall restart
 /etc/init.d/xray restart
+echo "✓ Перезапустили службы"
 
 echo ""
 echo "=== Установка завершена ==="
