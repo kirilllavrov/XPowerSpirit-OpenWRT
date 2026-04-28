@@ -27,13 +27,8 @@ chmod 600 "$SUB_FILE"
 # 2. Пакеты (минимальный рабочий набор)
 #echo "[1] Установка пакетов..."
 #apk update
-#apk add curl xray-core ca-certificates python3 kmod-nft-tproxy unzip - это встроено в прошивку
+#apk add curl ca-certificates python3 kmod-nft-tproxy unzip - это встроено в прошивку
 # xray-core - берем с github
-
-# 2. Вспомогательные пакеты
-echo "[+] Устанавливаем вспомогательные пакеты..."
-apk update
-apk add unzip
 
 # 3. Установка Xray из GitHub
 echo "[+] Устанавливаем Xray..."
