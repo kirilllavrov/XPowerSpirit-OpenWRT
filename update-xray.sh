@@ -42,8 +42,8 @@ else
 fi
 echo "[HWID] $HWID" >> "$LOG"
 
-# 3. Xray-core (GitHub)
-echo "[1] Обновление Xray-core..." >> "$LOG"
+# 3. Установка Xray из GitHub
+echo "[+] Устанавливаем Xray..."
 
 LATEST_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest \
     | grep '"tag_name"' | cut -d '"' -f 4)
@@ -64,12 +64,12 @@ ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/X
 curl -L -o "$TMP_DIR/xray.zip" "$ZIP_URL"
 unzip -q "$TMP_DIR/xray.zip" -d "$TMP_DIR"
 
-install -m 755 "$TMP_DIR/xray" /usr/bin/xray
-[ -f "$TMP_DIR/xrayctl" ] && install -m 755 "$TMP_DIR/xrayctl" /usr/bin/xrayctl
+# Устанавливаем основной бинарник
+cp "$TMP_DIR/xray" /usr/bin/xray
+chmod 755 /usr/bin/xray
 
 rm -rf "$TMP_DIR"
-
-echo "✓ Xray обновлён до $LATEST_VERSION" >> "$LOG"
+echo "✓ Xray установлен (версия $LATEST_VERSION)" >> "$LOG"
 
 # 4. geoip/geosite
 echo "[2] Обновление geoip/geosite..." >> "$LOG"
