@@ -1,5 +1,4 @@
 #!/bin/sh
-# update-xray.sh — промышленная версия
 # Обновление Xray-core, geoip/geosite, подписки и config.json
 # OpenWrt 25.12.x
 
