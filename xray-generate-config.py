@@ -130,7 +130,9 @@ def base_config():
             "disableFallback": False,
             "servers": [
                 "https://cloudflare-dns.com/dns-query",
-                "https://dns.google/resolve"
+                "https://dns.google/resolve",
+                "https://77.88.8.8/dns-query",
+                "https://77.88.8.1/dns-query"
             ]
         },
         "inbounds": [

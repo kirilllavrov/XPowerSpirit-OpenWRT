@@ -23,16 +23,6 @@ mkdir -p "$CONFIG_DIR"
 echo "$SUB_URL" > "$SUB_FILE"
 chmod 600 "$SUB_FILE"
 
-# 2. Пакеты (минимальный рабочий набор) - уже установленно
-#echo "[1] Установка пакетов..."
-#apk update
-#apk add curl xray-core ca-certificates python3 kmod-nft-tproxy unzip - это встроено в прошивку
-# xray-core - берем с github
-
-echo "[+] Устанавливаем вспомогательные пакеты..."
-apk update
-apk add unzip
-
 # 2. Установка Xray из GitHub
 echo "[+] Устанавливаем Xray..."
 
