@@ -61,8 +61,10 @@ extract_sha256() {
 # ---------------------------------------------------------
 # Обновление Xray
 # ---------------------------------------------------------
-LATEST_VERSION=$(curl -H "Cache-Control: no-cache" -s https://api.github.com/repos/XTLS/Xray-core/releases/latest \
+LATEST_VERSION=$(curl -f -H "Cache-Control: no-cache" -s https://api.github.com/repos/XTLS/Xray-core/releases/latest \
     | grep '"tag_name"' | cut -d '"' -f 4)
+
+[ -z "$LATEST_VERSION" ] && { echo "[ERR] Не удалось получить версию Xray" >> "$LOG"; exit 1; }
 
 ARCH=$(uname -m)
 case "$ARCH" in
@@ -76,14 +78,14 @@ ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/X
 ZIP_DEST="$TMP_DIR/xray.zip"
 SHA_FILE="$STATE_DIR/xray.zip.sha256sum"
 
-curl -H "Cache-Control: no-cache" -s -L -o "$STATE_DIR/xray.dgst" "${ZIP_URL}.dgst"
+curl -f -H "Cache-Control: no-cache" -s -L -o "$STATE_DIR/xray.dgst" "${ZIP_URL}.dgst"
 REMOTE_SHA=$(extract_sha256 "$STATE_DIR/xray.dgst")
 
 if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
     echo "✓ Xray ZIP не изменился" >> "$LOG"
 else
     echo "→ Скачиваем Xray ZIP..." >> "$LOG"
-    curl -H "Cache-Control: no-cache" -L -o "$ZIP_DEST" "$ZIP_URL"
+    curl -f -H "Cache-Control: no-cache" -L -o "$ZIP_DEST" "$ZIP_URL"
 
     LOCAL_SHA=$(sha256sum "$ZIP_DEST" | awk '{print $1}')
     [ "$LOCAL_SHA" = "$REMOTE_SHA" ] || { echo "[ERR] SHA256 mismatch Xray ZIP" >> "$LOG"; exit 1; }
@@ -105,7 +107,7 @@ update_geo() {
     local DEST="$2"
     local SHA_FILE="${STATE_DIR}/$(basename "$DEST").sha256sum"
 
-    curl -H "Cache-Control: no-cache" -s -L -o "${DEST}.dgst" "${URL}.dgst"
+    curl -f -H "Cache-Control: no-cache" -s -L -o "${DEST}.dgst" "${URL}.dgst"
     REMOTE_SHA=$(extract_sha256 "${DEST}.dgst")
 
     if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
@@ -113,7 +115,7 @@ update_geo() {
         return
     fi
 
-    curl -H "Cache-Control: no-cache" -fsSL -o "$DEST" "$URL"
+    curl -f -H "Cache-Control: no-cache" -fsSL -o "$DEST" "$URL"
     LOCAL_SHA=$(sha256sum "$DEST" | awk '{print $1}')
 
     [ "$LOCAL_SHA" = "$REMOTE_SHA" ] || { echo "[ERR] SHA mismatch $(basename "$DEST")" >> "$LOG"; exit 1; }
@@ -131,7 +133,7 @@ update_geo "$GEOSITE_URL" "$GEOSITE"
 TMP_CONFIG="/tmp/xray-config.json"
 SUB_RAW="/tmp/xray-sub.raw"
 
-curl -H "Cache-Control: no-cache" -s -L -m 20 \
+curl -f -H "Cache-Control: no-cache" -s -L -m 20 \
     -H "User-Agent: Happ" \
     -H "x-hwid: $HWID" \
     "$SUB_URL" > "$SUB_RAW"

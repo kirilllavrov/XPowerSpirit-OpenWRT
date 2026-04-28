@@ -61,8 +61,10 @@ chmod 600 "$SUB_FILE"
 # ---------------------------------------------------------
 echo "[+] Устанавливаем Xray..."
 
-LATEST_VERSION=$(curl -H "Cache-Control: no-cache" -s https://api.github.com/repos/XTLS/Xray-core/releases/latest \
+LATEST_VERSION=$(curl -f -H "Cache-Control: no-cache" -s https://api.github.com/repos/XTLS/Xray-core/releases/latest \
     | grep '"tag_name"' | cut -d '"' -f 4)
+
+[ -z "$LATEST_VERSION" ] && { echo "❌ Ошибка получения версии Xray"; exit 1; }
 
 ARCH=$(uname -m)
 case "$ARCH" in
@@ -80,7 +82,10 @@ ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/X
 ZIP_DEST="$TMP_DIR/xray.zip"
 SHA_FILE="$STATE_DIR/xray.zip.sha256sum"
 
-curl -H "Cache-Control: no-cache" -s -L -o "$STATE_DIR/xray.dgst" "${ZIP_URL}.dgst"
+curl -f -H "Cache-Control: no-cache" -s -L -o "$STATE_DIR/xray.dgst" "${ZIP_URL}.dgst" || {
+    echo "❌ Ошибка скачивания .dgst файла"
+    exit 1
+}
 
 REMOTE_SHA=$(grep -E 'SHA2-256|SHA256' "$STATE_DIR/xray.dgst" \
     | head -n1 \
@@ -90,20 +95,26 @@ REMOTE_SHA=$(grep -E 'SHA2-256|SHA256' "$STATE_DIR/xray.dgst" \
 if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
     echo "✓ Xray ZIP уже скачан — пропускаем"
 else
-    echo "→ Скачиваем Xray ZIP..."
-    curl -H "Cache-Control: no-cache" -L -o "$ZIP_DEST" "$ZIP_URL"
-
+    echo "→ Скачиваем Xray ZIP (${LATEST_VERSION})..."
+    curl -f -H "Cache-Control: no-cache" -L -o "$ZIP_DEST" "$ZIP_URL" || {
+        echo "❌ Ошибка скачивания Xray ZIP"
+        exit 1
+    }
+    
     LOCAL_SHA=$(sha256sum "$ZIP_DEST" | awk '{print $1}')
-    [ "$LOCAL_SHA" = "$REMOTE_SHA" ] || { echo "Ошибка SHA Xray ZIP"; exit 1; }
-
+    if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
+        echo "❌ Ошибка SHA: ожидалось $REMOTE_SHA, получено $LOCAL_SHA"
+        exit 1
+    fi
+    
     echo "$REMOTE_SHA" > "$SHA_FILE"
+    
+    unzip -q "$ZIP_DEST" -d "$TMP_DIR"
+    cp "$TMP_DIR/xray" /usr/bin/xray
+    chmod 755 /usr/bin/xray
 fi
 
-unzip -q "$ZIP_DEST" -d "$TMP_DIR"
-cp "$TMP_DIR/xray" /usr/bin/xray
-chmod 755 /usr/bin/xray
-
-echo "✓ Xray установлен ($LATEST_VERSION)"
+echo "✓ Xray успешно установлен (${LATEST_VERSION})"
 
 # ---------------------------------------------------------
 # 3. Скрипты
@@ -287,9 +298,31 @@ grep -qF "$UPDATER" "$CRON_FILE" || {
 }
 
 # ---------------------------------------------------------
-# 10. Запуск служб
+# 10. Автообновления при появлении интернета
 # ---------------------------------------------------------
-echo "[8] Запуск служб..."
+echo "[8] Настройка автообновления при появлении интернета..."
+
+cat > /etc/hotplug.d/iface/99-xray-autoupdate << 'EOF'
+#!/bin/sh
+
+[ "$ACTION" = "ifup" ] || exit 0
+[ "$INTERFACE" = "wan" ] || exit 0
+
+if ping -c1 -W1 1.1.1.1 >/dev/null 2>&1; then
+    logger -t xray "WAN up — интернет есть, запускаю update-xray.sh"
+    /usr/share/xray/update-xray.sh &
+else
+    logger -t xray "WAN up — но интернета нет, обновление пропущено"
+fi
+EOF
+
+chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
+echo "✓ Автообновление включено"
+
+# ---------------------------------------------------------
+# 11. Запуск служб
+# ---------------------------------------------------------
+echo "[9] Запуск служб..."
 
 # один раз — в правильном порядке
 /etc/init.d/https-dns-proxy restart
