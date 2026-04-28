@@ -1,4 +1,5 @@
 #!/bin/sh
+# update-xray.sh — промышленная версия
 # Обновление Xray-core, geoip/geosite, подписки и config.json
 # OpenWrt 25.12.x
 
@@ -36,7 +37,6 @@ if [ ! -f "$HWID_FILE" ]; then
     exit 1
 fi
 HWID="$(cat "$HWID_FILE")"
-echo "[HWID] $HWID" >> "$LOG"
 
 # ---------------------------------------------------------
 # Проверка подписки
@@ -50,85 +50,19 @@ SUB_URL="$(cat "$SUB_FILE")"
 [ -z "$SUB_URL" ] && { echo "[ERR] Пустой URL подписки" >> "$LOG"; exit 1; }
 
 # ---------------------------------------------------------
-# Функция обновления geodata
+# Универсальный SHA-парсер .dgst
 # ---------------------------------------------------------
-download_geo_if_changed() {
-    local URL="$1"
-    local DEST="$2"
-    local SHA_FILE="${STATE_DIR}/$(basename "$DEST").sha256sum"
-
-    echo "[*] Проверяем geodata: $DEST" >> "$LOG"
-
-    REMOTE_SHA=$(curl -s "${URL}.sha256sum" | awk '{print $1}')
-    if [ -z "$REMOTE_SHA" ]; then
-        echo "    [!] Не удалось получить SHA256" >> "$LOG"
-        return 1
-    fi
-
-    if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
-        echo "    ✓ Файл не изменился — пропускаем" >> "$LOG"
-        return 0
-    fi
-
-    echo "    → Файл изменился, скачиваем..." >> "$LOG"
-    curl -fsSL -o "$DEST" "$URL"
-
-    LOCAL_SHA_NEW=$(sha256sum "$DEST" | awk '{print $1}')
-    if [ "$LOCAL_SHA_NEW" != "$REMOTE_SHA" ]; then
-        echo "    [!] Ошибка SHA256!" >> "$LOG"
-        exit 1
-    fi
-
-    echo "$REMOTE_SHA" > "$SHA_FILE"
-    echo "    ✓ Файл обновлён" >> "$LOG"
+extract_sha256() {
+    grep -E 'SHA2-256|SHA256' "$1" \
+        | head -n1 \
+        | sed 's/.*= *//' \
+        | tr -d '[:space:]'
 }
 
 # ---------------------------------------------------------
-# Функция обновления Xray
+# Обновление Xray
 # ---------------------------------------------------------
-XRAY_UPDATED=0
-
-download_xray_if_changed() {
-    local URL="$1"
-    local DEST="$2"
-    local SHA_FILE="${STATE_DIR}/$(basename "$DEST").sha256sum"
-    local DGST_URL="${URL}.dgst"
-
-    echo "[*] Проверяем Xray ZIP" >> "$LOG"
-
-    curl -s -L -o "$STATE_DIR/xray.dgst" "$DGST_URL"
-
-    REMOTE_SHA=$(grep -E 'SHA2-256=|SHA256=|SHA256 ' "$STATE_DIR/xray.dgst" \
-        | sed 's/.*= *//' | tr -d '[:space:]')
-
-    if [ -z "$REMOTE_SHA" ]; then
-        echo "    [!] Не удалось получить SHA256 из .dgst" >> "$LOG"
-        exit 1
-    fi
-
-    if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
-        echo "    ✓ Xray не изменился — пропускаем" >> "$LOG"
-        return 0
-    fi
-
-    echo "    → Xray изменился, скачиваем ZIP..." >> "$LOG"
-    curl -fsSL -o "$DEST" "$URL"
-
-    LOCAL_SHA_NEW=$(sha256sum "$DEST" | awk '{print $1}')
-    if [ "$LOCAL_SHA_NEW" != "$REMOTE_SHA" ]; then
-        echo "    [!] Ошибка SHA256 Xray ZIP!" >> "$LOG"
-        exit 1
-    fi
-
-    echo "$REMOTE_SHA" > "$SHA_FILE"
-    XRAY_UPDATED=1
-    echo "    ✓ Xray ZIP обновлён" >> "$LOG"
-}
-
-# ---------------------------------------------------------
-# 1. Обновление Xray
-# ---------------------------------------------------------
-LATEST_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest \
+LATEST_VERSION=$(curl -H "Cache-Control: no-cache" -s https://api.github.com/repos/XTLS/Xray-core/releases/latest \
     | grep '"tag_name"' | cut -d '"' -f 4)
 
 ARCH=$(uname -m)
@@ -141,54 +75,81 @@ esac
 
 ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/Xray-linux-${MACHINE}.zip"
 ZIP_DEST="$TMP_DIR/xray.zip"
+SHA_FILE="$STATE_DIR/xray.zip.sha256sum"
 
-download_xray_if_changed "$ZIP_URL" "$ZIP_DEST"
+curl -H "Cache-Control: no-cache" -s -L -o "$STATE_DIR/xray.dgst" "${ZIP_URL}.dgst"
+REMOTE_SHA=$(extract_sha256 "$STATE_DIR/xray.dgst")
 
-if [ "$XRAY_UPDATED" -eq 1 ]; then
+if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
+    echo "✓ Xray ZIP не изменился" >> "$LOG"
+else
+    echo "→ Скачиваем Xray ZIP..." >> "$LOG"
+    curl -H "Cache-Control: no-cache" -L -o "$ZIP_DEST" "$ZIP_URL"
+
+    LOCAL_SHA=$(sha256sum "$ZIP_DEST" | awk '{print $1}')
+    [ "$LOCAL_SHA" = "$REMOTE_SHA" ] || { echo "[ERR] SHA256 mismatch Xray ZIP" >> "$LOG"; exit 1; }
+
+    echo "$REMOTE_SHA" > "$SHA_FILE"
+
     unzip -q "$ZIP_DEST" -d "$TMP_DIR"
     cp "$TMP_DIR/xray" /usr/bin/xray
     chmod 755 /usr/bin/xray
+
     echo "✓ Xray обновлён до $LATEST_VERSION" >> "$LOG"
-else
-    echo "✓ Xray не изменился" >> "$LOG"
 fi
 
 # ---------------------------------------------------------
-# 2. Обновление geodata
+# Обновление geodata
 # ---------------------------------------------------------
-download_geo_if_changed "$GEOIP_URL" "$GEOIP"
-download_geo_if_changed "$GEOSITE_URL" "$GEOSITE"
+update_geo() {
+    local URL="$1"
+    local DEST="$2"
+    local SHA_FILE="${STATE_DIR}/$(basename "$DEST").sha256sum"
+
+    curl -H "Cache-Control: no-cache" -s -L -o "${DEST}.dgst" "${URL}.dgst"
+    REMOTE_SHA=$(extract_sha256 "${DEST}.dgst")
+
+    if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
+        echo "✓ $(basename "$DEST") не изменился" >> "$LOG"
+        return
+    fi
+
+    curl -H "Cache-Control: no-cache" -fsSL -o "$DEST" "$URL"
+    LOCAL_SHA=$(sha256sum "$DEST" | awk '{print $1}')
+
+    [ "$LOCAL_SHA" = "$REMOTE_SHA" ] || { echo "[ERR] SHA mismatch $(basename "$DEST")" >> "$LOG"; exit 1; }
+
+    echo "$REMOTE_SHA" > "$SHA_FILE"
+    echo "✓ $(basename "$DEST") обновлён" >> "$LOG"
+}
+
+update_geo "$GEOIP_URL" "$GEOIP"
+update_geo "$GEOSITE_URL" "$GEOSITE"
 
 # ---------------------------------------------------------
-# 3. Генерация config.json
+# Генерация config.json
 # ---------------------------------------------------------
 TMP_CONFIG="/tmp/xray-config.json"
 SUB_RAW="/tmp/xray-sub.raw"
 
-curl -s -L -m 20 \
+curl -H "Cache-Control: no-cache" -s -L -m 20 \
     -H "User-Agent: Happ" \
     -H "x-hwid: $HWID" \
     "$SUB_URL" > "$SUB_RAW"
 
-grep -q "vless://" "$SUB_RAW" || {
-    echo "[ERR] Подписка не содержит vless://" >> "$LOG"
-    exit 1
-}
+grep -q "vless://" "$SUB_RAW" || { echo "[ERR] Подписка не содержит vless://" >> "$LOG"; exit 1; }
 
 cat "$SUB_RAW" \
     | python3 "$PARSER" \
-    | python3 "$GENERATOR" --output "$TMP_CONFIG" 2>>"$LOG"
+    | python3 "$GENERATOR" --output "$TMP_CONFIG"
 
 [ -s "$TMP_CONFIG" ] || { echo "[ERR] Пустой config.json" >> "$LOG"; exit 1; }
 
 xray run -test -config "$TMP_CONFIG" >/dev/null 2>&1 \
-    || { echo "[ERR] Новый config.json НЕ валиден" >> "$LOG"; exit 1; }
+    || { echo "[ERR] Новый config.json невалиден" >> "$LOG"; exit 1; }
 
 mv "$TMP_CONFIG" "$CONFIG_JSON"
-echo "[OK] Новый config.json установлен" >> "$LOG"
+echo "✓ Новый config.json установлен" >> "$LOG"
 
-# ---------------------------------------------------------
-# 4. Перезапуск Xray
-# ---------------------------------------------------------
 /etc/init.d/xray restart >> "$LOG" 2>&1
 echo "Готово." >> "$LOG"
