@@ -30,8 +30,8 @@ chmod 600 "$SUB_FILE"
 # xray-core - берем с github
 
 echo "[+] Устанавливаем вспомогательные пакеты..."
-opkg update
-opkg install unzip
+apk update
+apk add unzip
 
 # 2. Установка Xray из GitHub
 echo "[+] Устанавливаем Xray..."
