@@ -72,9 +72,9 @@ curl -H "Cache-Control: no-cache" -s -L -o "$STATE_DIR/xray.dgst" "${ZIP_URL}.dg
 REMOTE_SHA=$(extract_sha256 "$STATE_DIR/xray.dgst")
 
 # === ПРОВЕРКА СВОБОДНОГО МЕСТА ===
-FREE_SPACE=$(df / | awk 'NR==2 {print $4}')
-if [ "$FREE_SPACE" -lt 20480 ]; then
-    echo "[ERR] Недостаточно места для обновления Xray (нужно минимум 20MB)" >> "$LOG"
+FREE_SPACE_TMP=$(df /tmp | awk 'NR==2 {print $4}')
+if [ "$FREE_SPACE_TMP" -lt 20480 ]; then
+    echo "[ERR] Недостаточно места в /tmp (нужно минимум 20MB)" >> "$LOG"
     exit 1
 fi
 

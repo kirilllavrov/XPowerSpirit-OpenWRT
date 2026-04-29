@@ -70,9 +70,9 @@ REMOTE_SHA="$(extract_sha256 "$DGST_FILE")"
 [ -z "$REMOTE_SHA" ] && { echo "Ошибка: не удалось извлечь SHA2-256 из .dgst"; exit 1; }
 
 # === ПРОВЕРКА СВОБОДНОГО МЕСТА ===
-FREE_SPACE=$(df / | awk 'NR==2 {print $4}')
-if [ "$FREE_SPACE" -lt 20480 ]; then
-    echo "Ошибка: недостаточно места (нужно минимум 20MB)"
+FREE_SPACE_TMP=$(df /tmp | awk 'NR==2 {print $4}')
+if [ "$FREE_SPACE_TMP" -lt 20480 ]; then
+    echo "[ERR] Недостаточно места в /tmp (нужно минимум 20MB)" >> "$LOG"
     exit 1
 fi
 
