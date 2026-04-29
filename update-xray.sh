@@ -1,9 +1,11 @@
 #!/bin/sh
-# update-xray.sh — промышленная версия
+# Обновление Xray-core, geoip/geosite, подписки и config.json
+# OpenWrt 25.12.x
 
 set -e
 
 LOG="/tmp/log/xray-update.log"
+mkdir -p /tmp/log
 
 CONFIG_DIR="/etc/xray"
 SUB_FILE="$CONFIG_DIR/subscription.url"
@@ -84,24 +86,35 @@ else
     echo "✓ Xray обновлён до $LATEST_VERSION" >> "$LOG"
 fi
 
-# Обновление geodata
+# ============================
+#   GEOIP / GEOSITE (SHA256SUM)
+# ============================
+
 update_geo() {
     local URL="$1"
     local DEST="$2"
     local SHA_FILE="${STATE_DIR}/$(basename "$DEST").sha256sum"
 
-    curl -H "Cache-Control: no-cache" -s -L -o "${DEST}.dgst" "${URL}.dgst"
-    REMOTE_SHA=$(extract_sha256 "${DEST}.dgst")
+    # Скачиваем .sha256sum
+    curl -H "Cache-Control: no-cache" -s -L -o "${DEST}.sha256sum" "${URL}.sha256sum"
+
+    # Извлекаем SHA
+    REMOTE_SHA=$(cut -d' ' -f1 "${DEST}.sha256sum")
 
     if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
         echo "✓ $(basename "$DEST") не изменился" >> "$LOG"
         return
     fi
 
-    curl -f -H "Cache-Control: no-cache" -fsSL -o "$DEST" "$URL"
+    # Скачиваем файл
+    curl -f -H "Cache-Control: no-cache" -sSL -o "$DEST" "$URL"
+
     LOCAL_SHA=$(sha256sum "$DEST" | awk '{print $1}')
 
-    [ "$LOCAL_SHA" = "$REMOTE_SHA" ] || { echo "[ERR] SHA mismatch $(basename "$DEST")" >> "$LOG"; exit 1; }
+    [ "$LOCAL_SHA" = "$REMOTE_SHA" ] || {
+        echo "[ERR] SHA mismatch $(basename "$DEST")" >> "$LOG"
+        exit 1
+    }
 
     echo "$REMOTE_SHA" > "$SHA_FILE"
     echo "✓ $(basename "$DEST") обновлён" >> "$LOG"
