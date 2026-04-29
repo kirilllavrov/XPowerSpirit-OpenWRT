@@ -227,8 +227,29 @@ else
     echo "  → Cron-задача уже существует, пропускаем"
 fi
 
-# 12. Запуск служб в правильном порядке
-echo "[8] Запуск служб..."
+# 12. Настройка обновления после включения
+echo "[8] Настройка автообновления (hotplug)..."
+
+cat > /etc/hotplug.d/iface/99-xray-autoupdate << 'EOF'
+#!/bin/sh
+[ "$ACTION" = "ifup" ] || exit 0
+[ "$INTERFACE" = "wan" ] || exit 0
+
+# ждём, пока WAN полностью поднимется
+for i in 1 2 3; do
+    sleep 5
+    if ping -c1 -W1 1.1.1.1 >/dev/null 2>&1; then
+        /usr/share/xray/update-xray.sh &
+        exit 0
+    fi
+done
+EOF
+
+chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
+echo "✓ hotplug автообновление настроено"
+
+# 13. Запуск служб в правильном порядке
+echo "[9] Запуск служб..."
 /etc/init.d/https-dns-proxy restart
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall restart
