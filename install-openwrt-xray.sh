@@ -316,53 +316,59 @@ echo "✅"
 # 9. Geo + HWID + config.json
 echo "9️⃣ Скачиваем геофайлы, делаем HWID, генерируем config.json"
 
-download_geo() {
-    local url_data="$1"
-    local url_sha="$2"
-    local dst="$3"
+update_geo() {
+    local URL="$1"      # https://cdn.jsdelivr.net/.../geoip.dat
+    local DEST="$2"     # /etc/xray/geo/geoip.dat
 
-    local base
-    base="$(basename "$dst")"
+    local BASE="$(basename "$DEST")"
+    local TMP="/tmp/$BASE.tmp"
+    local TMP_SHA="/tmp/$BASE.sha256"
+    local SHA_FILE="${STATE_DIR}/${BASE}.sha256sum"
 
-    local tmp="/tmp/$base.tmp"
-    local tmp_sha="/tmp/$base.sha256"
+    echo "→ Скачиваем $BASE"
 
-    echo "→ Скачиваем $base"
+    # 1. Скачиваем SHA256
+    curl -H "Cache-Control: no-cache" -sSL -o "$TMP_SHA" "${URL}.sha256sum"
+    REMOTE_SHA="$(cut -d' ' -f1 "$TMP_SHA")"
 
-    # 1. Скачиваем файл и sha256
-    curl -fsSL "$url_data" -o "$tmp"
-    curl -fsSL "$url_sha"  -o "$tmp_sha"
-
-    # 2. Проверяем, что файлы не пустые
-    if [ ! -s "$tmp" ] || [ ! -s "$tmp_sha" ]; then
-        echo "❌ Ошибка: $url_data или его sha256 пустые"
-        rm -f "$tmp" "$tmp_sha"
+    if [ -z "$REMOTE_SHA" ]; then
+        echo "🚫 Не удалось получить SHA256 для $BASE" >> "$LOG"
         exit 1
     fi
 
-    # 3. Проверяем SHA256
-    if ! sha256sum -c "$tmp_sha" --status; then
-        echo "❌ Ошибка: контрольная сумма $base не совпадает"
-        rm -f "$tmp" "$tmp_sha"
+    # 2. Скачиваем сам файл во временное место
+    curl -f -H "Cache-Control: no-cache" -sSL -o "$TMP" "$URL"
+
+    # 3. Считаем локальный SHA256
+    LOCAL_SHA="$(sha256sum "$TMP" | awk '{print $1}')"
+
+    # 4. Проверяем совпадение
+    if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
+        echo "🚫 SHA mismatch $BASE" >> "$LOG"
+        echo "expected: $REMOTE_SHA" >> "$LOG"
+        echo "actual:   $LOCAL_SHA" >> "$LOG"
+        rm -f "$TMP" "$TMP_SHA"
         exit 1
     fi
 
-    # 4. Атомарная замена
-    mv "$tmp" "$dst"
-    rm -f "$tmp_sha"
+    # 5. Атомарная замена
+    mv "$TMP" "$DEST"
 
-    echo "✅ $base обновлён"
+    # 6. Сохраняем SHA в state (для будущих обновлений)
+    echo "$REMOTE_SHA" > "$SHA_FILE"
+
+    echo "✅ $BASE загружен и проверен" >> "$LOG"
 }
 
-download_geo \
+# Вызовы
+update_geo \
   "https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat" \
-  "https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat.sha256sum" \
   "$GEO_DIR/geoip.dat"
 
-download_geo \
+update_geo \
   "https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat" \
-  "https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat.sha256sum" \
   "$GEO_DIR/geosite.dat"
+
 
 HWID="$(hexdump -n 16 -v -e '/1 "%02x"' /dev/urandom)"
 echo "$HWID" > "$HWID_FILE"
