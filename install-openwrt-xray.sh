@@ -23,11 +23,13 @@ mkdir -p "$CONFIG_DIR"
 echo "$SUB_URL" > "$SUB_FILE"
 chmod 600 "$SUB_FILE"
 
-# 2. Установка Xray из GitHub
+# 2. Установка Xray из GitHub (с .dgst + SHA2-256)
 echo "[+] Устанавливаем Xray..."
 
 LATEST_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest \
     | grep '"tag_name"' | cut -d '"' -f 4)
+
+[ -z "$LATEST_VERSION" ] && { echo "Ошибка: не удалось получить версию Xray"; exit 1; }
 
 ARCH=$(uname -m)
 case "$ARCH" in
@@ -37,19 +39,60 @@ case "$ARCH" in
   *) MACHINE="64" ;;
 esac
 
-mkdir -p "$TMP_DIR"
+mkdir -p "$TMP_DIR" "$GEO_DIR" "$CONFIG_DIR" /etc/xray/state
+STATE_DIR="/etc/xray/state"
 
 ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/Xray-linux-${MACHINE}.zip"
+ZIP_DEST="$TMP_DIR/xray.zip"
+SHA_FILE="$STATE_DIR/xray.zip.sha256sum"
+DGST_FILE="$STATE_DIR/xray.dgst"
 
-curl -L -o "$TMP_DIR/xray.zip" "$ZIP_URL"
-unzip -q "$TMP_DIR/xray.zip" -d "$TMP_DIR"
+# аккуратный парсер SHA2-256 из .dgst
+extract_sha256() {
+    grep '^SHA2-256' "$1" \
+        | sed 's/.*= *//' \
+        | tr -cd '0-9a-fA-F' \
+        | cut -c1-64
+}
+
+echo "  → Скачиваем .dgst для Xray..."
+curl -s -L "${ZIP_URL}.dgst" -o "$DGST_FILE" || {
+    echo "Ошибка: не удалось скачать .dgst для Xray"
+    exit 1
+}
+
+REMOTE_SHA="$(extract_sha256 "$DGST_FILE")"
+[ -z "$REMOTE_SHA" ] && { echo "Ошибка: не удалось извлечь SHA2-256 из .dgst"; exit 1; }
+
+# если уже есть ZIP с таким же SHA — не качаем заново
+if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ] && [ -f "$ZIP_DEST" ]; then
+    echo "  → Найден локальный ZIP с тем же SHA, повторное скачивание не требуется"
+else
+    echo "  → Скачиваем Xray ZIP (${LATEST_VERSION})..."
+    curl -f -L "$ZIP_URL" -o "$ZIP_DEST" || {
+        echo "Ошибка: не удалось скачать Xray ZIP"
+        exit 1
+    }
+
+    LOCAL_SHA="$(sha256sum "$ZIP_DEST" | awk '{print $1}')"
+    if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
+        echo "Ошибка: SHA не совпадает!"
+        echo "  ожидалось: $REMOTE_SHA"
+        echo "  получено : $LOCAL_SHA"
+        exit 1
+    fi
+
+    echo "$REMOTE_SHA" > "$SHA_FILE"
+fi
+
+unzip -q "$ZIP_DEST" -d "$TMP_DIR"
 
 # Устанавливаем основной бинарник
 cp "$TMP_DIR/xray" /usr/bin/xray
 chmod 755 /usr/bin/xray
 
 rm -rf "$TMP_DIR"
-echo "✓ Xray установлен (версия $LATEST_VERSION)"
+echo "✓ Xray установлен (версия $LATEST_VERSION, SHA проверен)"
 
 # 3. Скрипты
 echo "[1] Загрузка скриптов..."
