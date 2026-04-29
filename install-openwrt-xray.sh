@@ -208,7 +208,7 @@ NFT
         udp dport { 67, 68 } return;
 
         iifname "$LAN_IF" meta l4proto { tcp, udp } \
-            tproxy to 127.0.0.1:12345 meta mark set 1 accept;
+            tproxy ip to 127.0.0.1:12345 meta mark set 1 accept;
     }
 }
 NFT
@@ -326,6 +326,7 @@ echo "✓ hotplug автообновление настроено"
 
 # 12. Запуск служб в правильном порядке
 echo "[9] Запуск служб..."
+mkdir -p /usr/share/nftables.d/ruleset-post
 /etc/init.d/https-dns-proxy restart
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall restart
