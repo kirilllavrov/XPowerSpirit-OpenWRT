@@ -117,6 +117,9 @@ echo "✓ Скрипты загружены"
 # 4. Настройка dnsmasq и DoH
 echo "[2] Настройка DNS (dnsmasq → DoH)..."
 
+uci -q delete https-dns-proxy
+uci commit https-dns-proxy
+
 uci set https-dns-proxy.@https-dns-proxy[0].resolver_url='https://cloudflare-dns.com/dns-query'
 uci set https-dns-proxy.@https-dns-proxy[0].listen_addr='127.0.0.1'
 uci set https-dns-proxy.@https-dns-proxy[0].listen_port='5053'
