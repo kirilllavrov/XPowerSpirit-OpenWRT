@@ -67,11 +67,9 @@ ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/X
 ZIP_DEST="$TMP_DIR/xray.zip"
 SHA_FILE="$STATE_DIR/xray.zip.sha256sum"
 
-# Скачиваем .dgst
 curl -H "Cache-Control: no-cache" -s -L -o "$STATE_DIR/xray.dgst" "${ZIP_URL}.dgst"
 REMOTE_SHA=$(extract_sha256 "$STATE_DIR/xray.dgst")
 
-# === ПРОВЕРКА СВОБОДНОГО МЕСТА ===
 FREE_SPACE_TMP=$(df /tmp | awk 'NR==2 {print $4}')
 if [ "$FREE_SPACE_TMP" -lt 20480 ]; then
     echo "[ERR] Недостаточно места в /tmp (нужно минимум 20MB)" >> "$LOG"
@@ -97,7 +95,7 @@ else
 fi
 
 # ============================
-#   GEOIP / GEOSITE (SHA256SUM)
+#   GEOIP / GEOSITE
 # ============================
 
 update_geo() {
@@ -143,18 +141,23 @@ if ! curl -s -L -m 20 \
     | python3 "$PARSER" \
     | python3 "$GENERATOR" --output "$TMP_CONFIG"
 then
-    echo "[ERR] Ошибка при получении или разборе подписки" >> "$LOG"
-    exit 1
+    echo "[ERR] Ошибка при получении или разборе подписки — отключаем Xray" >> "$LOG"
+    /etc/init.d/xray stop
+    exit 0
 fi
 
+# === Если пустой config.json ===
 if [ ! -s "$TMP_CONFIG" ]; then
-    echo "[ERR] Новый config.json пустой" >> "$LOG"
-    exit 1
+    echo "[ERR] Новый config.json пустой — отключаем Xray" >> "$LOG"
+    /etc/init.d/xray stop
+    exit 0
 fi
 
+# === Если невалидный config.json ===
 if ! xray run -test -config "$TMP_CONFIG" >/dev/null 2>&1; then
-    echo "[ERR] Новый config.json невалиден" >> "$LOG"
-    exit 1
+    echo "[ERR] Новый config.json невалиден — отключаем Xray" >> "$LOG"
+    /etc/init.d/xray stop
+    exit 0
 fi
 
 mv "$TMP_CONFIG" "$CONFIG_JSON"
