@@ -102,6 +102,7 @@ def base_config():
 def build_rules(chosen_tag):
     return [
         {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},
+        {"type": "field", "ip": ["geoip:ru", "geoip:private"], "outboundTag": "direct"},
         {"type": "field", "domain": [
             "geosite:private",
             "geosite:category-browser",
