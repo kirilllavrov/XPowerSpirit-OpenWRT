@@ -1,7 +1,7 @@
 #!/bin/sh
 # OpenWrt 25.12.x — Xray TProxy (IPv4-only)
 
-# === ЛОГИРОВАНИЕ УСТАНОВКИ ===
+# логируем установку
 LOG_FILE="/tmp/xray_install.log"
 exec 1> >(tee -a "$LOG_FILE")
 exec 2>&1
@@ -151,7 +151,6 @@ STOP=10
 CONF="/etc/xray/config.json"
 ASSET_DIR="/usr/share/xray"
 
-# === АВТООПРЕДЕЛЕНИЕ LAN ИНТЕРФЕЙСА ===
 LAN_IF="br-lan"
 if ! ip link show br-lan >/dev/null 2>&1; then
     LAN_IF="$(uci show network | grep "=interface" | grep -v 'wan\|loopback' | head -1 | cut -d. -f2)"
@@ -273,7 +272,7 @@ grep -q ip_forward /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysc
 echo "✓ sysctl настроили"
 
 # 8. Geo + HWID + config.json
-echo "[6] Генерация конфигурации..."
+echo "[6] Скачиваем геофайлы, делаем HWID, генерируем config.json"
 curl -fsSL https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat -o "$GEO_DIR/geoip.dat"
 curl -fsSL https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat -o "$GEO_DIR/geosite.dat"
 
@@ -318,9 +317,9 @@ done
 EOF
 
 chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
-echo "✓ hotplug автообновление настроено"
+echo "✓ hotplug настроен"
 
-# 11. Запуск служб в правильном порядке
+# 11. Запуск и рестарт служб
 echo "[9] Запуск служб..."
 mkdir -p /usr/share/nftables.d/ruleset-post
 /etc/init.d/https-dns-proxy restart
