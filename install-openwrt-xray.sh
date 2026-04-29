@@ -1,6 +1,11 @@
 #!/bin/sh
 # OpenWrt 25.12.x — Xray TProxy (IPv4-only)
 
+# === ЛОГИРОВАНИЕ УСТАНОВКИ ===
+LOG_FILE="/tmp/xray_install.log"
+exec 1> >(tee -a "$LOG_FILE")
+exec 2>&1
+
 echo "=== Установка Xray TProxy (финальная версия) ==="
 [ "$(id -u)" != "0" ] && { echo "Запускать нужно от root"; exit 1; }
 
@@ -64,6 +69,13 @@ curl -s -L "${ZIP_URL}.dgst" -o "$DGST_FILE" || {
 REMOTE_SHA="$(extract_sha256 "$DGST_FILE")"
 [ -z "$REMOTE_SHA" ] && { echo "Ошибка: не удалось извлечь SHA2-256 из .dgst"; exit 1; }
 
+# === ПРОВЕРКА СВОБОДНОГО МЕСТА ===
+FREE_SPACE=$(df / | awk 'NR==2 {print $4}')
+if [ "$FREE_SPACE" -lt 20480 ]; then
+    echo "Ошибка: недостаточно места (нужно минимум 20MB)"
+    exit 1
+fi
+
 # если уже есть ZIP с таким же SHA — не качаем заново
 if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ] && [ -f "$ZIP_DEST" ]; then
     echo "  → Найден локальный ZIP с тем же SHA, повторное скачивание не требуется"
@@ -123,55 +135,141 @@ uci commit dhcp
 
 echo "✓ dnsmasq настроен на DoH"
 
-# 6. Создаём init-скрипт для правил nftables
-echo "[3] Создание сервиса правил фаервола..."
-cat > /etc/init.d/xray-tproxy-rules << 'INITEOF'
+# 5. Удаляем старый сервис правил
+echo "[3] Удаляем старый сервис xray-tproxy-rules..."
+/etc/init.d/xray-tproxy-rules stop 2>/dev/null
+/etc/init.d/xray-tproxy-rules disable 2>/dev/null
+rm -f /etc/init.d/xray-tproxy-rules
+echo "✓ Старый сервис удалён"
+
+# 6. Создаём единый init‑скрипт Xray
+echo "[4] Создаём единый init.d Xray..."
+
+cat > /etc/init.d/xray << 'XRAYEOF'
 #!/bin/sh /etc/rc.common
-START=95
+
+USE_PROCD=1
+START=99
 STOP=10
 
-start() {
-    # Очищаем старое
-    nft delete table ip xray 2>/dev/null
+CONF="/etc/xray/config.json"
+ASSET_DIR="/usr/share/xray"
 
-    # Создаём таблицу и цепочку с собственным hook prerouting
-    nft add table ip xray
-    nft 'add chain ip xray xray_tproxy { type filter hook prerouting priority mangle; policy accept; }'
+# === АВТООПРЕДЕЛЕНИЕ LAN ИНТЕРФЕЙСА ===
+LAN_IF="br-lan"
+if ! ip link show br-lan >/dev/null 2>&1; then
+    LAN_IF="$(uci show network | grep "=interface" | grep -v 'wan\|loopback' | head -1 | cut -d. -f2)"
+    [ -z "$LAN_IF" ] && LAN_IF="br-lan"
+    logger -t xray "LAN интерфейс auto-detected: $LAN_IF"
+fi
 
-    # 1. Исключаем трафик самого Xray (mark 255 = 0xff)
-    nft 'add rule ip xray xray_tproxy meta mark 0x000000ff return'
-    # 2. ИСКЛЮЧАЕМ DNS и DHCP
-    nft 'add rule ip xray xray_tproxy udp dport { 53, 67, 68 } return'
-    nft 'add rule ip xray xray_tproxy tcp dport 53 return'
-    # 3. Исключаем локальные/частные сети
-    nft 'add rule ip xray xray_tproxy ip daddr { 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } return'
-    # 4. Перехват TProxy
-    nft 'add rule ip xray xray_tproxy meta l4proto { tcp, udp } tproxy ip to 127.0.0.1:12345 meta mark set 0x00000001 accept'
-
-    # Маршрутизация
-    ip rule del fwmark 1 lookup xray 2>/dev/null || true
-    ip rule add fwmark 1 lookup xray priority 100
-    ip route flush table xray 2>/dev/null || true
-    ip route add local 0.0.0.0/0 dev lo table xray
+extract_server_ips() {
+    grep -o '"address"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONF" 2>/dev/null \
+        | sed 's/.*"\([^"]*\)"$/\1/' \
+        | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' \
+        | sort -u
 }
 
-stop() {
-    nft delete table ip xray 2>/dev/null
-    ip rule del fwmark 1 lookup xray 2>/dev/null || true
-    ip route flush table xray 2>/dev/null || true
-}
-INITEOF
+setup_network() {
+    while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
+    ip route flush table 100 2>/dev/null
 
-chmod +x /etc/init.d/xray-tproxy-rules
-/etc/init.d/xray-tproxy-rules enable
-echo "✓ nftables настроили"
+    ip rule add fwmark 1 table 100
+    ip route add local 0.0.0.0/0 dev lo table 100
+
+    local bypass_ips
+    bypass_ips=$(extract_server_ips | tr '\n' ',' | sed 's/,$//')
+
+    nft delete table inet xray 2>/dev/null
+
+    local nft_file="/tmp/xray.nft"
+    cat > "$nft_file" << NFT
+table inet xray {
+    chain prerouting {
+        type filter hook prerouting priority mangle; policy accept;
+
+        ip daddr {
+            127.0.0.0/8,
+            10.0.0.0/8,
+            172.16.0.0/12,
+            192.168.0.0/16,
+            169.254.0.0/16,
+            224.0.0.0/4,
+            240.0.0.0/4
+        } return;
+
+        meta mark 0xff return;
+NFT
+
+    [ -n "$bypass_ips" ] && \
+        echo "        ip daddr { $bypass_ips } return;" >> "$nft_file"
+
+    cat >> "$nft_file" << NFT
+        udp dport { 67, 68 } return;
+
+        iifname "$LAN_IF" meta l4proto { tcp, udp } \
+            tproxy to 127.0.0.1:12345 meta mark set 1 accept;
+    }
+}
+NFT
+
+    nft -f "$nft_file" || {
+        logger -t xray "nftables apply failed"
+        rm -f "$nft_file"
+        return 1
+    }
+
+    rm -f "$nft_file"
+    logger -t xray "Network ready (bypass: ${bypass_ips:-none})"
+}
+
+start_service() {
+    if [ ! -s "$ASSET_DIR/geoip.dat" ] || [ ! -s "$ASSET_DIR/geosite.dat" ]; then
+        logger -t xray "Geo assets missing — run update-xray.sh"
+        return 1
+    fi
+
+    if ! xray run -test -config "$CONF" >/dev/null 2>&1; then
+        logger -t xray "Invalid config.json"
+        return 1
+    fi
+
+    setup_network || return 1
+
+    procd_open_instance "xray"
+    procd_set_param command /usr/bin/xray run -config "$CONF"
+    procd_set_param env XRAY_LOCATION_ASSET="$ASSET_DIR"
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_set_param respawn 3600 5 5
+    procd_set_param limits core="unlimited"
+    procd_set_param limits nofile="1000000 1000000"
+    procd_set_param file "$CONF"
+    procd_close_instance
+}
+
+stop_service() {
+    nft delete table inet xray 2>/dev/null
+    while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
+    ip route flush table 100 2>/dev/null
+    logger -t xray "Stopped, network cleaned"
+}
+
+service_triggers() {
+    procd_add_reload_trigger "xray"
+}
+XRAYEOF
+
+chmod +x /etc/init.d/xray
+/etc/init.d/xray enable
+echo "✓ init.d Xray установлен"
 
 # 7. Policy routing
 grep -q "100 xray" /etc/iproute2/rt_tables || echo "100 xray" >> /etc/iproute2/rt_tables
 echo "✓ routing настроили"
 
 # 8. sysctl
-echo "[4] Настройка sysctl..."
+echo "[5] Настройка sysctl..."
 sysctl -w net.ipv4.conf.all.route_localnet=1
 sysctl -w net.ipv4.ip_forward=1
 grep -q route_localnet /etc/sysctl.conf || echo "net.ipv4.conf.all.route_localnet=1" >> /etc/sysctl.conf
@@ -179,7 +277,7 @@ grep -q ip_forward /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysc
 echo "✓ sysctl настроили"
 
 # 9. Geo + HWID + config.json
-echo "[5] Генерация конфигурации..."
+echo "[6] Генерация конфигурации..."
 curl -fsSL https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat -o "$GEO_DIR/geoip.dat"
 curl -fsSL https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat -o "$GEO_DIR/geosite.dat"
 
@@ -196,30 +294,9 @@ if [ ! -s "$CONFIG_JSON" ]; then
 fi
 echo "✓ Geo + HWID + config.json настроили"
 
-# 10. init.d Xray
-echo "[6] Настройка автозапуска Xray..."
-cat > /etc/init.d/xray << 'XRAYEOF'
-#!/bin/sh /etc/rc.common
-START=99
-USE_PROCD=1
-PROG=/usr/bin/xray
-start_service() {
-    procd_open_instance
-    procd_set_param command "$PROG" run -config /etc/xray/config.json
-    procd_set_param respawn
-    procd_set_param user root
-    procd_set_param stderr 1
-    procd_set_param stdout 1
-    procd_close_instance
-}
-XRAYEOF
-chmod +x /etc/init.d/xray
-echo "✓ init.d Xray настроили"
-
-# 11. Cron: автообновление в 2.30 ночи
+# 10. Cron: автообновление в 2.30 ночи
 echo "[7] Настройка автообновления (cron)..."
 CRON_ENTRY="30 2 * * * $UPDATER"
-# Проверяем, нет ли уже такой задачи (чтобы не дублировать)
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
     (crontab -l 2>/dev/null; echo "$CRON_ENTRY") | crontab -
     echo "  → ✓ Добавлено в crontab: $CRON_ENTRY"
@@ -227,7 +304,7 @@ else
     echo "  → Cron-задача уже существует, пропускаем"
 fi
 
-# 12. Настройка обновления после включения
+# 11. Настройка обновления после включения
 echo "[8] Настройка автообновления (hotplug)..."
 
 cat > /etc/hotplug.d/iface/99-xray-autoupdate << 'EOF'
@@ -235,7 +312,6 @@ cat > /etc/hotplug.d/iface/99-xray-autoupdate << 'EOF'
 [ "$ACTION" = "ifup" ] || exit 0
 [ "$INTERFACE" = "wan" ] || exit 0
 
-# ждём, пока WAN полностью поднимется
 for i in 1 2 3; do
     sleep 5
     if ping -c1 -W1 1.1.1.1 >/dev/null 2>&1; then
@@ -248,12 +324,11 @@ EOF
 chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
 echo "✓ hotplug автообновление настроено"
 
-# 13. Запуск служб в правильном порядке
+# 12. Запуск служб в правильном порядке
 echo "[9] Запуск служб..."
 /etc/init.d/https-dns-proxy restart
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall restart
-/etc/init.d/xray-tproxy-rules start
 /etc/init.d/xray start
 echo "✓ Перезапустили службы"
 
@@ -262,7 +337,7 @@ sleep 3
 if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
     echo "[OK] Конфиг Xray валиден"
 else
-    echo "[ERR] Конфиг НЕ валиден, откат!" >> "$LOG"
+    echo "[ERR] Конфиг НЕ валиден"
     exit 1
 fi
 

@@ -1,6 +1,5 @@
 #!/bin/sh
-# Обновление Xray-core, geoip/geosite, подписки и config.json
-# OpenWrt 25.12.x
+# OpenWrt — обновление Xray, geoip, geosite и config.json
 
 set -e
 
@@ -36,16 +35,21 @@ extract_sha256() {
         | cut -c1-64
 }
 
-# HWID
+# ============================
+#   HWID + подписка
+# ============================
+
 [ -f "$HWID_FILE" ] || { echo "[ERR] Нет HWID" >> "$LOG"; exit 1; }
 HWID="$(cat "$HWID_FILE")"
 
-# Подписка
 [ -f "$SUB_FILE" ] || { echo "[ERR] Нет subscription.url" >> "$LOG"; exit 1; }
 SUB_URL="$(cat "$SUB_FILE")"
 [ -z "$SUB_URL" ] && { echo "[ERR] Пустой URL подписки" >> "$LOG"; exit 1; }
 
-# Версия Xray
+# ============================
+#   Обновление Xray
+# ============================
+
 LATEST_VERSION=$(curl -H "Cache-Control: no-cache" -s https://api.github.com/repos/XTLS/Xray-core/releases/latest \
     | grep '"tag_name"' | cut -d '"' -f 4)
 
@@ -63,10 +67,16 @@ ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/X
 ZIP_DEST="$TMP_DIR/xray.zip"
 SHA_FILE="$STATE_DIR/xray.zip.sha256sum"
 
-# Скачиваем .dgst (без -f!)
+# Скачиваем .dgst
 curl -H "Cache-Control: no-cache" -s -L -o "$STATE_DIR/xray.dgst" "${ZIP_URL}.dgst"
-
 REMOTE_SHA=$(extract_sha256 "$STATE_DIR/xray.dgst")
+
+# === ПРОВЕРКА СВОБОДНОГО МЕСТА ===
+FREE_SPACE=$(df / | awk 'NR==2 {print $4}')
+if [ "$FREE_SPACE" -lt 20480 ]; then
+    echo "[ERR] Недостаточно места для обновления Xray (нужно минимум 20MB)" >> "$LOG"
+    exit 1
+fi
 
 if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
     echo "✓ Xray ZIP не изменился" >> "$LOG"
@@ -95,10 +105,7 @@ update_geo() {
     local DEST="$2"
     local SHA_FILE="${STATE_DIR}/$(basename "$DEST").sha256sum"
 
-    # Скачиваем .sha256sum
     curl -H "Cache-Control: no-cache" -s -L -o "${DEST}.sha256sum" "${URL}.sha256sum"
-
-    # Извлекаем SHA
     REMOTE_SHA=$(cut -d' ' -f1 "${DEST}.sha256sum")
 
     if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
@@ -106,9 +113,7 @@ update_geo() {
         return
     fi
 
-    # Скачиваем файл
     curl -f -H "Cache-Control: no-cache" -sSL -o "$DEST" "$URL"
-
     LOCAL_SHA=$(sha256sum "$DEST" | awk '{print $1}')
 
     [ "$LOCAL_SHA" = "$REMOTE_SHA" ] || {
@@ -123,13 +128,15 @@ update_geo() {
 update_geo "$GEOIP_URL" "$GEOIP"
 update_geo "$GEOSITE_URL" "$GEOSITE"
 
-# Генерация config.json
+# ============================
+#   Генерация config.json
+# ============================
+
 echo "→ Генерация config.json..." >> "$LOG"
 
 TMP_CONFIG="/tmp/xray-config.json"
 : > "$TMP_CONFIG"
 
-# Потоковая генерация с контролем ошибок
 if ! curl -s -L -m 20 \
         -H "x-hwid: $HWID" \
         "$SUB_URL" \
@@ -140,21 +147,22 @@ then
     exit 1
 fi
 
-# Проверяем, что файл реально создан
 if [ ! -s "$TMP_CONFIG" ]; then
-    echo "[ERR] Не удалось создать config.json (файл пустой)" >> "$LOG"
+    echo "[ERR] Новый config.json пустой" >> "$LOG"
     exit 1
 fi
 
-# Проверяем валидность
 if ! xray run -test -config "$TMP_CONFIG" >/dev/null 2>&1; then
     echo "[ERR] Новый config.json невалиден" >> "$LOG"
     exit 1
 fi
 
-# Атомарная замена
 mv "$TMP_CONFIG" "$CONFIG_JSON"
 echo "✓ Новый config.json установлен" >> "$LOG"
+
+# ============================
+#   Перезапуск Xray
+# ============================
 
 /etc/init.d/xray restart >> "$LOG"
 echo "Готово." >> "$LOG"
