@@ -77,7 +77,8 @@ def base_config():
             "disableFallback": False,
             "servers": [
                 "https://cloudflare-dns.com/dns-query",
-                "https://dns.google/resolve"
+                "https://dns.google/dns-query",
+                "https://dns.nextdns.io"
             ]
         },
         "inbounds": [
