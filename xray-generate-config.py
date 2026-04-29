@@ -5,7 +5,9 @@ import sys
 # -----------------------------
 # НАСТРОЙКИ
 # -----------------------------
-DOMAIN_WHITELIST = []
+DOMAIN_WHITELIST = [
+    "router.freenternet.top"
+]
 
 
 # -----------------------------
