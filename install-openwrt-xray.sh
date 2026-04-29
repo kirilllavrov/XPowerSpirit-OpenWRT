@@ -104,7 +104,7 @@ cp "$TMP_DIR/xray" /usr/bin/xray
 chmod 755 /usr/bin/xray
 
 rm -rf "$TMP_DIR"
-echo "✓ Xray установлен (версия $LATEST_VERSION, SHA проверен)"
+echo "✅ Xray установлен (версия $LATEST_VERSION, SHA проверен)"
 
 # 3. Скрипты
 echo "[1] Загрузка скриптов..."
@@ -112,7 +112,7 @@ mkdir -p "$GEO_DIR"
 wget -q "$REPO/xray-generate-config.py" -O "$GENERATOR"; chmod +x "$GENERATOR"
 wget -q "$REPO/xray-sub-parser.py" -O "$PARSER"; chmod +x "$PARSER"
 wget -q "$REPO/update-xray.sh" -O "$UPDATER"; chmod +x "$UPDATER"
-echo "✓ Скрипты загружены"
+echo "✅ Скрипты загружены"
 
 # 4. Настройка dnsmasq и DoH
 echo "[2] Настройка DNS (dnsmasq)..."
@@ -123,7 +123,7 @@ uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5053'
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5054'
 uci commit dhcp
 
-echo "✓ dnsmasq настроен"
+echo "✅ dnsmasq настроен"
 
 # 5. Создаём единый init‑скрипт Xray
 echo "[3] Создаём единый init.d Xray..."
@@ -267,11 +267,11 @@ XRAYEOF
 
 chmod +x /etc/init.d/xray
 /etc/init.d/xray enable
-echo "✓ init.d Xray установлен"
+echo "✅ init.d Xray установлен"
 
 # 6. Policy routing
 grep -q "100 xray" /etc/iproute2/rt_tables || echo "100 xray" >> /etc/iproute2/rt_tables
-echo "✓ routing настроили"
+echo "✅ routing настроили"
 
 # 7. sysctl
 echo "[4] Настройка sysctl..."
@@ -279,7 +279,7 @@ sysctl -w net.ipv4.conf.all.route_localnet=1
 sysctl -w net.ipv4.ip_forward=1
 grep -q route_localnet /etc/sysctl.conf || echo "net.ipv4.conf.all.route_localnet=1" >> /etc/sysctl.conf
 grep -q ip_forward /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-echo "✓ sysctl настроили"
+echo "✅ sysctl настроили"
 
 # 8. Geo + HWID + config.json
 echo "[5] Скачиваем геофайлы, делаем HWID, генерируем config.json"
@@ -297,14 +297,14 @@ if [ ! -s "$CONFIG_JSON" ]; then
     echo "Ошибка: не удалось создать config.json"
     exit 1
 fi
-echo "✓ Geo + HWID + config.json настроили"
+echo "✅ Geo + HWID + config.json настроили"
 
 # 9. Cron: автообновление в 2.30 ночи
 echo "[6] Настройка автообновления (cron)..."
 CRON_ENTRY="30 2 * * * $UPDATER"
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
     (crontab -l 2>/dev/null; echo "$CRON_ENTRY") | crontab -
-    echo "  → ✓ Добавлено в crontab: $CRON_ENTRY"
+    echo "  → Добавлено в crontab: $CRON_ENTRY"
 else
     echo "  → Cron-задача уже существует, пропускаем"
 fi
@@ -327,29 +327,29 @@ done
 EOF
 
 chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
-echo "✓ hotplug настроен"
+echo "✅ hotplug настроен"
 
 # 11. Запуск и рестарт служб
 echo "[8] Запуск служб..."
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall restart
 /etc/init.d/xray start
-echo "✓ Перезапустили службы"
+echo "✅ Перезапустили службы"
 
 sleep 3
 
 if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
-    echo "[OK] Конфиг Xray прошел проверку"
+    echo "✅ Конфиг Xray прошел проверку"
 else
-    echo "[ERR] Конфиг Xray НЕ прошел проверку!"
+    echo "🚫 Конфиг Xray НЕ прошел проверку!"
     exit 1
 fi
 
 echo "Проверяем, запущен ли Xray:"
 if pgrep -a xray >/dev/null; then
-    echo "✓ Xray запущен"
+    echo "✅ Xray запущен"
 else
-    echo "✗ Xray НЕ запущен"
+    echo "🚫 Xray НЕ запущен"
 fi
 
 echo ""

@@ -39,12 +39,12 @@ extract_sha256() {
 #   HWID + подписка
 # ============================
 
-[ -f "$HWID_FILE" ] || { echo "[ERR] Нет HWID" >> "$LOG"; exit 1; }
+[ -f "$HWID_FILE" ] || { echo "🚫 Нет HWID" >> "$LOG"; exit 1; }
 HWID="$(cat "$HWID_FILE")"
 
-[ -f "$SUB_FILE" ] || { echo "[ERR] Нет subscription.url" >> "$LOG"; exit 1; }
+[ -f "$SUB_FILE" ] || { echo "🚫 Нет subscription.url" >> "$LOG"; exit 1; }
 SUB_URL="$(cat "$SUB_FILE")"
-[ -z "$SUB_URL" ] && { echo "[ERR] Пустой URL подписки" >> "$LOG"; exit 1; }
+[ -z "$SUB_URL" ] && { echo "🚫 Пустой URL подписки" >> "$LOG"; exit 1; }
 
 # ============================
 #   Обновление Xray
@@ -53,7 +53,7 @@ SUB_URL="$(cat "$SUB_FILE")"
 LATEST_VERSION=$(curl -H "Cache-Control: no-cache" -s https://api.github.com/repos/XTLS/Xray-core/releases/latest \
     | grep '"tag_name"' | cut -d '"' -f 4)
 
-[ -z "$LATEST_VERSION" ] && { echo "[ERR] Не удалось получить версию Xray" >> "$LOG"; exit 1; }
+[ -z "$LATEST_VERSION" ] && { echo "🚫 Не удалось получить версию Xray" >> "$LOG"; exit 1; }
 
 ARCH=$(uname -m)
 case "$ARCH" in
@@ -72,18 +72,18 @@ REMOTE_SHA=$(extract_sha256 "$STATE_DIR/xray.dgst")
 
 FREE_SPACE_TMP=$(df /tmp | awk 'NR==2 {print $4}')
 if [ "$FREE_SPACE_TMP" -lt 20480 ]; then
-    echo "[ERR] Недостаточно места в /tmp (нужно минимум 20MB)" >> "$LOG"
+    echo "🚫 Недостаточно места в /tmp (нужно минимум 20MB)" >> "$LOG"
     exit 1
 fi
 
 if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
-    echo "✓ Xray ZIP не изменился" >> "$LOG"
+    echo "✅ Xray ZIP не изменился" >> "$LOG"
 else
     echo "→ Скачиваем Xray ZIP..." >> "$LOG"
     curl -f -H "Cache-Control: no-cache" -L -o "$ZIP_DEST" "$ZIP_URL"
 
     LOCAL_SHA=$(sha256sum "$ZIP_DEST" | awk '{print $1}')
-    [ "$LOCAL_SHA" = "$REMOTE_SHA" ] || { echo "[ERR] SHA mismatch Xray ZIP" >> "$LOG"; exit 1; }
+    [ "$LOCAL_SHA" = "$REMOTE_SHA" ] || { echo "🚫 SHA mismatch Xray ZIP" >> "$LOG"; exit 1; }
 
     echo "$REMOTE_SHA" > "$SHA_FILE"
 
@@ -91,7 +91,7 @@ else
     cp "$TMP_DIR/xray" /usr/bin/xray
     chmod 755 /usr/bin/xray
 
-    echo "✓ Xray обновлён до $LATEST_VERSION" >> "$LOG"
+    echo "✅ Xray обновлён до $LATEST_VERSION" >> "$LOG"
 fi
 
 # ============================
@@ -107,7 +107,7 @@ update_geo() {
     REMOTE_SHA=$(cut -d' ' -f1 "${DEST}.sha256sum")
 
     if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
-        echo "✓ $(basename "$DEST") не изменился" >> "$LOG"
+        echo "✅ $(basename "$DEST") не изменился" >> "$LOG"
         return
     fi
 
@@ -115,12 +115,12 @@ update_geo() {
     LOCAL_SHA=$(sha256sum "$DEST" | awk '{print $1}')
 
     [ "$LOCAL_SHA" = "$REMOTE_SHA" ] || {
-        echo "[ERR] SHA mismatch $(basename "$DEST")" >> "$LOG"
+        echo "🚫 SHA mismatch $(basename "$DEST")" >> "$LOG"
         exit 1
     }
 
     echo "$REMOTE_SHA" > "$SHA_FILE"
-    echo "✓ $(basename "$DEST") обновлён" >> "$LOG"
+    echo "✅ $(basename "$DEST") обновлён" >> "$LOG"
 }
 
 update_geo "$GEOIP_URL" "$GEOIP"
@@ -141,27 +141,27 @@ if ! curl -s -L -m 20 \
     | python3 "$PARSER" \
     | python3 "$GENERATOR" --output "$TMP_CONFIG"
 then
-    echo "[ERR] Ошибка при получении или разборе подписки — отключаем Xray" >> "$LOG"
+    echo "🚫 Ошибка при получении или разборе подписки — отключаем Xray" >> "$LOG"
     /etc/init.d/xray stop
     exit 0
 fi
 
 # === Если пустой config.json ===
 if [ ! -s "$TMP_CONFIG" ]; then
-    echo "[ERR] Новый config.json пустой — отключаем Xray" >> "$LOG"
+    echo "🚫 Новый config.json пустой — отключаем Xray" >> "$LOG"
     /etc/init.d/xray stop
     exit 0
 fi
 
 # === Если невалидный config.json ===
 if ! xray run -test -config "$TMP_CONFIG" >/dev/null 2>&1; then
-    echo "[ERR] Новый config.json невалиден — отключаем Xray" >> "$LOG"
+    echo "🚫 Новый config.json невалиден — отключаем Xray" >> "$LOG"
     /etc/init.d/xray stop
     exit 0
 fi
 
 mv "$TMP_CONFIG" "$CONFIG_JSON"
-echo "✓ Новый config.json установлен" >> "$LOG"
+echo "✅ Новый config.json установлен" >> "$LOG"
 
 # ============================
 #   Перезапуск Xray
