@@ -340,9 +340,9 @@ update_geo() {
     local TMP_SHA="/tmp/$BASE.sha256"
     local SHA_FILE="${STATE_DIR}/${BASE}.sha256sum"
 
-    echo "→ Скачиваем $BASE"
+    echo "  → Скачиваем $BASE"
 
-    # 1. Скачиваем SHA256
+    # Скачиваем SHA256
     curl -H "Cache-Control: no-cache" -sSL -o "$TMP_SHA" "${URL}.sha256sum"
     REMOTE_SHA="$(cut -d' ' -f1 "$TMP_SHA")"
 
@@ -351,13 +351,13 @@ update_geo() {
         exit 1
     fi
 
-    # 2. Скачиваем сам файл во временное место
+    # Скачиваем сам файл во временное место
     curl -f -H "Cache-Control: no-cache" -sSL -o "$TMP" "$URL"
 
-    # 3. Считаем локальный SHA256
+    # Считаем локальный SHA256
     LOCAL_SHA="$(sha256sum "$TMP" | awk '{print $1}')"
 
-    # 4. Проверяем совпадение
+    # Проверяем совпадение
     if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
         echo "🚫 SHA mismatch $BASE" >> "$LOG_FILE"
         echo "expected: $REMOTE_SHA" >> "$LOG_FILE"
@@ -366,13 +366,14 @@ update_geo() {
         exit 1
     fi
 
-    # 5. Атомарная замена
+    # Атомарная замена
     mv "$TMP" "$DEST"
 
-    # 6. Сохраняем SHA в state (для будущих обновлений)
+    # Сохраняем SHA в state (для будущих обновлений)
     echo "$REMOTE_SHA" > "$SHA_FILE"
 
-    echo "→ $BASE загружен и проверен ✅" >> "$LOG_FILE"
+    echo "→ $BASE загружен и проверен" >> "$LOG_FILE"
+    echo "→ $BASE - ✅"
 }
 
 # Вызовы
