@@ -156,5 +156,5 @@ fi
 mv "$TMP_CONFIG" "$CONFIG_JSON"
 echo "✓ Новый config.json установлен" >> "$LOG"
 
-/etc/init.d/xray restart >> "$LOG" 2>&1
+/etc/init.d/xray restart >> "$LOG"
 echo "Готово." >> "$LOG"
