@@ -115,20 +115,7 @@ wget -q "$REPO/update-xray.sh" -O "$UPDATER"; chmod +x "$UPDATER"
 echo "✓ Скрипты загружены"
 
 # 4. Настройка dnsmasq и DoH
-echo "[2] Настройка DNS (dnsmasq → DoH)..."
-
-uci -q delete https-dns-proxy
-uci commit https-dns-proxy
-
-uci set https-dns-proxy.@https-dns-proxy[0].resolver_url='https://cloudflare-dns.com/dns-query'
-uci set https-dns-proxy.@https-dns-proxy[0].listen_addr='127.0.0.1'
-uci set https-dns-proxy.@https-dns-proxy[0].listen_port='5053'
-
-uci add https-dns-proxy https-dns-proxy
-uci set https-dns-proxy.@https-dns-proxy[-1].resolver_url='https://dns.google/dns-query'
-uci set https-dns-proxy.@https-dns-proxy[-1].listen_addr='127.0.0.1'
-uci set https-dns-proxy.@https-dns-proxy[-1].listen_port='5054'
-uci commit https-dns-proxy
+echo "[2] Настройка DNS (dnsmasq)..."
 
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci -q delete dhcp.@dnsmasq[0].server
@@ -136,10 +123,10 @@ uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5053'
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5054'
 uci commit dhcp
 
-echo "✓ dnsmasq настроен на DoH"
+echo "✓ dnsmasq настроен"
 
 # 5. Создаём единый init‑скрипт Xray
-echo "[4] Создаём единый init.d Xray..."
+echo "[3] Создаём единый init.d Xray..."
 
 cat > /etc/init.d/xray << 'XRAYEOF'
 #!/bin/sh /etc/rc.common
@@ -264,7 +251,7 @@ grep -q "100 xray" /etc/iproute2/rt_tables || echo "100 xray" >> /etc/iproute2/r
 echo "✓ routing настроили"
 
 # 7. sysctl
-echo "[5] Настройка sysctl..."
+echo "[4] Настройка sysctl..."
 sysctl -w net.ipv4.conf.all.route_localnet=1
 sysctl -w net.ipv4.ip_forward=1
 grep -q route_localnet /etc/sysctl.conf || echo "net.ipv4.conf.all.route_localnet=1" >> /etc/sysctl.conf
@@ -272,7 +259,7 @@ grep -q ip_forward /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysc
 echo "✓ sysctl настроили"
 
 # 8. Geo + HWID + config.json
-echo "[6] Скачиваем геофайлы, делаем HWID, генерируем config.json"
+echo "[5] Скачиваем геофайлы, делаем HWID, генерируем config.json"
 curl -fsSL https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat -o "$GEO_DIR/geoip.dat"
 curl -fsSL https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat -o "$GEO_DIR/geosite.dat"
 
@@ -290,7 +277,7 @@ fi
 echo "✓ Geo + HWID + config.json настроили"
 
 # 9. Cron: автообновление в 2.30 ночи
-echo "[7] Настройка автообновления (cron)..."
+echo "[6] Настройка автообновления (cron)..."
 CRON_ENTRY="30 2 * * * $UPDATER"
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
     (crontab -l 2>/dev/null; echo "$CRON_ENTRY") | crontab -
@@ -300,7 +287,7 @@ else
 fi
 
 # 10. Настройка обновления после включения
-echo "[8] Настройка автообновления (hotplug)..."
+echo "[7] Настройка автообновления (hotplug)..."
 
 cat > /etc/hotplug.d/iface/99-xray-autoupdate << 'EOF'
 #!/bin/sh
@@ -320,9 +307,7 @@ chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
 echo "✓ hotplug настроен"
 
 # 11. Запуск и рестарт служб
-echo "[9] Запуск служб..."
-mkdir -p /usr/share/nftables.d/ruleset-post
-/etc/init.d/https-dns-proxy restart
+echo "[8] Запуск служб..."
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall restart
 /etc/init.d/xray start
