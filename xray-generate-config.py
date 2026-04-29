@@ -65,6 +65,10 @@ def base_config():
             "error": "/tmp/log/xray-error.log"
         },
         "dns": {
+            "hosts": {
+                "cloudflare-dns.com": "1.1.1.1",
+                "dns.google": "8.8.8.8"
+            },
             "queryStrategy": "UseIPv4",
             "enableParallelQuery": True,
             "disableCache": False,
