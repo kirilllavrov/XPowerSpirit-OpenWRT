@@ -373,7 +373,7 @@ update_geo() {
     echo "$REMOTE_SHA" > "$SHA_FILE"
 
     echo "→ $BASE загружен и проверен" >> "$LOG_FILE"
-    echo "→ $BASE - ✅"
+    echo "$BASE - ✅"
 }
 
 # Вызовы
