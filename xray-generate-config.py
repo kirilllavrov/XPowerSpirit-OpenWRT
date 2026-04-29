@@ -115,8 +115,7 @@ def build_rules(chosen_tag):
             "geosite:category-mobile",
             "geosite:category-ru"
         ], "outboundTag": "direct"},
-        {"type": "field", "domain": ["geosite:category-streaming", "geosite:category-games"], "outboundTag": chosen_tag},
-        {"type": "field", "network": "tcp,udp", "outboundTag": chosen_tag}
+        {"type": "field", "domain": ["geosite:category-streaming", "geosite:category-games"], "outboundTag": chosen_tag}
     ]
 
 def main():
@@ -153,7 +152,7 @@ def main():
             {"protocol": "blackhole", "tag": "block"}
         ]
         cfg["routing"] = {
-            "domainStrategy": "ForceIPv4",
+            "domainStrategy": "IPIfNonMatch",
             "rules": build_rules(chosen_tag)
         }
         print(f"✅ Выбран сервер: {chosen_tag}", file=sys.stderr)
