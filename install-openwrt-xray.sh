@@ -7,6 +7,7 @@ exec 1> >(tee -a "$LOG_FILE")
 exec 2>&1
 
 echo "=== Установка Xray TProxy ==="
+echo "  "
 [ "$(id -u)" != "0" ] && { echo "Запускать нужно от root"; exit 1; }
 
 REPO="https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main"
@@ -24,13 +25,13 @@ STATE_DIR="/etc/xray/state"
 mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$CONFIG_DIR" "$GEO_DIR" "$STATE_DIR"
 
 # 1. Устанавливаем Timezone
-echo "1️⃣ Устанавливаем Timezone:"
+echo "1. Устанавливаем Timezone:"
 uci set system.@system[0].zonename='Europe/Moscow'
 uci commit system
 echo "✅"
 
 # 2. Подписка
-echo "2️⃣ Сохраняем подписку:"
+echo "2. Сохраняем подписку:"
 printf "Введите URL подписки VLESS: "
 read SUB_URL
 [ -z "$SUB_URL" ] && { echo "Ошибка: пустой URL"; exit 1; }
@@ -40,7 +41,7 @@ chmod 600 "$SUB_FILE"
 echo "✅"
 
 # 3. Установка Xray из GitHub (с .dgst + SHA2-256)
-echo "3️⃣ Устанавливаем Xray из GitHub:"
+echo "3. Устанавливаем Xray из GitHub:"
 
 LATEST_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest \
     | grep '"tag_name"' | cut -d '"' -f 4)
@@ -114,7 +115,7 @@ chmod 755 /usr/bin/xray
 rm -rf "$TMP_DIR"
 echo "✅ Xray установлен версии $LATEST_VERSION"
 
-echo "4️⃣ Загружаем скрипты из репозитория:"
+echo "4. Загружаем скрипты из репозитория:"
 
 download() {
     local url="$1"
@@ -146,7 +147,7 @@ echo "✅"
 
 
 # 5. Настройка dnsmasq и DoH
-echo "5️⃣ Настраиваем DNS (dnsmasq):"
+echo "5. Настраиваем DNS (dnsmasq):"
 
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci -q delete dhcp.@dnsmasq[0].server
@@ -157,7 +158,7 @@ uci commit dhcp
 echo "✅"
 
 # 6. Создаём единый init‑скрипт Xray
-echo "6️⃣ Создаём init.d для Xray:"
+echo "6. Создаём init.d для Xray:"
 
 cat > /etc/init.d/xray << 'XRAYEOF'
 #!/bin/sh /etc/rc.common
@@ -301,12 +302,12 @@ chmod +x /etc/init.d/xray
 echo "✅"
 
 # 7. Policy routing
-echo "7️⃣ Настраиваем routing:"
+echo "7. Настраиваем routing:"
 grep -q "100 xray" /etc/iproute2/rt_tables || echo "100 xray" >> /etc/iproute2/rt_tables
 echo "✅"
 
 # 8. sysctl
-echo "8️⃣ Настраиваем sysctl:"
+echo "8. Настраиваем sysctl:"
 sysctl -w net.ipv4.conf.all.route_localnet=1
 sysctl -w net.ipv4.ip_forward=1
 grep -q route_localnet /etc/sysctl.conf || echo "net.ipv4.conf.all.route_localnet=1" >> /etc/sysctl.conf
@@ -314,7 +315,7 @@ grep -q ip_forward /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysc
 echo "✅"
 
 # 9. Geo + HWID + config.json
-echo "9️⃣ Скачиваем геофайлы, делаем HWID, генерируем config.json"
+echo "9. Скачиваем геофайлы, делаем HWID, генерируем config.json"
 
 update_geo() {
     local URL="$1"      # https://cdn.jsdelivr.net/.../geoip.dat
@@ -332,7 +333,7 @@ update_geo() {
     REMOTE_SHA="$(cut -d' ' -f1 "$TMP_SHA")"
 
     if [ -z "$REMOTE_SHA" ]; then
-        echo "🚫 Не удалось получить SHA256 для $BASE" >> "$LOG"
+        echo "🚫 Не удалось получить SHA256 для $BASE" >> "$LOG_FILE"
         exit 1
     fi
 
@@ -344,9 +345,9 @@ update_geo() {
 
     # 4. Проверяем совпадение
     if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-        echo "🚫 SHA mismatch $BASE" >> "$LOG"
-        echo "expected: $REMOTE_SHA" >> "$LOG"
-        echo "actual:   $LOCAL_SHA" >> "$LOG"
+        echo "🚫 SHA mismatch $BASE" >> "$LOG_FILE"
+        echo "expected: $REMOTE_SHA" >> "$LOG_FILE"
+        echo "actual:   $LOCAL_SHA" >> "$LOG_FILE"
         rm -f "$TMP" "$TMP_SHA"
         exit 1
     fi
@@ -357,7 +358,7 @@ update_geo() {
     # 6. Сохраняем SHA в state (для будущих обновлений)
     echo "$REMOTE_SHA" > "$SHA_FILE"
 
-    echo "✅ $BASE загружен и проверен" >> "$LOG"
+    echo "✅ $BASE загружен и проверен" >> "$LOG_FILE"
 }
 
 # Вызовы
@@ -384,7 +385,7 @@ fi
 echo "✅"
 
 # 10. Cron: автообновление в 2.30 ночи
-echo "🔟 Настройка Crontab:"
+echo "10. Настройка Crontab:"
 CRON_ENTRY="30 2 * * * $UPDATER"
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
     (crontab -l 2>/dev/null; echo "$CRON_ENTRY") | crontab -
@@ -394,7 +395,7 @@ else
 fi
 
 # 11. Настройка обновления после включения
-echo "1️⃣1️⃣ Настройка hotplug:"
+echo "11. Настройка hotplug:"
 
 cat > /etc/hotplug.d/iface/99-xray-autoupdate << 'EOF'
 #!/bin/sh
@@ -414,7 +415,7 @@ chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
 echo "✅ hotplug настроен"
 
 # 12. Запуск и рестарт служб
-echo "1️⃣2️⃣ Запускаем службы:"
+echo "12. Запускаем службы:"
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall restart
 /etc/init.d/xray start
