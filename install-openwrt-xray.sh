@@ -69,14 +69,14 @@ curl -s -L "${ZIP_URL}.dgst" -o "$DGST_FILE" || {
 REMOTE_SHA="$(extract_sha256 "$DGST_FILE")"
 [ -z "$REMOTE_SHA" ] && { echo "Ошибка: не удалось извлечь SHA2-256 из .dgst"; exit 1; }
 
-# === ПРОВЕРКА СВОБОДНОГО МЕСТА ===
+  # проверяем свободное место
 FREE_SPACE_TMP=$(df /tmp | awk 'NR==2 {print $4}')
 if [ "$FREE_SPACE_TMP" -lt 20480 ]; then
     echo "[ERR] Недостаточно места в /tmp (нужно минимум 20MB)" >> "$LOG"
     exit 1
 fi
 
-# если уже есть ZIP с таким же SHA — не качаем заново
+  # если уже есть ZIP с таким же SHA — не качаем заново
 if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ] && [ -f "$ZIP_DEST" ]; then
     echo "  → Найден локальный ZIP с тем же SHA, повторное скачивание не требуется"
 else
@@ -99,7 +99,7 @@ fi
 
 unzip -q "$ZIP_DEST" -d "$TMP_DIR"
 
-# Устанавливаем основной бинарник
+  # Устанавливаем основной бинарник
 cp "$TMP_DIR/xray" /usr/bin/xray
 chmod 755 /usr/bin/xray
 
@@ -138,7 +138,7 @@ uci commit dhcp
 
 echo "✓ dnsmasq настроен на DoH"
 
-# 6. Создаём единый init‑скрипт Xray
+# 5. Создаём единый init‑скрипт Xray
 echo "[4] Создаём единый init.d Xray..."
 
 cat > /etc/init.d/xray << 'XRAYEOF'
@@ -260,11 +260,11 @@ chmod +x /etc/init.d/xray
 /etc/init.d/xray enable
 echo "✓ init.d Xray установлен"
 
-# 7. Policy routing
+# 6. Policy routing
 grep -q "100 xray" /etc/iproute2/rt_tables || echo "100 xray" >> /etc/iproute2/rt_tables
 echo "✓ routing настроили"
 
-# 8. sysctl
+# 7. sysctl
 echo "[5] Настройка sysctl..."
 sysctl -w net.ipv4.conf.all.route_localnet=1
 sysctl -w net.ipv4.ip_forward=1
@@ -272,7 +272,7 @@ grep -q route_localnet /etc/sysctl.conf || echo "net.ipv4.conf.all.route_localne
 grep -q ip_forward /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 echo "✓ sysctl настроили"
 
-# 9. Geo + HWID + config.json
+# 8. Geo + HWID + config.json
 echo "[6] Генерация конфигурации..."
 curl -fsSL https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat -o "$GEO_DIR/geoip.dat"
 curl -fsSL https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat -o "$GEO_DIR/geosite.dat"
@@ -290,7 +290,7 @@ if [ ! -s "$CONFIG_JSON" ]; then
 fi
 echo "✓ Geo + HWID + config.json настроили"
 
-# 10. Cron: автообновление в 2.30 ночи
+# 9. Cron: автообновление в 2.30 ночи
 echo "[7] Настройка автообновления (cron)..."
 CRON_ENTRY="30 2 * * * $UPDATER"
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
@@ -300,7 +300,7 @@ else
     echo "  → Cron-задача уже существует, пропускаем"
 fi
 
-# 11. Настройка обновления после включения
+# 10. Настройка обновления после включения
 echo "[8] Настройка автообновления (hotplug)..."
 
 cat > /etc/hotplug.d/iface/99-xray-autoupdate << 'EOF'
@@ -320,7 +320,7 @@ EOF
 chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
 echo "✓ hotplug автообновление настроено"
 
-# 12. Запуск служб в правильном порядке
+# 11. Запуск служб в правильном порядке
 echo "[9] Запуск служб..."
 mkdir -p /usr/share/nftables.d/ruleset-post
 /etc/init.d/https-dns-proxy restart
