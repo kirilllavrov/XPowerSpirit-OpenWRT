@@ -153,15 +153,19 @@ extract_server_ips() {
 }
 
 setup_network() {
+    # Очистка старых правил
     while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
     ip route flush table 100 2>/dev/null
 
+    # Policy routing
     ip rule add fwmark 1 table 100
     ip route add local 0.0.0.0/0 dev lo table 100
 
+    # Bypass IPs
     local bypass_ips
     bypass_ips=$(extract_server_ips | tr '\n' ',' | sed 's/,$//')
 
+    # nftables
     nft delete table inet xray 2>/dev/null
 
     local nft_file="/tmp/xray.nft"
@@ -206,18 +210,22 @@ NFT
 }
 
 start_service() {
+    # Проверка geodata
     if [ ! -s "$ASSET_DIR/geoip.dat" ] || [ ! -s "$ASSET_DIR/geosite.dat" ]; then
         logger -t xray "Geo assets missing — run update-xray.sh"
         return 1
     fi
 
+    # Проверка валидности config.json
     if ! xray run -test -config "$CONF" >/dev/null 2>&1; then
         logger -t xray "Invalid config.json"
         return 1
     fi
 
+    # Настройка сети
     setup_network || return 1
 
+    # Запуск Xray через procd
     procd_open_instance "xray"
     procd_set_param command /usr/bin/xray run -config "$CONF"
     procd_set_param env XRAY_LOCATION_ASSET="$ASSET_DIR"
@@ -228,6 +236,20 @@ start_service() {
     procd_set_param limits nofile="1000000 1000000"
     procd_set_param file "$CONF"
     procd_close_instance
+
+    # --- ЗАЩИТА: если Xray не стартовал → отключить TProxy ---
+    sleep 1
+    if ! pidof xray >/dev/null; then
+        logger -t xray "Xray failed to start — disabling TProxy"
+
+        nft delete table inet xray 2>/dev/null
+        while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
+        ip route flush table 100 2>/dev/null
+
+        return 1
+    fi
+
+    logger -t xray "Xray started successfully"
 }
 
 stop_service() {
@@ -236,6 +258,7 @@ stop_service() {
     ip route flush table 100 2>/dev/null
     logger -t xray "Stopped, network cleaned"
 }
+
 
 service_triggers() {
     procd_add_reload_trigger "xray"
