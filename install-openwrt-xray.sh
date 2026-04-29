@@ -317,15 +317,17 @@ echo "✅"
 echo "9️⃣ Скачиваем геофайлы, делаем HWID, генерируем config.json"
 
 download_geo() {
-    local name="$1"
-    local url_data="$2"
-    local url_sha="$3"
-    local dst="$4"
+    local url_data="$1"
+    local url_sha="$2"
+    local dst="$3"
 
-    local tmp="/tmp/$name.tmp"
-    local tmp_sha="/tmp/$name.sha256"
+    local base
+    base="$(basename "$dst")"
 
-    echo "→ Скачиваем $name"
+    local tmp="/tmp/$base.tmp"
+    local tmp_sha="/tmp/$base.sha256"
+
+    echo "→ Скачиваем $base"
 
     # 1. Скачиваем файл и sha256
     curl -fsSL "$url_data" -o "$tmp"
@@ -333,14 +335,14 @@ download_geo() {
 
     # 2. Проверяем, что файлы не пустые
     if [ ! -s "$tmp" ] || [ ! -s "$tmp_sha" ]; then
-        echo "❌ Ошибка: $name или его sha256 пустые"
+        echo "❌ Ошибка: $url_data или его sha256 пустые"
         rm -f "$tmp" "$tmp_sha"
         exit 1
     fi
 
     # 3. Проверяем SHA256
     if ! sha256sum -c "$tmp_sha" --status; then
-        echo "❌ Ошибка: контрольная сумма $name не совпадает"
+        echo "❌ Ошибка: контрольная сумма $base не совпадает"
         rm -f "$tmp" "$tmp_sha"
         exit 1
     fi
@@ -349,14 +351,18 @@ download_geo() {
     mv "$tmp" "$dst"
     rm -f "$tmp_sha"
 
-    echo "✅ $name обновлён"
+    echo "✅ $base обновлён"
 }
 
-download_geo "https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat" \
-             "$GEO_DIR/geoip.dat"
+download_geo \
+  "https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat" \
+  "https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat.sha256sum" \
+  "$GEO_DIR/geoip.dat"
 
-download_geo "https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat" \
-             "$GEO_DIR/geosite.dat"
+download_geo \
+  "https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat" \
+  "https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat.sha256sum" \
+  "$GEO_DIR/geosite.dat"
 
 HWID="$(hexdump -n 16 -v -e '/1 "%02x"' /dev/urandom)"
 echo "$HWID" > "$HWID_FILE"
