@@ -2,17 +2,10 @@
 import json
 import sys
 
-# -----------------------------
-# НАСТРОЙКИ
-# -----------------------------
 DOMAIN_WHITELIST = [
     "router.freenternet.top"
 ]
 
-
-# -----------------------------
-# ЗАГРУЗКА OUTBOUNDS
-# -----------------------------
 def load_outbounds():
     try:
         data = json.load(sys.stdin)
@@ -24,34 +17,46 @@ def load_outbounds():
         return []
     return []
 
-
-# -----------------------------
-# ВЫБОР ЛУЧШЕГО СЕРВЕРА
-# -----------------------------
 def extract_address(ob):
     try:
         return ob["settings"]["vnext"][0]["address"]
     except Exception:
         return None
 
+def extract_id(ob):
+    try:
+        return ob["settings"]["vnext"][0]["users"][0]["id"]
+    except Exception:
+        return None
+
+def is_placeholder(ob):
+    addr = extract_address(ob)
+    uid = extract_id(ob)
+    port = None
+    try:
+        port = ob["settings"]["vnext"][0]["port"]
+    except Exception:
+        pass
+    return (
+        uid == "00000000-0000-0000-0000-000000000000"
+        or addr in ["0.0.0.0", "127.0.0.1"]
+        or str(port) == "1"
+    )
 
 def choose_best_server(servers):
     if not servers:
         return None
-    if not isinstance(servers, list):
-        servers = [servers]
+    servers = [s for s in servers if not is_placeholder(s)]
+    if not servers:
+        return None
     if DOMAIN_WHITELIST:
         for ob in servers:
             addr = extract_address(ob)
             if addr in DOMAIN_WHITELIST:
                 return ob
         return servers[0]
-    return servers[0] if servers else None
+    return servers[0]
 
-
-# -----------------------------
-# БАЗОВАЯ КОНФИГУРАЦИЯ
-# -----------------------------
 def base_config():
     return {
         "log": {
@@ -94,43 +99,20 @@ def base_config():
         ]
     }
 
-
-# -----------------------------
-# ФОРМИРОВАНИЕ RULES
-# -----------------------------
 def build_rules(chosen_tag):
     return [
-        # 1. Блокировка рекламы
         {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},
-
-        # 2. Российский трафик — напрямую
-        {
-            "type": "field",
-            "domain": [
-                "geosite:private",
-                "geosite:category-browser",
-                "geosite:category-cdn-ru",
-                "geosite:category-mobile",
-                "geosite:category-ru"
-            ],
-            "outboundTag": "direct"
-        },
-
-        # 3. Streaming и игры — через прокси
-        {
-            "type": "field",
-            "domain": ["geosite:category-streaming", "geosite:category-games"],
-            "outboundTag": chosen_tag
-        },
-
-        # 4. Всё остальное — через прокси
+        {"type": "field", "domain": [
+            "geosite:private",
+            "geosite:category-browser",
+            "geosite:category-cdn-ru",
+            "geosite:category-mobile",
+            "geosite:category-ru"
+        ], "outboundTag": "direct"},
+        {"type": "field", "domain": ["geosite:category-streaming", "geosite:category-games"], "outboundTag": chosen_tag},
         {"type": "field", "network": "tcp,udp", "outboundTag": chosen_tag}
     ]
 
-
-# -----------------------------
-# MAIN
-# -----------------------------
 def main():
     if len(sys.argv) != 3 or sys.argv[1] != "--output":
         print("Usage: xray-generate-config.py --output <file>")
@@ -152,26 +134,18 @@ def main():
             "domainStrategy": "ForceIPv4",
             "rules": build_rules("direct")
         }
-        print("⚠️ Нет доступных серверов. Создан DIRECT-конфиг.", file=sys.stderr)
+        print("⚠️ Нет доступных серверов (только заглушки). Создан DIRECT-конфиг.", file=sys.stderr)
     else:
         chosen_tag = chosen.get("tag") or "proxy"
         if "tag" not in chosen:
             chosen["tag"] = chosen_tag
-
-        # Добавляем mark для исключения трафика Xray из tproxy
         ss = chosen.setdefault("streamSettings", {})
         ss.setdefault("sockopt", {})["mark"] = 255
-
         cfg["outbounds"] = [
             chosen,
-            {
-                "protocol": "freedom",
-                "tag": "direct",
-                "streamSettings": {"sockopt": {"mark": 255}}
-            },
+            {"protocol": "freedom", "tag": "direct", "streamSettings": {"sockopt": {"mark": 255}}},
             {"protocol": "blackhole", "tag": "block"}
         ]
-
         cfg["routing"] = {
             "domainStrategy": "ForceIPv4",
             "rules": build_rules(chosen_tag)
@@ -182,7 +156,6 @@ def main():
         json.dump(cfg, f, indent=2, ensure_ascii=False)
 
     print(f"📁 Конфиг сохранён: {output_path}", file=sys.stderr)
-
 
 if __name__ == "__main__":
     main()
