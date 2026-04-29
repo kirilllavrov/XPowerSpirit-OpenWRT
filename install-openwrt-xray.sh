@@ -6,7 +6,7 @@ LOG_FILE="/tmp/xray_install.log"
 exec 1> >(tee -a "$LOG_FILE")
 exec 2>&1
 
-echo "=== Установка Xray TProxy (финальная версия) ==="
+echo "=== Установка Xray TProxy ==="
 [ "$(id -u)" != "0" ] && { echo "Запускать нужно от root"; exit 1; }
 
 REPO="https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main"
@@ -19,17 +19,28 @@ SUB_FILE="$CONFIG_DIR/subscription.url"
 HWID_FILE="$CONFIG_DIR/hwid"
 TMP_DIR="/tmp/xray_install"
 GEO_DIR="/usr/share/xray"
+STATE_DIR="/etc/xray/state"
 
-# 1. Подписка
+mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$CONFIG_DIR" "$GEO_DIR" "$STATE_DIR"
+
+# 1. Устанавливаем Timezone
+echo "1️⃣ Устанавливаем Timezone:"
+uci set system.@system[0].zonename='Europe/Moscow'
+uci commit system
+echo "✅"
+
+# 2. Подписка
+echo "2️⃣ Сохраняем подписку:"
 printf "Введите URL подписки VLESS: "
 read SUB_URL
 [ -z "$SUB_URL" ] && { echo "Ошибка: пустой URL"; exit 1; }
-mkdir -p "$CONFIG_DIR"
+
 echo "$SUB_URL" > "$SUB_FILE"
 chmod 600 "$SUB_FILE"
+echo "✅"
 
-# 2. Установка Xray из GitHub (с .dgst + SHA2-256)
-echo "[+] Устанавливаем Xray..."
+# 3. Установка Xray из GitHub (с .dgst + SHA2-256)
+echo "3️⃣ Устанавливаем Xray из GitHub:"
 
 LATEST_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest \
     | grep '"tag_name"' | cut -d '"' -f 4)
@@ -43,9 +54,6 @@ case "$ARCH" in
   armv7l) MACHINE="arm32-v7a" ;;
   *) MACHINE="64" ;;
 esac
-
-mkdir -p "$TMP_DIR" "$GEO_DIR" "$CONFIG_DIR" /etc/xray/state
-STATE_DIR="/etc/xray/state"
 
 ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/Xray-linux-${MACHINE}.zip"
 ZIP_DEST="$TMP_DIR/xray.zip"
@@ -104,18 +112,41 @@ cp "$TMP_DIR/xray" /usr/bin/xray
 chmod 755 /usr/bin/xray
 
 rm -rf "$TMP_DIR"
-echo "✅ Xray установлен (версия $LATEST_VERSION, SHA проверен)"
+echo "✅ Xray установлен версии $LATEST_VERSION"
 
-# 3. Скрипты
-echo "[1] Загрузка скриптов..."
-mkdir -p "$GEO_DIR"
-wget -q "$REPO/xray-generate-config.py" -O "$GENERATOR"; chmod +x "$GENERATOR"
-wget -q "$REPO/xray-sub-parser.py" -O "$PARSER"; chmod +x "$PARSER"
-wget -q "$REPO/update-xray.sh" -O "$UPDATER"; chmod +x "$UPDATER"
-echo "✅ Скрипты загружены"
+echo "4️⃣ Загружаем скрипты из репозитория:"
 
-# 4. Настройка dnsmasq и DoH
-echo "[2] Настройка DNS (dnsmasq)..."
+download() {
+    local url="$1"
+    local dst="$2"
+
+    wget -q "$url" -O "$dst"
+
+    # Проверка: файл существует и не пустой
+    if [ ! -s "$dst" ]; then
+        echo "❌ Ошибка: файл $dst не скачан или пустой"
+        exit 1
+    fi
+
+    # Проверка: не HTML-ошибка
+    if head -n 1 "$dst" | grep -qi "<html"; then
+        echo "❌ Ошибка: сервер вернул HTML вместо файла ($dst)"
+        exit 1
+    fi
+
+    chmod +x "$dst"
+    echo "✅ $dst"
+}
+
+download "$REPO/xray-generate-config.py" "$GENERATOR"
+download "$REPO/xray-sub-parser.py" "$PARSER"
+download "$REPO/update-xray.sh" "$UPDATER"
+
+echo "✅"
+
+
+# 5. Настройка dnsmasq и DoH
+echo "5️⃣ Настраиваем DNS (dnsmasq):"
 
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci -q delete dhcp.@dnsmasq[0].server
@@ -123,10 +154,10 @@ uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5053'
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5054'
 uci commit dhcp
 
-echo "✅ dnsmasq настроен"
+echo "✅"
 
-# 5. Создаём единый init‑скрипт Xray
-echo "[3] Создаём единый init.d Xray..."
+# 6. Создаём единый init‑скрипт Xray
+echo "6️⃣ Создаём init.d для Xray:"
 
 cat > /etc/init.d/xray << 'XRAYEOF'
 #!/bin/sh /etc/rc.common
@@ -237,7 +268,7 @@ start_service() {
     procd_set_param file "$CONF"
     procd_close_instance
 
-    # --- ЗАЩИТА: если Xray не стартовал → отключить TProxy ---
+    # Если Xray не стартовал → отключить TProxy
     sleep 1
     if ! pidof xray >/dev/null; then
         logger -t xray "Xray failed to start — disabling TProxy"
@@ -267,24 +298,65 @@ XRAYEOF
 
 chmod +x /etc/init.d/xray
 /etc/init.d/xray enable
-echo "✅ init.d Xray установлен"
+echo "✅"
 
-# 6. Policy routing
+# 7. Policy routing
+echo "7️⃣ Настраиваем routing:"
 grep -q "100 xray" /etc/iproute2/rt_tables || echo "100 xray" >> /etc/iproute2/rt_tables
-echo "✅ routing настроили"
+echo "✅"
 
-# 7. sysctl
-echo "[4] Настройка sysctl..."
+# 8. sysctl
+echo "8️⃣ Настраиваем sysctl:"
 sysctl -w net.ipv4.conf.all.route_localnet=1
 sysctl -w net.ipv4.ip_forward=1
 grep -q route_localnet /etc/sysctl.conf || echo "net.ipv4.conf.all.route_localnet=1" >> /etc/sysctl.conf
 grep -q ip_forward /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-echo "✅ sysctl настроили"
+echo "✅"
 
-# 8. Geo + HWID + config.json
-echo "[5] Скачиваем геофайлы, делаем HWID, генерируем config.json"
-curl -fsSL https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat -o "$GEO_DIR/geoip.dat"
-curl -fsSL https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat -o "$GEO_DIR/geosite.dat"
+# 9. Geo + HWID + config.json
+echo "9️⃣ Скачиваем геофайлы, делаем HWID, генерируем config.json"
+
+download_geo() {
+    local name="$1"
+    local url_data="$2"
+    local url_sha="$3"
+    local dst="$4"
+
+    local tmp="/tmp/$name.tmp"
+    local tmp_sha="/tmp/$name.sha256"
+
+    echo "→ Скачиваем $name"
+
+    # 1. Скачиваем файл и sha256
+    curl -fsSL "$url_data" -o "$tmp"
+    curl -fsSL "$url_sha"  -o "$tmp_sha"
+
+    # 2. Проверяем, что файлы не пустые
+    if [ ! -s "$tmp" ] || [ ! -s "$tmp_sha" ]; then
+        echo "❌ Ошибка: $name или его sha256 пустые"
+        rm -f "$tmp" "$tmp_sha"
+        exit 1
+    fi
+
+    # 3. Проверяем SHA256
+    if ! sha256sum -c "$tmp_sha" --status; then
+        echo "❌ Ошибка: контрольная сумма $name не совпадает"
+        rm -f "$tmp" "$tmp_sha"
+        exit 1
+    fi
+
+    # 4. Атомарная замена
+    mv "$tmp" "$dst"
+    rm -f "$tmp_sha"
+
+    echo "✅ $name обновлён"
+}
+
+download_geo "https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat" \
+             "$GEO_DIR/geoip.dat"
+
+download_geo "https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat" \
+             "$GEO_DIR/geosite.dat"
 
 HWID="$(hexdump -n 16 -v -e '/1 "%02x"' /dev/urandom)"
 echo "$HWID" > "$HWID_FILE"
@@ -297,20 +369,20 @@ if [ ! -s "$CONFIG_JSON" ]; then
     echo "Ошибка: не удалось создать config.json"
     exit 1
 fi
-echo "✅ Geo + HWID + config.json настроили"
+echo "✅"
 
-# 9. Cron: автообновление в 2.30 ночи
-echo "[6] Настройка автообновления (cron)..."
+# 10. Cron: автообновление в 2.30 ночи
+echo "🔟 Настройка Crontab:"
 CRON_ENTRY="30 2 * * * $UPDATER"
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
     (crontab -l 2>/dev/null; echo "$CRON_ENTRY") | crontab -
-    echo "  → Добавлено в crontab: $CRON_ENTRY"
+    echo "✅"
 else
-    echo "  → Cron-задача уже существует, пропускаем"
+    echo "❌ Cron-задача уже существует, пропускаем"
 fi
 
-# 10. Настройка обновления после включения
-echo "[7] Настройка автообновления (hotplug)..."
+# 11. Настройка обновления после включения
+echo "1️⃣1️⃣ Настройка hotplug:"
 
 cat > /etc/hotplug.d/iface/99-xray-autoupdate << 'EOF'
 #!/bin/sh
@@ -329,12 +401,12 @@ EOF
 chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
 echo "✅ hotplug настроен"
 
-# 11. Запуск и рестарт служб
-echo "[8] Запуск служб..."
+# 12. Запуск и рестарт служб
+echo "1️⃣2️⃣ Запускаем службы:"
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall restart
 /etc/init.d/xray start
-echo "✅ Перезапустили службы"
+echo "✅"
 
 sleep 3
 
