@@ -124,25 +124,35 @@ update_geo "$GEOIP_URL" "$GEOIP"
 update_geo "$GEOSITE_URL" "$GEOSITE"
 
 # Генерация config.json
+echo "→ Генерация config.json..." >> "$LOG"
+
 TMP_CONFIG="/tmp/xray-config.json"
-SUB_RAW="/tmp/xray-sub.raw"
+: > "$TMP_CONFIG"
 
-curl -H "Cache-Control: no-cache" -s -L -m 20 \
-    -H "User-Agent: Happ" \
-    -H "x-hwid: $HWID" \
-    "$SUB_URL" > "$SUB_RAW"
-
-grep -q "vless://" "$SUB_RAW" || { echo "[ERR] Подписка не содержит vless://" >> "$LOG"; exit 1; }
-
-cat "$SUB_RAW" \
+# Потоковая генерация с контролем ошибок
+if ! curl -s -L -m 20 \
+        -H "x-hwid: $HWID" \
+        "$SUB_URL" \
     | python3 "$PARSER" \
     | python3 "$GENERATOR" --output "$TMP_CONFIG"
+then
+    echo "[ERR] Ошибка при получении или разборе подписки" >> "$LOG"
+    exit 1
+fi
 
-[ -s "$TMP_CONFIG" ] || { echo "[ERR] Пустой config.json" >> "$LOG"; exit 1; }
+# Проверяем, что файл реально создан
+if [ ! -s "$TMP_CONFIG" ]; then
+    echo "[ERR] Не удалось создать config.json (файл пустой)" >> "$LOG"
+    exit 1
+fi
 
-xray run -test -config "$TMP_CONFIG" >/dev/null 2>&1 \
-    || { echo "[ERR] Новый config.json невалиден" >> "$LOG"; exit 1; }
+# Проверяем валидность
+if ! xray run -test -config "$TMP_CONFIG" >/dev/null 2>&1; then
+    echo "[ERR] Новый config.json невалиден" >> "$LOG"
+    exit 1
+fi
 
+# Атомарная замена
 mv "$TMP_CONFIG" "$CONFIG_JSON"
 echo "✓ Новый config.json установлен" >> "$LOG"
 
