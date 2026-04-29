@@ -331,13 +331,13 @@ echo "✓ Перезапустили службы"
 sleep 3
 
 if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
-    echo "[OK] Конфиг Xray валиден"
+    echo "[OK] Конфиг Xray прошел проверку"
 else
-    echo "[ERR] Конфиг НЕ валиден"
+    echo "[ERR] Конфиг Xray НЕ прошел проверку!"
     exit 1
 fi
 
-echo "Проверяем Xray process:"
+echo "Проверяем, запущен ли Xray:"
 if pgrep -a xray >/dev/null; then
     echo "✓ Xray запущен"
 else
