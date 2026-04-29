@@ -138,13 +138,6 @@ uci commit dhcp
 
 echo "✓ dnsmasq настроен на DoH"
 
-# 5. Удаляем старый сервис правил
-echo "[3] Удаляем старый сервис xray-tproxy-rules..."
-/etc/init.d/xray-tproxy-rules stop 2>/dev/null
-/etc/init.d/xray-tproxy-rules disable 2>/dev/null
-rm -f /etc/init.d/xray-tproxy-rules
-echo "✓ Старый сервис удалён"
-
 # 6. Создаём единый init‑скрипт Xray
 echo "[4] Создаём единый init.d Xray..."
 
