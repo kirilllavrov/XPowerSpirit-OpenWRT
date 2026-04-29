@@ -136,7 +136,7 @@ download() {
     fi
 
     chmod +x "$dst"
-    echo "✅ $dst"
+    echo "→ $dst"
 }
 
 download "$REPO/xray-generate-config.py" "$GENERATOR"
@@ -372,7 +372,7 @@ update_geo() {
     # 6. Сохраняем SHA в state (для будущих обновлений)
     echo "$REMOTE_SHA" > "$SHA_FILE"
 
-    echo "✅ $BASE загружен и проверен" >> "$LOG_FILE"
+    echo "→ $BASE загружен и проверен ✅" >> "$LOG_FILE"
 }
 
 # Вызовы
@@ -438,17 +438,17 @@ echo "✅"
 sleep 3
 
 if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
-    echo "✅ Конфиг Xray прошел проверку"
+    echo "Конфиг Xray прошел проверку - ✅"
 else
-    echo "🚫 Конфиг Xray НЕ прошел проверку!"
+    echo " Конфиг Xray НЕ прошел проверку! - 🚫"
     exit 1
 fi
 
 echo "Проверяем, запущен ли Xray:"
 if pgrep -a xray >/dev/null; then
-    echo "✅ Xray запущен"
+    echo "Xray запущен - ✅"
 else
-    echo "🚫 Xray НЕ запущен"
+    echo "Xray НЕ запущен - 🚫"
 fi
 
 echo ""
