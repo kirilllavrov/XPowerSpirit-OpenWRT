@@ -301,17 +301,31 @@ chmod +x /etc/init.d/xray
 /etc/init.d/xray enable
 echo "✅"
 
-# 7. Policy routing
 echo "7. Настраиваем routing:"
-grep -q "100 xray" /etc/iproute2/rt_tables || echo "100 xray" >> /etc/iproute2/rt_tables
+
+if ! grep -q "^100[[:space:]]\+xray$" /etc/iproute2/rt_tables; then
+    echo "100 xray" >> /etc/iproute2/rt_tables
+fi
+
 echo "✅"
 
-# 8. sysctl
+# 8. Настраиваем sysctl
 echo "8. Настраиваем sysctl:"
+
+# Применяем немедленно
 sysctl -w net.ipv4.conf.all.route_localnet=1
 sysctl -w net.ipv4.ip_forward=1
-grep -q route_localnet /etc/sysctl.conf || echo "net.ipv4.conf.all.route_localnet=1" >> /etc/sysctl.conf
-grep -q ip_forward /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+
+# Создаём постоянный конфиг
+SYSCTL_FILE="/etc/sysctl.d/99-xray.conf"
+
+if [ ! -f "$SYSCTL_FILE" ]; then
+    cat > "$SYSCTL_FILE" << EOF
+net.ipv4.conf.all.route_localnet=1
+net.ipv4.ip_forward=1
+EOF
+fi
+
 echo "✅"
 
 # 9. Geo + HWID + config.json
