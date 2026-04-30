@@ -418,7 +418,7 @@ cat > /etc/hotplug.d/iface/99-xray-autoupdate << 'EOF'
 [ "$INTERFACE" = "wan" ] || exit 0
 
 for i in 1 2 3; do
-    sleep 5
+    sleep 10
     if ping -c1 -W1 1.1.1.1 >/dev/null 2>&1; then
         /usr/share/xray/update-xray.sh &
         exit 0
