@@ -418,8 +418,8 @@ cat > /etc/hotplug.d/iface/99-xray-autoupdate << 'EOF'
 [ "$INTERFACE" = "wan" ] || exit 0
 
 for i in 1 2 3; do
-    sleep 10
-    if ping -c1 -W1 1.1.1.1 >/dev/null 2>&1; then
+    sleep 8
+    if curl -fs --max-time 3 https://www.google.com/gen_204 >/dev/null; then
         /usr/share/xray/update-xray.sh &
         exit 0
     fi
