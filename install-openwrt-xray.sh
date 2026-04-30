@@ -417,8 +417,8 @@ cat > /etc/hotplug.d/iface/99-xray-autoupdate << 'EOF'
 [ "$ACTION" = "ifup" ] || exit 0
 [ "$INTERFACE" = "wan" ] || exit 0
 
-for i in 1 2 3; do
-    sleep 8
+for i in 1 2 3 4 5 6 7 8; do
+    sleep 5
     if curl -fs --max-time 3 https://www.google.com/gen_204 >/dev/null; then
         /usr/share/xray/update-xray.sh &
         exit 0
