@@ -60,7 +60,7 @@ def choose_best_server(servers):
 def base_config():
     return {
         "log": {
-            "loglevel": "debug",
+            "loglevel": "warning",
             "access": "/tmp/log/xray-access.log",
             "error": "/tmp/log/xray-error.log"
         },
