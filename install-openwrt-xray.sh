@@ -27,6 +27,7 @@ mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR"
 # 1. Устанавливаем Timezone
 echo "1. Устанавливаем Timezone:"
 uci set system.@system[0].zonename='Europe/Moscow'
+uci set system.@system[0].timezone='MSK-3'
 uci commit system
 echo "✅"
 
