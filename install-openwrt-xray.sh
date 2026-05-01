@@ -3,7 +3,7 @@
 
 # логируем установку
 LOG_FILE="/tmp/xray_install.log"
-exec 1> >(tee -a "$LOG_FILE")
+exec 1> >(tee -a "$LOG_FILE_FILE")
 exec 2>&1
 
 echo "=== Установка Xray TProxy ==="
@@ -14,6 +14,7 @@ REPO="https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main"
 GENERATOR="/usr/share/xray/xray-generate-config.py"
 PARSER="/usr/share/xray/xray-sub-parser.py"
 UPDATER="/usr/share/xray/update-xray.sh"
+NFT_UPDATER="/usr/share/xray/update-nft.sh"
 CONFIG_DIR="/etc/xray"
 CONFIG_JSON="$CONFIG_DIR/config.json"
 SUB_FILE="$CONFIG_DIR/subscription.url"
@@ -79,14 +80,14 @@ curl -s -L "${ZIP_URL}.dgst" -o "$DGST_FILE" || {
 REMOTE_SHA="$(extract_sha256 "$DGST_FILE")"
 [ -z "$REMOTE_SHA" ] && { echo "Ошибка: не удалось извлечь SHA2-256 из .dgst"; exit 1; }
 
-  # проверяем свободное место
+# проверяем свободное место
 FREE_SPACE_TMP=$(df /tmp | awk 'NR==2 {print $4}')
 if [ "$FREE_SPACE_TMP" -lt 20480 ]; then
-    echo "[ERR] Недостаточно места в /tmp (нужно минимум 20MB)" >> "$LOG"
+    echo "[ERR] Недостаточно места в /tmp (нужно минимум 20MB)" >> "$LOG_FILE"
     exit 1
 fi
 
-  # если уже есть ZIP с таким же SHA — не качаем заново
+# если уже есть ZIP с таким же SHA — не качаем заново
 if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ] && [ -f "$ZIP_DEST" ]; then
     echo "  → Найден локальный ZIP с тем же SHA, повторное скачивание не требуется"
 else
@@ -109,7 +110,7 @@ fi
 
 unzip -q "$ZIP_DEST" -d "$TMP_DIR"
 
-  # Устанавливаем основной бинарник
+# Устанавливаем основной бинарник
 cp "$TMP_DIR/xray" /usr/bin/xray
 chmod 755 /usr/bin/xray
 
@@ -143,6 +144,7 @@ download() {
 download "$REPO/xray-generate-config.py" "$GENERATOR"
 download "$REPO/xray-sub-parser.py" "$PARSER"
 download "$REPO/update-xray.sh" "$UPDATER"
+download "$REPO/update-nft.sh" "$NFT_UPDATER"
 
 echo "✅"
 
@@ -158,7 +160,6 @@ uci commit dhcp
 
 echo "✅"
 
-# 6. Создаём единый init‑скрипт Xray
 echo "6. Создаём init.d для Xray:"
 
 cat > /etc/init.d/xray << 'XRAYEOF'
@@ -170,77 +171,6 @@ STOP=10
 
 CONF="/etc/xray/config.json"
 ASSET_DIR="/usr/share/xray"
-
-LAN_IF="br-lan"
-if ! ip link show br-lan >/dev/null 2>&1; then
-    LAN_IF="$(uci show network | grep "=interface" | grep -v 'wan\|loopback' | head -1 | cut -d. -f2)"
-    [ -z "$LAN_IF" ] && LAN_IF="br-lan"
-    logger -t xray "LAN интерфейс auto-detected: $LAN_IF"
-fi
-
-extract_server_ips() {
-    grep -o '"address"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONF" 2>/dev/null \
-        | sed 's/.*"\([^"]*\)"$/\1/' \
-        | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' \
-        | sort -u
-}
-
-setup_network() {
-    # Очистка старых правил
-    while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
-    ip route flush table 100 2>/dev/null
-
-    # Policy routing
-    ip rule add fwmark 1 table 100
-    ip route add local 0.0.0.0/0 dev lo table 100
-
-    # Bypass IPs
-    local bypass_ips
-    bypass_ips=$(extract_server_ips | tr '\n' ',' | sed 's/,$//')
-
-    # nftables
-    nft delete table inet xray 2>/dev/null
-
-    local nft_file="/tmp/xray.nft"
-    cat > "$nft_file" << NFT
-table inet xray {
-    chain prerouting {
-        type filter hook prerouting priority mangle; policy accept;
-
-        ip daddr {
-            127.0.0.0/8,
-            10.0.0.0/8,
-            172.16.0.0/12,
-            192.168.0.0/16,
-            169.254.0.0/16,
-            224.0.0.0/4,
-            240.0.0.0/4
-        } return;
-
-        meta mark 0xff return;
-NFT
-
-    [ -n "$bypass_ips" ] && \
-        echo "        ip daddr { $bypass_ips } return;" >> "$nft_file"
-
-    cat >> "$nft_file" << NFT
-        udp dport { 67, 68 } return;
-
-        iifname "$LAN_IF" meta l4proto { tcp, udp } \
-            tproxy ip to 127.0.0.1:12345 meta mark set 1 accept;
-    }
-}
-NFT
-
-    nft -f "$nft_file" || {
-        logger -t xray "nftables apply failed"
-        rm -f "$nft_file"
-        return 1
-    }
-
-    rm -f "$nft_file"
-    logger -t xray "Network ready (bypass: ${bypass_ips:-none})"
-}
 
 start_service() {
     # Проверка geodata
@@ -255,8 +185,8 @@ start_service() {
         return 1
     fi
 
-    # Настройка сети
-    setup_network || return 1
+    # Настройка сети через отдельный скрипт
+    /usr/share/xray/update-nft.sh || return 1
 
     # Запуск Xray через procd
     procd_open_instance "xray"
@@ -274,11 +204,9 @@ start_service() {
     sleep 1
     if ! pidof xray >/dev/null; then
         logger -t xray "Xray failed to start — disabling TProxy"
-
         nft delete table inet xray 2>/dev/null
         while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
         ip route flush table 100 2>/dev/null
-
         return 1
     fi
 
@@ -292,7 +220,6 @@ stop_service() {
     logger -t xray "Stopped, network cleaned"
 }
 
-
 service_triggers() {
     procd_add_reload_trigger "xray"
 }
@@ -301,6 +228,7 @@ XRAYEOF
 chmod +x /etc/init.d/xray
 /etc/init.d/xray enable
 echo "✅"
+
 
 echo "7. Настраиваем routing:"
 
@@ -320,12 +248,11 @@ sysctl -w net.ipv4.ip_forward=1
 # Создаём постоянный конфиг
 SYSCTL_FILE="/etc/sysctl.d/99-xray.conf"
 
-if [ ! -f "$SYSCTL_FILE" ]; then
-    cat > "$SYSCTL_FILE" << EOF
+cat > "/etc/sysctl.d/99-xray.conf" << EOF
 net.ipv4.conf.all.route_localnet=1
 net.ipv4.ip_forward=1
 EOF
-fi
+sysctl -p /etc/sysctl.d/99-xray.conf >/dev/null 2>&1
 
 echo "✅"
 
@@ -348,7 +275,7 @@ update_geo() {
     REMOTE_SHA="$(cut -d' ' -f1 "$TMP_SHA")"
 
     if [ -z "$REMOTE_SHA" ]; then
-        echo "🚫 Не удалось получить SHA256 для $BASE" >> "$LOG_FILE"
+        echo "🚫 Не удалось получить SHA256 для $BASE" >> "$LOG_FILE_FILE"
         exit 1
     fi
 
@@ -360,9 +287,9 @@ update_geo() {
 
     # Проверяем совпадение
     if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-        echo "🚫 SHA mismatch $BASE" >> "$LOG_FILE"
-        echo "expected: $REMOTE_SHA" >> "$LOG_FILE"
-        echo "actual:   $LOCAL_SHA" >> "$LOG_FILE"
+        echo "🚫 SHA mismatch $BASE" >> "$LOG_FILE_FILE"
+        echo "expected: $REMOTE_SHA" >> "$LOG_FILE_FILE"
+        echo "actual:   $LOCAL_SHA" >> "$LOG_FILE_FILE"
         rm -f "$TMP" "$TMP_SHA"
         exit 1
     fi
@@ -373,7 +300,7 @@ update_geo() {
     # Сохраняем SHA в state (для будущих обновлений)
     echo "$REMOTE_SHA" > "$SHA_FILE"
 
-    echo "→ $BASE загружен и проверен" >> "$LOG_FILE"
+    echo "→ $BASE загружен и проверен" >> "$LOG_FILE_FILE"
     echo "$BASE - ✅"
 }
 
@@ -404,7 +331,7 @@ echo "✅"
 echo "10. Настройка Crontab:"
 CRON_ENTRY="30 2 * * * $UPDATER"
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
-    (crontab -l 2>/dev/null; echo "$CRON_ENTRY") | crontab -
+    (crontab -l 2>/dev/null || true; echo "$CRON_ENTRY") | crontab -
     echo "✅"
 else
     echo "❌ Cron-задача уже существует, пропускаем"

@@ -175,6 +175,16 @@ if ! xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
 fi
 
 # ============================
+#   Пересборка nftables правил
+# ============================
+
+/usr/share/xray/update-nft.sh >> "$LOG" 2>&1 || {
+    echo "🚫 Ошибка при обновлении nftables" >> "$LOG"
+    /etc/init.d/xray stop
+    exit 1
+}
+
+# ============================
 #   Перезапуск Xray
 # ============================
 

@@ -60,7 +60,7 @@ def choose_best_server(servers):
 def base_config():
     return {
         "log": {
-            "loglevel": "debug",
+            "loglevel": "warning",
             "access": "/tmp/log/xray-access.log",
             "error": "/tmp/log/xray-error.log"
         },
@@ -135,7 +135,7 @@ def base_config():
 
 def build_rules(chosen_tag):
     return [
-        {"type": "field", "inboundTag": ["dns-in", "dns-in-udp"], "outboundTag": "direct"},
+        {"type": "field", "inboundTag": ["dns-in", "dns-in-alt"], "outboundTag": "direct"},
 
 #        {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},
 
