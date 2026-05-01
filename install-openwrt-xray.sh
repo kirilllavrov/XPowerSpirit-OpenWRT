@@ -3,7 +3,7 @@
 
 # логируем установку
 LOG_FILE="/tmp/xray_install.log"
-exec 1> >(tee -a "$LOG_FILE_FILE")
+exec 1> >(tee -a "$LOG_FILE")
 exec 2>&1
 
 echo "=== Установка Xray TProxy ==="
@@ -275,7 +275,7 @@ update_geo() {
     REMOTE_SHA="$(cut -d' ' -f1 "$TMP_SHA")"
 
     if [ -z "$REMOTE_SHA" ]; then
-        echo "🚫 Не удалось получить SHA256 для $BASE" >> "$LOG_FILE_FILE"
+        echo "🚫 Не удалось получить SHA256 для $BASE" >> "$LOG_FILE"
         exit 1
     fi
 
@@ -287,9 +287,9 @@ update_geo() {
 
     # Проверяем совпадение
     if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-        echo "🚫 SHA mismatch $BASE" >> "$LOG_FILE_FILE"
-        echo "expected: $REMOTE_SHA" >> "$LOG_FILE_FILE"
-        echo "actual:   $LOCAL_SHA" >> "$LOG_FILE_FILE"
+        echo "🚫 SHA mismatch $BASE" >> "$LOG_FILE"
+        echo "expected: $REMOTE_SHA" >> "$LOG_FILE"
+        echo "actual:   $LOCAL_SHA" >> "$LOG_FILE"
         rm -f "$TMP" "$TMP_SHA"
         exit 1
     fi
@@ -300,7 +300,7 @@ update_geo() {
     # Сохраняем SHA в state (для будущих обновлений)
     echo "$REMOTE_SHA" > "$SHA_FILE"
 
-    echo "→ $BASE загружен и проверен" >> "$LOG_FILE_FILE"
+    echo "→ $BASE загружен и проверен" >> "$LOG_FILE"
     echo "$BASE - ✅"
 }
 
