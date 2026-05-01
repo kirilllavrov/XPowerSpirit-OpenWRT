@@ -76,9 +76,13 @@ def base_config():
             "serveStale": True,
             "disableFallback": False,
             "servers": [
-                "https://cloudflare-dns.com/dns-query",
-                "https://dns.google/dns-query",
-                "https://dns.nextdns.io"
+                {"address": "https://cloudflare-dns.com/dns-query", "skipFallback": True},
+                {"address": "https://dns.google/dns-query", "skipFallback": True},
+                {
+                  "address": "https://dns.nextdns.io",
+                  "domains": ["geosite:category-ads"],  # резать рекламу на уровне DNS
+                  "skipFallback": True
+                }
             ]
         },
         "inbounds": [
@@ -102,19 +106,41 @@ def base_config():
                     "routeOnly": False,
                     "metadataOnly": False
                 }
+            },
+            {
+                "tag": "dns-in",
+                "listen": "127.0.0.1",
+                "port": 5053,
+                "protocol": "dokodemo-door",
+                "settings": {
+                    "address": "8.8.8.8",
+                    "port": 53,
+                    "network": "udp"
+                }
+            },
+            {
+                "tag": "dns-in-alt",
+                "listen": "127.0.0.1",
+                "port": 5054,
+                "protocol": "dokodemo-door",
+                "settings": {
+                    "address": "1.1.1.1",
+                    "port": 53,
+                    "network": "udp"
+                }
             }
         ]
     }
 
+
 def build_rules(chosen_tag):
     return [
-        # 1. Блокировка рекламы (по доменам)
-        {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},
-        
-        # 2. Прямое подключение для приватных и российских IP (важно: ДО доменных правил!)
+        {"type": "field", "inboundTag": ["dns-in", "dns-in-udp"], "outboundTag": "direct"},
+
+#        {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},
+
         {"type": "field", "ip": ["geoip:ru", "geoip:private"], "outboundTag": "direct"},
-        
-        # 3. Прямое подключение для российских/локальных доменов
+
         {"type": "field", "domain": [
             "geosite:private",
             "geosite:category-browser", 
@@ -122,14 +148,13 @@ def build_rules(chosen_tag):
             "geosite:category-mobile",
             "geosite:category-ru"
         ], "outboundTag": "direct"},
-        
-        # 4. Прокси для стриминга и игр
+
         {"type": "field", "domain": [
             "geosite:category-streaming", 
             "geosite:category-games"
         ], "outboundTag": chosen_tag},
         
-        # 5. ✅ Catch-all: ВСЁ остальное — в прокси (строго в конце!)
+        # Catch-all: ВСЁ остальное — в прокси (строго в конце!)
         {"type": "field", "network": "tcp,udp", "outboundTag": chosen_tag}
     ]
 

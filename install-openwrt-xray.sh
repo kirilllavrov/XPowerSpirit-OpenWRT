@@ -22,7 +22,7 @@ TMP_DIR="/tmp/xray_install"
 GEO_DIR="/usr/share/xray"
 STATE_DIR="/etc/xray/state"
 
-mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$CONFIG_DIR" "$GEO_DIR" "$STATE_DIR"
+mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR"
 
 # 1. Устанавливаем Timezone
 echo "1. Устанавливаем Timezone:"
