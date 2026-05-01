@@ -60,7 +60,7 @@ def choose_best_server(servers):
 def base_config():
     return {
         "log": {
-            "loglevel": "warning",
+            "loglevel": "debug",
             "access": "/tmp/log/xray-access.log",
             "error": "/tmp/log/xray-error.log"
         },
@@ -98,7 +98,9 @@ def base_config():
                 },
                 "sniffing": {
                     "enabled": True,
-                    "destOverride": ["http", "tls"]
+                    "destOverride": ["http", "tls", "quic"],
+                    "routeOnly": False,
+                    "metadataOnly": False
                 }
             }
         ]
@@ -106,30 +108,40 @@ def base_config():
 
 def build_rules(chosen_tag):
     return [
+        # 1. Блокировка рекламы (по доменам)
         {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},
+        
+        # 2. Прямое подключение для приватных и российских IP (важно: ДО доменных правил!)
         {"type": "field", "ip": ["geoip:ru", "geoip:private"], "outboundTag": "direct"},
+        
+        # 3. Прямое подключение для российских/локальных доменов
         {"type": "field", "domain": [
             "geosite:private",
-            "geosite:category-browser",
+            "geosite:category-browser", 
             "geosite:category-cdn-ru",
             "geosite:category-mobile",
             "geosite:category-ru"
         ], "outboundTag": "direct"},
-        {"type": "field", "domain": ["geosite:category-streaming", "geosite:category-games"], "outboundTag": chosen_tag}
+        
+        # 4. Прокси для стриминга и игр
+        {"type": "field", "domain": [
+            "geosite:category-streaming", 
+            "geosite:category-games"
+        ], "outboundTag": chosen_tag},
+        
+        # 5. ✅ Catch-all: ВСЁ остальное — в прокси (строго в конце!)
+        {"type": "field", "network": "tcp,udp", "outboundTag": chosen_tag}
     ]
 
 def main():
     if len(sys.argv) != 3 or sys.argv[1] != "--output":
         print("Usage: xray-generate-config.py --output <file>")
         sys.exit(1)
-
     output_path = sys.argv[2]
-
     all_obs = load_outbounds()
     chosen = choose_best_server(all_obs)
-
     cfg = base_config()
-
+    
     if chosen is None:
         cfg["outbounds"] = [
             {"protocol": "freedom", "tag": "direct"},
@@ -144,22 +156,35 @@ def main():
         chosen_tag = chosen.get("tag") or "proxy"
         if "tag" not in chosen:
             chosen["tag"] = chosen_tag
+        
+        # 🔧 sockopt оптимизации для proxy
         ss = chosen.setdefault("streamSettings", {})
-        ss.setdefault("sockopt", {})["mark"] = 255
+        sockopt = ss.setdefault("sockopt", {})
+        sockopt["mark"] = 255
+        sockopt["tcpKeepAliveInterval"] = 30
+        sockopt["tcpNoDelay"] = True
+        
+        chosen["mux"] = {"enabled": False}
+        
+        direct_sockopt = {
+            "mark": 255,
+            "tcpKeepAliveInterval": 30,
+            "tcpNoDelay": True
+        }
+        
         cfg["outbounds"] = [
             chosen,
-            {"protocol": "freedom", "tag": "direct", "streamSettings": {"sockopt": {"mark": 255}}},
+            {"protocol": "freedom", "tag": "direct", "streamSettings": {"sockopt": direct_sockopt}},
             {"protocol": "blackhole", "tag": "block"}
         ]
         cfg["routing"] = {
-            "domainStrategy": "IPIfNonMatch",
+            "domainStrategy": "IPOnDemand",
             "rules": build_rules(chosen_tag)
         }
         print(f"✅ Выбран сервер: {chosen_tag}", file=sys.stderr)
-
+    
     with open(output_path, "w") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
-
     print(f"📁 Конфиг сохранён: {output_path}", file=sys.stderr)
 
 if __name__ == "__main__":
