@@ -4,7 +4,6 @@
 set -e
 
 LOG="/tmp/log/xray-update.log"
-mkdir -p /tmp/log
 
 CONFIG_DIR="/etc/xray"
 SUB_FILE="$CONFIG_DIR/subscription.url"
@@ -132,36 +131,48 @@ update_geo "$GEOSITE_URL" "$GEOSITE"
 
 echo "→ Генерация config.json..." >> "$LOG"
 
-TMP_CONFIG="/tmp/xray-config.json"
-: > "$TMP_CONFIG"
+MAX_RETRIES=2
+TRY=1
 
-if ! curl -s -L -m 20 \
-        -H "x-hwid: $HWID" \
-        "$SUB_URL" \
-    | python3 "$PARSER" \
-    | python3 "$GENERATOR" --output "$TMP_CONFIG"
-then
-    echo "🚫 Ошибка при получении или разборе подписки — отключаем Xray" >> "$LOG"
+while [ $TRY -le $MAX_RETRIES ]; do
+    TMP_CONFIG="/tmp/xray-config.json"
+    : > "$TMP_CONFIG"
+
+    if curl -s -L -m 20 -H "x-hwid: $HWID" "$SUB_URL" \
+        | python3 "$PARSER" \
+        | python3 "$GENERATOR" --output "$TMP_CONFIG"; then
+
+        if [ ! -s "$TMP_CONFIG" ]; then
+            echo "🚫 Новый config.json пустой (попытка $TRY)" >> "$LOG"
+        elif ! xray run -test -config "$TMP_CONFIG" >/dev/null 2>&1; then
+            echo "🚫 Новый config.json невалиден (попытка $TRY)" >> "$LOG"
+        else
+            mv "$TMP_CONFIG" "$CONFIG_JSON"
+            echo "✅ Новый config.json установлен (попытка $TRY)" >> "$LOG"
+            break
+        fi
+    else
+        echo "🚫 Ошибка при получении или разборе подписки (попытка $TRY)" >> "$LOG"
+    fi
+
+    TRY=$((TRY+1))
+done
+
+if [ $TRY -gt $MAX_RETRIES ]; then
+    echo "🚫 Все попытки обновления неудачны — отключаем Xray" >> "$LOG"
     /etc/init.d/xray stop
     exit 0
 fi
 
-# === Если пустой config.json ===
-if [ ! -s "$TMP_CONFIG" ]; then
-    echo "🚫 Новый config.json пустой — отключаем Xray" >> "$LOG"
+# ============================
+#   Финальная проверка config.json
+# ============================
+
+if ! xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
+    echo "🚫 Итоговый config.json невалиден — отключаем Xray" >> "$LOG"
     /etc/init.d/xray stop
     exit 0
 fi
-
-# === Если невалидный config.json ===
-if ! xray run -test -config "$TMP_CONFIG" >/dev/null 2>&1; then
-    echo "🚫 Новый config.json невалиден — отключаем Xray" >> "$LOG"
-    /etc/init.d/xray stop
-    exit 0
-fi
-
-mv "$TMP_CONFIG" "$CONFIG_JSON"
-echo "✅ Новый config.json установлен" >> "$LOG"
 
 # ============================
 #   Перезапуск Xray
