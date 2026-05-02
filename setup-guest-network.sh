@@ -1,5 +1,5 @@
 #!/bin/sh
-# OpenWrt 25.12.x — Guest Wi-Fi Dual Band (один SSID)
+# OpenWrt 25.12.x — Guest Wi-Fi Dual Band (один SSID на 2.4 и 5 ГГц)
 
 LOG="/tmp/guest-setup.log"
 : > "$LOG"
@@ -7,9 +7,9 @@ exec > >(tee -a "$LOG") 2>&1
 
 echo "=== Guest Wi-Fi Dual Band (2.4 + 5 GHz) ==="
 
-[ "$(id -u)" != "0" ] && { echo "❌ root required"; exit 1; }
+[ "$(id -u)" != "0" ] && { echo "❌ Требуются права root"; exit 1; }
 
-# Настройки
+# ==================== НАСТРОЙКИ ====================
 GUEST_NET="guest"
 GUEST_SSID="${1:-Guest-WiFi}"
 GUEST_PASS="${2:-GuestSecure123!}"
@@ -17,14 +17,16 @@ GUEST_IP="192.168.2.1/24"
 
 MAIN_LAN_IP=$(uci get network.lan.ipaddr 2>/dev/null | cut -d/ -f1)
 [ -z "$MAIN_LAN_IP" ] && MAIN_LAN_IP="192.168.1.1"
+# ===================================================
 
-# Очистка всего старого
+# Полная очистка
 echo "Очистка старых гостевых секций..."
 uci -q delete network.${GUEST_NET}_dev
 uci -q delete network.$GUEST_NET
 
-uci show wireless | grep -E "guest|${GUEST_NET}" | cut -d. -f1-2 | sort -u | while read -r s; do
-    uci -q delete "$s"
+# Удаляем все секции, содержащие guest
+for section in $(uci show wireless | grep -oE '^wireless\.[^=]+' | grep -E 'guest|Guest' | cut -d. -f2); do
+    uci -q delete wireless.$section
 done
 
 # 1. Network
@@ -41,14 +43,14 @@ uci set network.$GUEST_NET.netmask="255.255.255.0"
 uci set network.$GUEST_NET.force_link="1"
 uci commit network
 
-# 2. Wireless — ДВА радио
-echo "Настройка Wi-Fi на двух радио..."
+# 2. Wireless — по одному iface на каждое радио
+echo "Настройка Wi-Fi..."
 WIFI_PASS=$( [ -f "/etc/guest-wifi-pass" ] && head -n1 /etc/guest-wifi-pass || echo "$GUEST_PASS" )
 
 for RADIO in $(uci show wireless | grep "=wifi-device" | cut -d. -f2); do
-    IFACE_NAME="${GUEST_NET}_${RADIO}"
+    IFACE_NAME="${GUEST_NET}_${RADIO}"   # guest_radio0, guest_radio1
 
-    uci set wireless.$IFACE_NAME="wifi-iface"        # ← КРИТИЧНО!
+    uci set wireless.$IFACE_NAME="wifi-iface"
     uci set wireless.$IFACE_NAME.device="$RADIO"
     uci set wireless.$IFACE_NAME.mode="ap"
     uci set wireless.$IFACE_NAME.network="$GUEST_NET"
@@ -59,7 +61,7 @@ for RADIO in $(uci show wireless | grep "=wifi-device" | cut -d. -f2); do
     uci set wireless.$IFACE_NAME.bridge_isolate="1"
     uci set wireless.$IFACE_NAME.disabled="0"
 
-    echo "✅ Создан интерфейс $IFACE_NAME на $RADIO"
+    echo "✅ Создан $IFACE_NAME на $RADIO"
 done
 
 uci commit wireless
@@ -91,6 +93,7 @@ uci set firewall.${GUEST_NET}_wan="forwarding"
 uci set firewall.${GUEST_NET}_wan.src="$GUEST_NET"
 uci set firewall.${GUEST_NET}_wan.dest="wan"
 
+# Блокировка LAN и роутера
 uci -q delete firewall.${GUEST_NET}_lan
 uci set firewall.${GUEST_NET}_lan="rule"
 uci set firewall.${GUEST_NET}_lan.name="Block-Guest-to-LAN"
@@ -105,6 +108,7 @@ uci set firewall.${GUEST_NET}_rtr.src="$GUEST_NET"
 uci set firewall.${GUEST_NET}_rtr.dest_ip="$MAIN_LAN_IP/32"
 uci set firewall.${GUEST_NET}_rtr.target="REJECT"
 
+# Разрешения
 uci -q delete firewall.${GUEST_NET}_dns
 uci set firewall.${GUEST_NET}_dns="rule"
 uci set firewall.${GUEST_NET}_dns.name="Allow-Guest-DNS"
@@ -124,7 +128,7 @@ uci set firewall.${GUEST_NET}_dhcp.target="ACCEPT"
 uci commit firewall
 
 # Применение
-echo "🔄 Применяем..."
+echo "🔄 Применяем конфигурацию..."
 service network restart
 sleep 2
 wifi reload
@@ -134,7 +138,9 @@ service firewall restart
 
 echo ""
 echo "=== Готово ==="
-echo "Проверь:"
+echo "SSID: $GUEST_SSID"
+echo ""
+echo "Проверь сейчас:"
 echo "   wifi status"
 echo "   iwinfo | grep -A5 \"$GUEST_SSID\""
-echo "   uci show wireless | grep guest"
+echo "   uci show wireless | grep '^wireless\.guest_'"
