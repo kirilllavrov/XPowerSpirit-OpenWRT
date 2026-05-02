@@ -10,28 +10,54 @@ echo "=== Настройка гостевой Wi-Fi сети ==="
 
 [ "$(id -u)" != "0" ] && { echo "❌ Требуются права root"; exit 1; }
 
-# === Переменные ===
-MAIN_LAN_IP=$(uci get network.lan.ipaddr 2>/dev/null | cut -d/ -f1)
-[ -z "$MAIN_LAN_IP" ] && MAIN_LAN_IP="192.168.1.1"
-
+# === Значения по умолчанию ===
 GUEST_NET="guest"
-GUEST_SSID="${1:-Guest-WiFi}"
-GUEST_PASS="${2:-GuestSecure123!}"
+GUEST_SSID="Guest-WiFi"
+GUEST_PASS="GuestSecure123!"
+DL_LIMIT="20000"   # Kbps
+UL_LIMIT="10000"   # Kbps
 GUEST_IP="192.168.2.1/24"
 
-# Валидация
+# === Парсер аргументов ===
+for arg in "$@"; do
+    case $arg in
+        --ssid=*)
+            GUEST_SSID="${arg#*=}"
+            ;;
+        --pass=*)
+            GUEST_PASS="${arg#*=}"
+            ;;
+        --dl=*)
+            DL_LIMIT="${arg#*=}"
+            ;;
+        --ul=*)
+            UL_LIMIT="${arg#*=}"
+            ;;
+        *)
+            echo "⚠️ Неизвестный аргумент: $arg"
+            ;;
+    esac
+done
+
+# === Валидация ===
 [ "${#GUEST_SSID}" -lt 1 ] || [ "${#GUEST_SSID}" -gt 32 ] && { echo "❌ SSID: 1-32 символа"; exit 1; }
 [ "${#GUEST_PASS}" -lt 8 ] || [ "${#GUEST_PASS}" -gt 63 ] && { echo "❌ Пароль: 8-63 символа"; exit 1; }
 
-get_password() {
-    [ -f "/etc/guest-wifi-pass" ] && [ -r "/etc/guest-wifi-pass" ] && head -n1 /etc/guest-wifi-pass || echo "$GUEST_PASS"
-}
+case "$DL_LIMIT" in ''|*[!0-9]*) echo "❌ DL_LIMIT должен быть числом"; exit 1;; esac
+case "$UL_LIMIT" in ''|*[!0-9]*) echo "❌ UL_LIMIT должен быть числом"; exit 1;; esac
 
-[ "$#" -gt 0 ] && echo "⚠️ Пароль в аргументах виден в ps. Рекомендуется использовать /etc/guest-wifi-pass"
+MAIN_LAN_IP=$(uci get network.lan.ipaddr 2>/dev/null | cut -d/ -f1)
+[ -z "$MAIN_LAN_IP" ] && MAIN_LAN_IP="192.168.1.1"
+
+# === Функция получения пароля ===
+get_password() {
+    [ -f "/etc/guest-wifi-pass" ] && [ -r "/etc/guest-wifi-pass" ] \
+        && head -n1 /etc/guest-wifi-pass || echo "$GUEST_PASS"
+}
 
 WIFI_PASS=$(get_password)
 
-# === 1. Network (bridge + interface) ===
+# === 1. Network ===
 echo "Настройка сети..."
 uci -q delete network.${GUEST_NET}_dev
 uci set network.${GUEST_NET}_dev="device"
@@ -50,9 +76,7 @@ uci commit network
 # === 2. Wireless (две частоты) ===
 echo "Настройка Wi-Fi..."
 
-# создаём гостевой SSID на всех wifi-device
 for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-device.*/\2/p'); do
-    # удалим старый iface с таким именем, если был
     uci -q delete wireless.${GUEST_NET}_${RADIO}
     uci set wireless.${GUEST_NET}_${RADIO}="wifi-iface"
     uci set wireless.${GUEST_NET}_${RADIO}.device="$RADIO"
@@ -81,7 +105,6 @@ uci commit dhcp
 # === 4. Firewall ===
 echo "Настройка Firewall..."
 
-# Зона guest
 uci -q delete firewall.$GUEST_NET
 uci set firewall.$GUEST_NET="zone"
 uci set firewall.$GUEST_NET.name="$GUEST_NET"
@@ -91,15 +114,13 @@ uci set firewall.$GUEST_NET.output="ACCEPT"
 uci set firewall.$GUEST_NET.forward="REJECT"
 uci set firewall.$GUEST_NET.masq="1"
 uci set firewall.$GUEST_NET.mtu_fix="1"
-uci set firewall.$GUEST_NET.isolate="1"   # изоляция на уровне зоны
+uci set firewall.$GUEST_NET.isolate="1"
 
-# Forwarding guest → wan
 uci -q delete firewall.${GUEST_NET}_wan
 uci set firewall.${GUEST_NET}_wan="forwarding"
 uci set firewall.${GUEST_NET}_wan.src="$GUEST_NET"
 uci set firewall.${GUEST_NET}_wan.dest="wan"
 
-# Блокировка доступа к LAN (на всякий случай, поверх forward=REJECT)
 uci -q delete firewall.${GUEST_NET}_lan
 uci set firewall.${GUEST_NET}_lan="rule"
 uci set firewall.${GUEST_NET}_lan.name="Block-${GUEST_NET}-to-lan"
@@ -107,7 +128,6 @@ uci set firewall.${GUEST_NET}_lan.src="$GUEST_NET"
 uci set firewall.${GUEST_NET}_lan.dest="lan"
 uci set firewall.${GUEST_NET}_lan.target="REJECT"
 
-# Блокировка доступа к самому роутеру (IPv4/IPv6, кроме DHCP/DNS)
 uci -q delete firewall.${GUEST_NET}_rtr
 uci set firewall.${GUEST_NET}_rtr="rule"
 uci set firewall.${GUEST_NET}_rtr.name="Block-${GUEST_NET}-to-router"
@@ -115,7 +135,6 @@ uci set firewall.${GUEST_NET}_rtr.src="$GUEST_NET"
 uci set firewall.${GUEST_NET}_rtr.dest="lan"
 uci set firewall.${GUEST_NET}_rtr.target="REJECT"
 
-# Разрешаем DHCP и DNS
 uci -q delete firewall.${GUEST_NET}_dns
 uci set firewall.${GUEST_NET}_dns="rule"
 uci set firewall.${GUEST_NET}_dns.name="Allow-${GUEST_NET}-DNS"
@@ -134,6 +153,18 @@ uci set firewall.${GUEST_NET}_dhcp.target="ACCEPT"
 
 uci commit firewall
 
+# === 4.1 Ограничение скорости (nft-qos) ===
+echo "Настройка ограничения скорости..."
+
+uci -q delete nft-qos.$GUEST_NET
+uci set nft-qos.$GUEST_NET="interface"
+uci set nft-qos.$GUEST_NET.name="br-${GUEST_NET}"
+uci set nft-qos.$GUEST_NET.download="$DL_LIMIT"
+uci set nft-qos.$GUEST_NET.upload="$UL_LIMIT"
+uci commit nft-qos
+
+/etc/init.d/nft-qos restart
+
 echo "✅ Конфигурация завершена"
 
 # === 5. Применение ===
@@ -145,10 +176,8 @@ sleep 3
 service dnsmasq restart
 service firewall restart
 
-# Обновление nftables для Xray (если есть)
 [ -x /usr/share/xray/update-nft.sh ] && /usr/share/xray/update-nft.sh && echo "✅ nftables обновлены"
 
-# === Финальная проверка ===
 echo ""
 echo "=== Результат ==="
 ip link show "br-${GUEST_NET}" >/dev/null 2>&1 && echo "✅ Мост br-${GUEST_NET} активен" || echo "⚠️ Мост не найден"
@@ -159,14 +188,13 @@ fi
 
 echo ""
 echo "📶 SSID     : $GUEST_SSID"
-echo "🔑 Пароль   : (в /etc/guest-wifi-pass или аргумент)"
-echo "🌐 IP       : ${GUEST_IP%%/*}"
+echo "🔑 Пароль   : (в /etc/guest-wifi-pass или аргументы)"
+echo "🚀 Лимиты   : DL=${DL_LIMIT} Kbps, UL=${UL_LIMIT} Kbps"
 echo "🛡️  Изоляция: Wi-Fi + firewall"
-echo "🚀 Трафик   : напрямую в WAN (минуя Xray)"
 echo "📝 Лог      : $LOG"
 
 echo ""
 echo "🧪 Тест:"
-echo "   curl ifconfig.me          # должен показать реальный внешний IP"
-echo "   ping 8.8.8.8              # интернет"
-echo "   ping $MAIN_LAN_IP         # должен быть заблокирован"
+echo "   curl ifconfig.me"
+echo "   ping 8.8.8.8"
+echo "   ping $MAIN_LAN_IP"
