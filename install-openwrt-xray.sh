@@ -193,7 +193,7 @@ uci commit dhcp
 
 echo "✅"
 
-# 7. Настройка dnsmasq и DoH
+# 7. Создаём init.d для Xray
 echo "7. Создаём init.d для Xray:"
 
 cat >/etc/init.d/xray <<'XRAYEOF'
