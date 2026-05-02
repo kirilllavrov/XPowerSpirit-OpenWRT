@@ -65,8 +65,8 @@ if [ -z "$EXISTING_WIFI" ]; then
     uci set "${WIFI_SEC}.ssid"="$GUEST_SSID"
     uci set "${WIFI_SEC}.encryption"='psk2+ccmp'
     uci set "${WIFI_SEC}.key"="$WIFI_PASS"
-    uci set "${WIFI_SEC}.isolate"='1'
-    uci set "${WIFI_SEC}.disabled"='0'
+    uci set "${WIFI_SEC}.isolate"=1
+    uci set "${WIFI_SEC}.disabled"=0
     echo "✅ Wi-Fi точка создана (секция: ${WIFI_SEC#wireless.}, SSID: $GUEST_SSID)"
 else
     uci set "${EXISTING_WIFI}.ssid"="$GUEST_SSID"
