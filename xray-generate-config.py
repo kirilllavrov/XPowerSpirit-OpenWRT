@@ -80,7 +80,7 @@ def base_config():
                 {"address": "https://dns.google/dns-query", "skipFallback": True},
                 {
                   "address": "https://dns.nextdns.io",
-                  "domains": ["geosite:category-ads"],  # резать рекламу на уровне DNS
+                  "domains": ["geosite:category-ads"],
                   "skipFallback": True
                 }
             ]
@@ -136,11 +136,7 @@ def base_config():
 def build_rules(chosen_tag):
     return [
         {"type": "field", "inboundTag": ["dns-in", "dns-in-alt"], "outboundTag": "direct"},
-
-#        {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},
-
         {"type": "field", "ip": ["geoip:ru", "geoip:private"], "outboundTag": "direct"},
-
         {"type": "field", "domain": [
             "geosite:private",
             "geosite:category-browser", 
@@ -148,13 +144,10 @@ def build_rules(chosen_tag):
             "geosite:category-mobile",
             "geosite:category-ru"
         ], "outboundTag": "direct"},
-
         {"type": "field", "domain": [
             "geosite:category-streaming", 
             "geosite:category-games"
         ], "outboundTag": chosen_tag},
-        
-        # Catch-all: ВСЁ остальное — в прокси (строго в конце!)
         {"type": "field", "network": "tcp,udp", "outboundTag": chosen_tag}
     ]
 
@@ -182,7 +175,6 @@ def main():
         if "tag" not in chosen:
             chosen["tag"] = chosen_tag
         
-        # 🔧 sockopt оптимизации для proxy
         ss = chosen.setdefault("streamSettings", {})
         sockopt = ss.setdefault("sockopt", {})
         sockopt["mark"] = 255
