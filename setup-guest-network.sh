@@ -1,150 +1,146 @@
 #!/bin/sh
-# OpenWrt 25.12.x — создаёт гостевую Wi-Fi сеть (Direct/Bypass Xray)
-# Трафик гостей идёт напрямую в WAN, минуя Xray/TProxy
+# OpenWrt 25.12.x — Guest Wi-Fi (по официальной документации)
+# Трафик гостей → WAN напрямую, минуя Xray/TProxy
 
 LOG="/tmp/guest-setup.log"
 : > "$LOG"
 exec > >(tee -a "$LOG") 2>&1
 
-echo "=== Настройка гостевой сети (Direct/Bypass Xray) для OpenWrt 25.12 ==="
+echo "=== Настройка гостевой сети (по docs.openwrt.org) ==="
 [ "$(id -u)" != "0" ] && { echo "❌ Требуются права root"; exit 1; }
 
-# Динамический IP роутера
 MAIN_LAN_IP=$(uci get network.lan.ipaddr 2>/dev/null | cut -d/ -f1)
 [ -z "$MAIN_LAN_IP" ] && MAIN_LAN_IP="192.168.1.1"
 
-# Параметры (можно переопределить аргументами)
 GUEST_SSID="${1:-Guest-WiFi}"
 GUEST_PASS="${2:-GuestSecure123!}"
 GUEST_NET="guest"
-GUEST_CIDR="192.168.2.1/24"
-DNS_SERVERS="1.1.1.1 8.8.8.8"
+GUEST_IP="192.168.2.1/24"  # CIDR
 
 # Валидация
 [ "${#GUEST_SSID}" -lt 1 ] || [ "${#GUEST_SSID}" -gt 32 ] && { echo "❌ SSID: 1-32 символа"; exit 1; }
 [ "${#GUEST_PASS}" -lt 8 ] || [ "${#GUEST_PASS}" -gt 63 ] && { echo "❌ Пароль: 8-63 символа"; exit 1; }
 
-# Безопасный пароль из файла
 get_password() {
     [ -f "/etc/guest-wifi-pass" ] && [ -r "/etc/guest-wifi-pass" ] && head -n1 /etc/guest-wifi-pass || echo "$GUEST_PASS"
 }
 [ "$#" -gt 0 ] && echo "⚠️ Пароль в аргументах виден в ps. Безопаснее: /etc/guest-wifi-pass"
 
-# 1. Сетевой интерфейс (CIDR, без device для WiFi)
-if ! uci get network."$GUEST_NET" >/dev/null 2>&1; then
-    uci set network."$GUEST_NET"=interface
-    uci set network."$GUEST_NET".proto='static'
-    uci set network."$GUEST_NET".ipaddr="$GUEST_CIDR"
-    uci set network."$GUEST_NET".dns="$DNS_SERVERS"
-    uci set network."$GUEST_NET".disabled='0'
-    uci commit network
-    echo "✅ Сеть '$GUEST_NET' создана ($GUEST_CIDR)"
-else
-    uci set network."$GUEST_NET".disabled='0'
-    uci commit network
-    echo "ℹ️ Сеть '$GUEST_NET' уже существует"
+# 1. СЕТЬ: создаём bridge-устройство + интерфейс (по официальной доке)
+if ! uci get network."${GUEST_NET}_dev" >/dev/null 2>&1; then
+    uci set network."${GUEST_NET}_dev"="device"
+    uci set network."${GUEST_NET}_dev".type="bridge"
+    uci set network."${GUEST_NET}_dev".name="br-${GUEST_NET}"
+    echo "✅ Создан bridge: br-${GUEST_NET}"
 fi
 
-# 2. Wi-Fi интерфейс — используем "uci add" для надёжности
+if ! uci get network."$GUEST_NET" >/dev/null 2>&1; then
+    uci set network."$GUEST_NET"="interface"
+    uci set network."$GUEST_NET".proto="static"
+    uci set network."$GUEST_NET".device="br-${GUEST_NET}"  # ← привязка к мосту!
+    uci set network."$GUEST_NET".ipaddr="$GUEST_IP"
+    uci set network."$GUEST_NET".dns="1.1.1.1 8.8.8.8"
+    uci set network."$GUEST_NET".disabled=0
+    echo "✅ Создан интерфейс: $GUEST_NET ($GUEST_IP)"
+else
+    uci set network."$GUEST_NET".disabled=0
+fi
+uci commit network
+
+# 2. WIRELESS: привязываем к сети "guest"
 RADIO=$(uci show wireless | grep -m1 "=wifi-device" | cut -d. -f2)
 [ -z "$RADIO" ] && { echo "❌ Wi-Fi радио не найдено"; exit 1; }
 
 WIFI_PASS=$(get_password)
 
-# Проверяем, есть ли уже гостевой wifi-iface по network=guest
-EXISTING_WIFI=$(uci show wireless | grep "\.network='${GUEST_NET}'$" | cut -d. -f1-2 | head -1)
+# Удаляем старое, если есть (для идемпотентности)
+uci -q delete wireless."${GUEST_NET}_wifi"
 
-if [ -z "$EXISTING_WIFI" ]; then
-    uci add wireless wifi-iface
-    # Перезапрашиваем, чтобы получить точный идентификатор только что созданной секции
-    WIFI_SEC=$(uci show wireless | grep "\.network='${GUEST_NET}'$" | cut -d. -f1-2 | head -1)
-    
-    uci set "${WIFI_SEC}.device"="$RADIO"
-    uci set "${WIFI_SEC}.network"="$GUEST_NET"
-    uci set "${WIFI_SEC}.mode"='ap'
-    uci set "${WIFI_SEC}.ssid"="$GUEST_SSID"
-    uci set "${WIFI_SEC}.encryption"='psk2+ccmp'
-    uci set "${WIFI_SEC}.key"="$WIFI_PASS"
-    uci set "${WIFI_SEC}.isolate"=1
-    uci set "${WIFI_SEC}.disabled"=0
-    echo "✅ Wi-Fi точка создана (секция: ${WIFI_SEC#wireless.}, SSID: $GUEST_SSID)"
-else
-    uci set "${EXISTING_WIFI}.ssid"="$GUEST_SSID"
-    uci set "${EXISTING_WIFI}.key"="$WIFI_PASS"
-    uci set "${EXISTING_WIFI}.disabled"='0'
-    echo "ℹ️ Wi-Fi интерфейс обновлён (секция: ${EXISTING_WIFI#wireless.})"
-fi
+uci set wireless."${GUEST_NET}_wifi"="wifi-iface"
+uci set wireless."${GUEST_NET}_wifi".device="$RADIO"
+uci set wireless."${GUEST_NET}_wifi".mode="ap"
+uci set wireless."${GUEST_NET}_wifi".network="$GUEST_NET"  # ← ссылка на интерфейс (не на device!)
+uci set wireless."${GUEST_NET}_wifi".ssid="$GUEST_SSID"
+uci set wireless."${GUEST_NET}_wifi".encryption="psk2+ccmp"
+uci set wireless."${GUEST_NET}_wifi".key="$WIFI_PASS"
+uci set wireless."${GUEST_NET}_wifi".isolate=1  # изоляция клиентов друг от друга
+uci set wireless."${GUEST_NET}_wifi".disabled=0
 uci commit wireless
+echo "✅ Wi-Fi точка: $GUEST_SSID"
 
-# 3. DHCP для гостевой сети
-uci add_list dhcp.@dnsmasq[0].interface="$GUEST_NET" 2>/dev/null
+# 3. DHCP
+uci -q delete dhcp."$GUEST_NET"
+uci set dhcp."$GUEST_NET"="dhcp"
+uci set dhcp."$GUEST_NET".interface="$GUEST_NET"
+uci set dhcp."$GUEST_NET".start=100
+uci set dhcp."$GUEST_NET".limit=150
+uci set dhcp."$GUEST_NET".leasetime="1h"
 uci commit dhcp
-echo "✅ DHCP разрешён для '$GUEST_NET'"
+echo "✅ DHCP настроен для $GUEST_NET"
 
-# 4. Firewall (изоляция + выход в WAN) — ОДИН commit в конце
+# 4. FIREWALL (изоляция + выход в WAN)
 # Зона
-FW_ZONE=$(uci show firewall | grep "\.name='${GUEST_NET}'$" | cut -d. -f1-2 | head -1)
-if [ -z "$FW_ZONE" ]; then
-    uci add firewall zone
-    FW_ZONE=$(uci show firewall | grep "\.name='${GUEST_NET}'$" | cut -d. -f1-2 | head -1)
-fi
-uci set "${FW_ZONE}.network"="$GUEST_NET"
-uci set "${FW_ZONE}.input"='REJECT'
-uci set "${FW_ZONE}.output"='ACCEPT'
-uci set "${FW_ZONE}.forward"='REJECT'
-uci set "${FW_ZONE}.masq"='1'
+uci -q delete firewall."${GUEST_NET}"
+uci set firewall."${GUEST_NET}"="zone"
+uci set firewall."${GUEST_NET}".name="$GUEST_NET"
+uci set firewall."${GUEST_NET}".network="$GUEST_NET"
+uci set firewall."${GUEST_NET}".input="REJECT"
+uci set firewall."${GUEST_NET}".output="ACCEPT"
+uci set firewall."${GUEST_NET}".forward="REJECT"
+uci set firewall."${GUEST_NET}".masq=1
 
 # Forwarding в WAN
-FW_FWD=$(uci show firewall | grep "\.src='${GUEST_NET}'.*\.dest='wan'$" | cut -d. -f1-2 | head -1)
-if [ -z "$FW_FWD" ]; then
-    uci add firewall forwarding
-    FW_FWD=$(uci show firewall | grep "\.src='${GUEST_NET}'.*\.dest='wan'$" | cut -d. -f1-2 | head -1)
-fi
-uci set "${FW_FWD}.src"="$GUEST_NET"
-uci set "${FW_FWD}.dest"='wan'
+uci -q delete firewall."${GUEST_NET}_wan"
+uci set firewall."${GUEST_NET}_wan"="forwarding"
+uci set firewall."${GUEST_NET}_wan".src="$GUEST_NET"
+uci set firewall."${GUEST_NET}_wan".dest="wan"
 
 # Блокировка LAN
-FW_RULE_LAN=$(uci show firewall | grep "\.name='Block-${GUEST_NET}-to-lan'" | cut -d. -f1-2 | head -1)
-if [ -z "$FW_RULE_LAN" ]; then
-    uci add firewall rule
-    FW_RULE_LAN=$(uci show firewall | grep "\.name='Block-${GUEST_NET}-to-lan'" | cut -d. -f1-2 | head -1)
-fi
-uci set "${FW_RULE_LAN}.src"="$GUEST_NET"
-uci set "${FW_RULE_LAN}.dest"='lan'
-uci set "${FW_RULE_LAN}.target"='REJECT'
+uci -q delete firewall."${GUEST_NET}_lan"
+uci set firewall."${GUEST_NET}_lan"="rule"
+uci set firewall."${GUEST_NET}_lan".name="Block-${GUEST_NET}-to-lan"
+uci set firewall."${GUEST_NET}_lan".src="$GUEST_NET"
+uci set firewall."${GUEST_NET}_lan".dest="lan"
+uci set firewall."${GUEST_NET}_lan".target="REJECT"
 
-# Блокировка админки роутера (ПРОБЕЛЫ, не запятые!)
-FW_RULE_RTR=$(uci show firewall | grep "\.name='Block-${GUEST_NET}-to-router'" | cut -d. -f1-2 | head -1)
-if [ -z "$FW_RULE_RTR" ]; then
-    uci add firewall rule
-    FW_RULE_RTR=$(uci show firewall | grep "\.name='Block-${GUEST_NET}-to-router'" | cut -d. -f1-2 | head -1)
-fi
-uci set "${FW_RULE_RTR}.src"="$GUEST_NET"
-uci set "${FW_RULE_RTR}.dest_ip"="$MAIN_LAN_IP"
-uci set "${FW_RULE_RTR}.dest_port"='22 53 80 443'  # ← ПРОБЕЛЫ!
-uci set "${FW_RULE_RTR}.proto"='tcp udp'
-uci set "${FW_RULE_RTR}.target"='REJECT'
+# Блокировка роутера (ПРОБЕЛЫ, не запятые!)
+uci -q delete firewall."${GUEST_NET}_rtr"
+uci set firewall."${GUEST_NET}_rtr"="rule"
+uci set firewall."${GUEST_NET}_rtr".name="Block-${GUEST_NET}-to-router"
+uci set firewall."${GUEST_NET}_rtr".src="$GUEST_NET"
+uci set firewall."${GUEST_NET}_rtr".dest_ip="$MAIN_LAN_IP"
+uci set firewall."${GUEST_NET}_rtr".dest_port="22 53 80 443"  # ← ПРОБЕЛЫ!
+uci set firewall."${GUEST_NET}_rtr".proto="tcp udp"
+uci set firewall."${GUEST_NET}_rtr".target="REJECT"
 
-# 🔥 ОДИН commit для firewall — в конце
+# Разрешаем DNS/DHCP для гостей
+uci -q delete firewall."${GUEST_NET}_dns"
+uci set firewall."${GUEST_NET}_dns"="rule"
+uci set firewall."${GUEST_NET}_dns".name="Allow-${GUEST_NET}-DNS"
+uci set firewall."${GUEST_NET}_dns".src="$GUEST_NET"
+uci set firewall."${GUEST_NET}_dns".dest_port="53"
+uci set firewall."${GUEST_NET}_dns".proto="tcp udp"
+uci set firewall."${GUEST_NET}_dns".target="ACCEPT"
+
+uci -q delete firewall."${GUEST_NET}_dhcp"
+uci set firewall."${GUEST_NET}_dhcp"="rule"
+uci set firewall."${GUEST_NET}_dhcp".name="Allow-${GUEST_NET}-DHCP"
+uci set firewall."${GUEST_NET}_dhcp".src="$GUEST_NET"
+uci set firewall."${GUEST_NET}_dhcp".dest_port="67"
+uci set firewall."${GUEST_NET}_dhcp".proto="udp"
+uci set firewall."${GUEST_NET}_dhcp".target="ACCEPT"
+
 uci commit firewall
 echo "✅ Firewall настроен"
 
-# 5. Применяем изменения (правильный порядок для OpenWrt 25.12)
+# 5. ПРИМЕНЕНИЕ (правильный порядок)
 echo "🔄 Применяю конфигурацию..."
-
-# Сначала wifi reload, потом ifup
+service network restart
+sleep 3
 wifi reload
-sleep 4
-
-# ifup как страховка
-ifup "$GUEST_NET" 2>/dev/null || true
-sleep 2
-
-# Ждём появления интерфейса
-for i in $(seq 1 10); do
-    ip link show "$GUEST_NET" >/dev/null 2>&1 && break
-    sleep 1
-done
+sleep 3
+service dnsmasq restart
+service firewall restart
 
 # Обновляем nftables для байпаса гостевого трафика
 [ -x /usr/share/xray/update-nft.sh ] && /usr/share/xray/update-nft.sh 2>/dev/null && echo "✅ nftables обновлены"
@@ -152,11 +148,11 @@ done
 # Финальная проверка
 echo ""
 echo "=== Результат ==="
-if ip link show "$GUEST_NET" >/dev/null 2>&1; then
-    echo "✅ Интерфейс '$GUEST_NET' активен"
-    ip -4 addr show "$GUEST_NET" | grep "inet " | sed 's/^/   /'
+if ip link show "br-${GUEST_NET}" >/dev/null 2>&1; then
+    echo "✅ Мост 'br-${GUEST_NET}' активен"
+    ip -4 addr show "br-${GUEST_NET}" | grep "inet " | sed 's/^/   /'
 else
-    echo "⚠️ Интерфейс не поднялся. Проверь: 'logread | grep -E guest|wifi'"
+    echo "⚠️ Мост не поднялся. Проверь: 'logread | grep -E guest|br-guest'"
 fi
 
 if command -v iwinfo >/dev/null 2>&1 && iwinfo | grep -q "$GUEST_SSID"; then
@@ -167,7 +163,7 @@ fi
 echo ""
 echo "📶 SSID: $GUEST_SSID"
 echo "🔑 Пароль: (скрыт)"
-echo "🌐 Шлюз: ${GUEST_CIDR%%/*}"
+echo "🌐 Шлюз: ${GUEST_IP%%/*}"
 echo "🛡️ Доступ к $MAIN_LAN_IP заблокирован"
 echo "🚀 Трафик идёт НАПРЯМУЮ, минуя Xray/TProxy"
 echo "📝 Лог: $LOG"
