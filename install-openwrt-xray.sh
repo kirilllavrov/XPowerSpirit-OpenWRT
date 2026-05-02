@@ -345,7 +345,7 @@ update_geo \
 	"https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat" \
 	"$GEO_DIR/geosite.dat"
 
-HWID="$(hexdump -n 16 -v -e '/1 "%02x"' /dev/urandom)"
+HWID="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
 echo "$HWID" >"$HWID_FILE"
 chmod 600 "$HWID_FILE"
 
