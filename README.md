@@ -24,5 +24,12 @@ chmod +x install-openwrt-xray.sh
 ```
 
 ```bash
-./setup-guest-network.sh --ssid=Guest-WiFi --pass=MyPass123 --dl=20000 --ul=10000
+./setup-guest-network.sh \
+  --ssid=Home-WiFi \
+  --pass=MyPass123 \
+  --ssid-guest=Guest-WiFi \
+  --pass-guest=MyPass123 \
+  --dl-guest=20000 \
+  --ul-guest=10000
+
 ```
