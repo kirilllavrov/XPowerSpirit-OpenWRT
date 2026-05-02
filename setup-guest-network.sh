@@ -140,7 +140,7 @@ uci -q delete firewall.${GUEST_NET}_rtr
 uci set firewall.${GUEST_NET}_rtr="rule"
 uci set firewall.${GUEST_NET}_rtr.name="Block-${GUEST_NET}-to-router"
 uci set firewall.${GUEST_NET}_rtr.src="$GUEST_NET"
-uci set firewall.${GUEST_NET}_rtr.dest_ip="$MAIN_LAN_IP/32"
+uci set firewall.${GUEST_NET}_rtr.dest="lan"
 uci set firewall.${GUEST_NET}_rtr.target="REJECT"
 
 uci -q delete firewall.${GUEST_NET}_dns
