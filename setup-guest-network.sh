@@ -1,5 +1,5 @@
 #!/bin/sh
-# OpenWrt 25.12.x — Guest Wi-Fi (MT7981, dual-radio, nftables)
+# OpenWrt 25.12.x — Guest Wi-Fi (MT7981, dual-radio, SQM)
 # Трафик гостей → WAN напрямую, минуя Xray/TProxy
 
 LOG="/tmp/guest-setup.log"
@@ -21,18 +21,10 @@ GUEST_IP="192.168.2.1/24"
 # === Парсер аргументов ===
 for arg in "$@"; do
     case $arg in
-        --ssid=*)
-            GUEST_SSID="${arg#*=}"
-            ;;
-        --pass=*)
-            GUEST_PASS="${arg#*=}"
-            ;;
-        --dl=*)
-            DL_LIMIT="${arg#*=}"
-            ;;
-        --ul=*)
-            UL_LIMIT="${arg#*=}"
-            ;;
+        --ssid=*) GUEST_SSID="${arg#*=}" ;;
+        --pass=*) GUEST_PASS="${arg#*=}" ;;
+        --dl=*)   DL_LIMIT="${arg#*=}" ;;
+        --ul=*)   UL_LIMIT="${arg#*=}" ;;
         *)
             echo "⚠️ Неизвестный аргумент: $arg"
             ;;
@@ -153,17 +145,23 @@ uci set firewall.${GUEST_NET}_dhcp.target="ACCEPT"
 
 uci commit firewall
 
-# === 4.1 Ограничение скорости (nft-qos) ===
-echo "Настройка ограничения скорости..."
+# === 4.1 SQM (официальное ограничение скорости) ===
+echo "Настройка SQM..."
 
-uci -q delete nft-qos.$GUEST_NET
-uci set nft-qos.$GUEST_NET="interface"
-uci set nft-qos.$GUEST_NET.name="br-${GUEST_NET}"
-uci set nft-qos.$GUEST_NET.download="$DL_LIMIT"
-uci set nft-qos.$GUEST_NET.upload="$UL_LIMIT"
-uci commit nft-qos
+apk update
+apk add sqm-scripts >/dev/null 2>&1
 
-/etc/init.d/nft-qos restart
+uci -q delete sqm.$GUEST_NET
+uci set sqm.$GUEST_NET="queue"
+uci set sqm.$GUEST_NET.interface="br-${GUEST_NET}"
+uci set sqm.$GUEST_NET.download="$DL_LIMIT"
+uci set sqm.$GUEST_NET.upload="$UL_LIMIT"
+uci set sqm.$GUEST_NET.qdisc="cake"
+uci set sqm.$GUEST_NET.script="piece_of_cake.qos"
+uci set sqm.$GUEST_NET.enabled="1"
+uci commit sqm
+
+/etc/init.d/sqm restart
 
 echo "✅ Конфигурация завершена"
 
@@ -190,5 +188,11 @@ echo ""
 echo "📶 SSID     : $GUEST_SSID"
 echo "🔑 Пароль   : (в /etc/guest-wifi-pass или аргументы)"
 echo "🚀 Лимиты   : DL=${DL_LIMIT} Kbps, UL=${UL_LIMIT} Kbps"
-echo "🛡️ Изоляция : Wi-Fi + firewall"
+echo "🛡️  Изоляция: Wi-Fi + firewall"
 echo "📝 Лог      : $LOG"
+
+echo ""
+echo "🧪 Тест:"
+echo "   curl ifconfig.me"
+echo "   ping 8.8.8.8"
+echo "   ping $MAIN_LAN_IP"
