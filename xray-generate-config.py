@@ -60,15 +60,14 @@ def choose_best_server(servers):
 def base_config():
     return {
         "log": {
-            "loglevel": "warning",
+            "loglevel": "warning",  # ← production-ready
             "access": "/tmp/log/xray-access.log",
             "error": "/tmp/log/xray-error.log"
         },
         "dns": {
             "hosts": {
                 "cloudflare-dns.com": "1.1.1.1",
-                "dns.google": "8.8.8.8",
-                "dns.nextdns.io": "45.90.28.0"
+                "dns.google": "8.8.8.8"
             },
             "queryStrategy": "UseIPv4",
             "enableParallelQuery": True,
@@ -120,7 +119,7 @@ def base_config():
                 }
             },
             {
-                "tag": "dns-in-alt",
+                "tag": "dns-in-alt",  # ← правильный тег
                 "listen": "127.0.0.1",
                 "port": 5054,
                 "protocol": "dokodemo-door",
@@ -136,7 +135,9 @@ def base_config():
 
 def build_rules(chosen_tag):
     return [
+        # ← ИСПРАВЛЕНО: "dns-in-alt" вместо "dns-in-udp"
         {"type": "field", "inboundTag": ["dns-in", "dns-in-alt"], "outboundTag": "direct"},
+        # {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},  # закомментировано, т.к. NextDNS режет рекламу
         {"type": "field", "ip": ["geoip:ru", "geoip:private"], "outboundTag": "direct"},
         {"type": "field", "domain": [
             "geosite:private",
@@ -149,6 +150,7 @@ def build_rules(chosen_tag):
             "geosite:category-streaming", 
             "geosite:category-games"
         ], "outboundTag": chosen_tag},
+        # Catch-all: ВСЁ остальное — в прокси (строго в конце!)
         {"type": "field", "network": "tcp,udp", "outboundTag": chosen_tag}
     ]
 
@@ -176,6 +178,7 @@ def main():
         if "tag" not in chosen:
             chosen["tag"] = chosen_tag
         
+        # 🔧 sockopt оптимизации для proxy
         ss = chosen.setdefault("streamSettings", {})
         sockopt = ss.setdefault("sockopt", {})
         sockopt["mark"] = 255

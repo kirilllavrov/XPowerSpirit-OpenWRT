@@ -6,7 +6,7 @@ LOG="/tmp/guest-setup.log"
 : > "$LOG"
 exec > >(tee -a "$LOG") 2>&1
 
-echo "=== Настройка гостевой сети (Direct/Bypass Xray) ==="
+echo "=== Настройка гостевой сети (Direct/Bypass Xray) для OpenWrt 25.12 ==="
 [ "$(id -u)" != "0" ] && { echo "❌ Требуются права root"; exit 1; }
 
 # Динамический IP роутера
@@ -61,14 +61,14 @@ if ! uci get "$WIFI_IF" >/dev/null 2>&1; then
     uci set "${WIFI_IF}.ssid"="$GUEST_SSID"
     uci set "${WIFI_IF}.encryption"='psk2+ccmp'
     uci set "${WIFI_IF}.key"="$WIFI_PASS"
-    uci set "${WIFI_IF}.isolate"='1'  # изоляция клиентов
-    uci set "${WIFI_IF}.disabled"='0'
+    uci set "${WIFI_IF}.isolate='1'"  # изоляция клиентов
+    uci set "${WIFI_IF}.disabled='0'"
     uci commit wireless
     echo "✅ Wi-Fi точка создана (SSID: $GUEST_SSID)"
 else
     uci set "${WIFI_IF}.ssid"="$GUEST_SSID"
     uci set "${WIFI_IF}.key"="$WIFI_PASS"
-    uci set "${WIFI_IF}.disabled"='0'
+    uci set "${WIFI_IF}.disabled='0'"
     uci commit wireless
     echo "ℹ️ Wi-Fi интерфейс обновлён"
 fi
@@ -109,7 +109,7 @@ FW_RULE_RTR=$(uci show firewall | grep -o "@rule\[[0-9]*\]" | grep "name='Block-
 uci set "${FW_RULE_RTR}.name"="Block-$GUEST_NET-to-router"
 uci set "${FW_RULE_RTR}.src"="$GUEST_NET"
 uci set "${FW_RULE_RTR}.dest_ip"="$MAIN_LAN_IP"
-uci set "${FW_RULE_RTR}.dest_port"='22 53 80 443'  # ← ПРОБЕЛЫ
+uci set "${FW_RULE_RTR}.dest_port"='22 53 80 443'  # ← ПРОБЕЛЫ, не запятые!
 uci set "${FW_RULE_RTR}.proto"='tcp udp'
 uci set "${FW_RULE_RTR}.target"='REJECT'
 
@@ -123,11 +123,11 @@ uci commit wireless
 uci commit dhcp
 uci commit firewall
 
-# Сначала поднимаем беспроводную подсистему (ucode-скрипты)
+# 🔥 Ключевой порядок: сначала wifi reload, потом ifup
 wifi reload
 sleep 3
 
-# Затем сетевой интерфейс (ifup теперь включает ifdown)
+# ifup как страховка (если интерфейс не поднялся автоматически)
 ifup "$GUEST_NET" 2>/dev/null || true
 sleep 2
 

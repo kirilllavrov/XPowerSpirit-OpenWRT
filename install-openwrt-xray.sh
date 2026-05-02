@@ -1,6 +1,5 @@
 #!/bin/sh
 # OpenWrt 25.12.x — Xray TProxy (IPv4-only)
-
 # логируем установку
 LOG_FILE="/tmp/xray_install.log"
 exec 1> >(tee -a "$LOG_FILE")
@@ -255,9 +254,7 @@ echo "8. Настраиваем sysctl:"
 sysctl -w net.ipv4.conf.all.route_localnet=1
 sysctl -w net.ipv4.ip_forward=1
 
-# Создаём постоянный конфиг
-SYSCTL_FILE="/etc/sysctl.d/99-xray.conf"
-
+# Создаём постоянный конфиг (всегда перезаписываем)
 cat >"/etc/sysctl.d/99-xray.conf" <<EOF
 net.ipv4.conf.all.route_localnet=1
 net.ipv4.ip_forward=1
@@ -356,9 +353,6 @@ cat >/etc/hotplug.d/iface/99-xray-autoupdate <<'EOF'
 #!/bin/sh
 [ "$ACTION" = "ifup" ] || exit 0
 [ "$INTERFACE" = "wan" ] || exit 0
-
-exec 200>/tmp/xray-update.lock
-flock -n 200 || exit 0
 
 for i in 1 2 3 4 5 6 7 8; do
     sleep 5
