@@ -8,7 +8,10 @@ exec 2>&1
 
 echo "=== Установка Xray TProxy ==="
 echo "  "
-[ "$(id -u)" != "0" ] && { echo "Запускать нужно от root"; exit 1; }
+[ "$(id -u)" != "0" ] && {
+	echo "Запускать нужно от root"
+	exit 1
+}
 
 REPO="https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main"
 GENERATOR="/usr/share/xray/xray-generate-config.py"
@@ -36,26 +39,32 @@ echo "✅"
 echo "2. Сохраняем подписку:"
 printf "Введите URL подписки VLESS: "
 read SUB_URL
-[ -z "$SUB_URL" ] && { echo "Ошибка: пустой URL"; exit 1; }
+[ -z "$SUB_URL" ] && {
+	echo "Ошибка: пустой URL"
+	exit 1
+}
 
-echo "$SUB_URL" > "$SUB_FILE"
+echo "$SUB_URL" >"$SUB_FILE"
 chmod 600 "$SUB_FILE"
 echo "✅"
 
 # 3. Установка Xray из GitHub (с .dgst + SHA2-256)
 echo "3. Устанавливаем Xray из GitHub:"
 
-LATEST_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest \
-    | grep '"tag_name"' | cut -d '"' -f 4)
+LATEST_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest |
+	grep '"tag_name"' | cut -d '"' -f 4)
 
-[ -z "$LATEST_VERSION" ] && { echo "Ошибка: не удалось получить версию Xray"; exit 1; }
+[ -z "$LATEST_VERSION" ] && {
+	echo "Ошибка: не удалось получить версию Xray"
+	exit 1
+}
 
 ARCH=$(uname -m)
 case "$ARCH" in
-  x86_64|amd64) MACHINE="64" ;;
-  aarch64) MACHINE="arm64-v8a" ;;
-  armv7l) MACHINE="arm32-v7a" ;;
-  *) MACHINE="64" ;;
+x86_64 | amd64) MACHINE="64" ;;
+aarch64) MACHINE="arm64-v8a" ;;
+armv7l) MACHINE="arm32-v7a" ;;
+*) MACHINE="64" ;;
 esac
 
 ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/Xray-linux-${MACHINE}.zip"
@@ -65,47 +74,50 @@ DGST_FILE="$STATE_DIR/xray.dgst"
 
 # аккуратный парсер SHA2-256 из .dgst
 extract_sha256() {
-    grep '^SHA2-256' "$1" \
-        | sed 's/.*= *//' \
-        | tr -cd '0-9a-fA-F' \
-        | cut -c1-64
+	grep '^SHA2-256' "$1" |
+		sed 's/.*= *//' |
+		tr -cd '0-9a-fA-F' |
+		cut -c1-64
 }
 
 echo "  → Скачиваем .dgst для Xray..."
 curl -s -L "${ZIP_URL}.dgst" -o "$DGST_FILE" || {
-    echo "Ошибка: не удалось скачать .dgst для Xray"
-    exit 1
+	echo "Ошибка: не удалось скачать .dgst для Xray"
+	exit 1
 }
 
 REMOTE_SHA="$(extract_sha256 "$DGST_FILE")"
-[ -z "$REMOTE_SHA" ] && { echo "Ошибка: не удалось извлечь SHA2-256 из .dgst"; exit 1; }
+[ -z "$REMOTE_SHA" ] && {
+	echo "Ошибка: не удалось извлечь SHA2-256 из .dgst"
+	exit 1
+}
 
 # проверяем свободное место
 FREE_SPACE_TMP=$(df /tmp | awk 'NR==2 {print $4}')
 if [ "$FREE_SPACE_TMP" -lt 20480 ]; then
-    echo "[ERR] Недостаточно места в /tmp (нужно минимум 20MB)" >> "$LOG_FILE"
-    exit 1
+	echo "[ERR] Недостаточно места в /tmp (нужно минимум 20MB)" >>"$LOG_FILE"
+	exit 1
 fi
 
 # если уже есть ZIP с таким же SHA — не качаем заново
 if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ] && [ -f "$ZIP_DEST" ]; then
-    echo "  → Найден локальный ZIP с тем же SHA, повторное скачивание не требуется"
+	echo "  → Найден локальный ZIP с тем же SHA, повторное скачивание не требуется"
 else
-    echo "  → Скачиваем Xray ZIP (${LATEST_VERSION})..."
-    curl -f -L "$ZIP_URL" -o "$ZIP_DEST" || {
-        echo "Ошибка: не удалось скачать Xray ZIP"
-        exit 1
-    }
+	echo "  → Скачиваем Xray ZIP (${LATEST_VERSION})..."
+	curl -f -L "$ZIP_URL" -o "$ZIP_DEST" || {
+		echo "Ошибка: не удалось скачать Xray ZIP"
+		exit 1
+	}
 
-    LOCAL_SHA="$(sha256sum "$ZIP_DEST" | awk '{print $1}')"
-    if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-        echo "Ошибка: SHA не совпадает!"
-        echo "  ожидалось: $REMOTE_SHA"
-        echo "  получено : $LOCAL_SHA"
-        exit 1
-    fi
+	LOCAL_SHA="$(sha256sum "$ZIP_DEST" | awk '{print $1}')"
+	if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
+		echo "Ошибка: SHA не совпадает!"
+		echo "  ожидалось: $REMOTE_SHA"
+		echo "  получено : $LOCAL_SHA"
+		exit 1
+	fi
 
-    echo "$REMOTE_SHA" > "$SHA_FILE"
+	echo "$REMOTE_SHA" >"$SHA_FILE"
 fi
 
 unzip -q "$ZIP_DEST" -d "$TMP_DIR"
@@ -120,25 +132,25 @@ echo "✅ Xray установлен версии $LATEST_VERSION"
 echo "4. Загружаем скрипты из репозитория:"
 
 download() {
-    local url="$1"
-    local dst="$2"
+	local url="$1"
+	local dst="$2"
 
-    wget -q "$url" -O "$dst"
+	wget -q "$url" -O "$dst"
 
-    # Проверка: файл существует и не пустой
-    if [ ! -s "$dst" ]; then
-        echo "❌ Ошибка: файл $dst не скачан или пустой"
-        exit 1
-    fi
+	# Проверка: файл существует и не пустой
+	if [ ! -s "$dst" ]; then
+		echo "❌ Ошибка: файл $dst не скачан или пустой"
+		exit 1
+	fi
 
-    # Проверка: не HTML-ошибка
-    if head -n 1 "$dst" | grep -qi "<html"; then
-        echo "❌ Ошибка: сервер вернул HTML вместо файла ($dst)"
-        exit 1
-    fi
+	# Проверка: не HTML-ошибка
+	if head -n 1 "$dst" | grep -qi "<html"; then
+		echo "❌ Ошибка: сервер вернул HTML вместо файла ($dst)"
+		exit 1
+	fi
 
-    chmod +x "$dst"
-    echo "→ $dst"
+	chmod +x "$dst"
+	echo "→ $dst"
 }
 
 download "$REPO/xray-generate-config.py" "$GENERATOR"
@@ -147,7 +159,6 @@ download "$REPO/update-xray.sh" "$UPDATER"
 download "$REPO/update-nft.sh" "$NFT_UPDATER"
 
 echo "✅"
-
 
 # 5. Настройка dnsmasq и DoH
 echo "5. Настраиваем DNS (dnsmasq):"
@@ -162,7 +173,7 @@ echo "✅"
 
 echo "6. Создаём init.d для Xray:"
 
-cat > /etc/init.d/xray << 'XRAYEOF'
+cat >/etc/init.d/xray <<'XRAYEOF'
 #!/bin/sh /etc/rc.common
 
 USE_PROCD=1
@@ -229,11 +240,10 @@ chmod +x /etc/init.d/xray
 /etc/init.d/xray enable
 echo "✅"
 
-
 echo "7. Настраиваем routing:"
 
 if ! grep -q "^100[[:space:]]\+xray$" /etc/iproute2/rt_tables; then
-    echo "100 xray" >> /etc/iproute2/rt_tables
+	echo "100 xray" >>/etc/iproute2/rt_tables
 fi
 
 echo "✅"
@@ -248,7 +258,7 @@ sysctl -w net.ipv4.ip_forward=1
 # Создаём постоянный конфиг
 SYSCTL_FILE="/etc/sysctl.d/99-xray.conf"
 
-cat > "/etc/sysctl.d/99-xray.conf" << EOF
+cat >"/etc/sysctl.d/99-xray.conf" <<EOF
 net.ipv4.conf.all.route_localnet=1
 net.ipv4.ip_forward=1
 EOF
@@ -260,70 +270,69 @@ echo "✅"
 echo "9. Скачиваем геофайлы, делаем HWID, генерируем config.json"
 
 update_geo() {
-    local URL="$1"      # https://cdn.jsdelivr.net/.../geoip.dat
-    local DEST="$2"     # /etc/xray/geo/geoip.dat
+	local URL="$1"  # https://cdn.jsdelivr.net/.../geoip.dat
+	local DEST="$2" # /etc/xray/geo/geoip.dat
 
-    local BASE="$(basename "$DEST")"
-    local TMP="/tmp/$BASE.tmp"
-    local TMP_SHA="/tmp/$BASE.sha256"
-    local SHA_FILE="${STATE_DIR}/${BASE}.sha256sum"
+	local BASE="$(basename "$DEST")"
+	local TMP="/tmp/$BASE.tmp"
+	local TMP_SHA="/tmp/$BASE.sha256"
+	local SHA_FILE="${STATE_DIR}/${BASE}.sha256sum"
 
-    echo "  → Скачиваем $BASE"
+	echo "  → Скачиваем $BASE"
 
-    # Скачиваем SHA256
-    curl -H "Cache-Control: no-cache" -sSL -o "$TMP_SHA" "${URL}.sha256sum"
-    REMOTE_SHA="$(cut -d' ' -f1 "$TMP_SHA")"
+	# Скачиваем SHA256
+	curl -H "Cache-Control: no-cache" -sSL -o "$TMP_SHA" "${URL}.sha256sum"
+	REMOTE_SHA="$(cut -d' ' -f1 "$TMP_SHA")"
 
-    if [ -z "$REMOTE_SHA" ]; then
-        echo "🚫 Не удалось получить SHA256 для $BASE" >> "$LOG_FILE"
-        exit 1
-    fi
+	if [ -z "$REMOTE_SHA" ]; then
+		echo "🚫 Не удалось получить SHA256 для $BASE" >>"$LOG_FILE"
+		exit 1
+	fi
 
-    # Скачиваем сам файл во временное место
-    curl -f -H "Cache-Control: no-cache" -sSL -o "$TMP" "$URL"
+	# Скачиваем сам файл во временное место
+	curl -f -H "Cache-Control: no-cache" -sSL -o "$TMP" "$URL"
 
-    # Считаем локальный SHA256
-    LOCAL_SHA="$(sha256sum "$TMP" | awk '{print $1}')"
+	# Считаем локальный SHA256
+	LOCAL_SHA="$(sha256sum "$TMP" | awk '{print $1}')"
 
-    # Проверяем совпадение
-    if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-        echo "🚫 SHA mismatch $BASE" >> "$LOG_FILE"
-        echo "expected: $REMOTE_SHA" >> "$LOG_FILE"
-        echo "actual:   $LOCAL_SHA" >> "$LOG_FILE"
-        rm -f "$TMP" "$TMP_SHA"
-        exit 1
-    fi
+	# Проверяем совпадение
+	if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
+		echo "🚫 SHA mismatch $BASE" >>"$LOG_FILE"
+		echo "expected: $REMOTE_SHA" >>"$LOG_FILE"
+		echo "actual:   $LOCAL_SHA" >>"$LOG_FILE"
+		rm -f "$TMP" "$TMP_SHA"
+		exit 1
+	fi
 
-    # Атомарная замена
-    mv "$TMP" "$DEST"
+	# Атомарная замена
+	mv "$TMP" "$DEST"
 
-    # Сохраняем SHA в state (для будущих обновлений)
-    echo "$REMOTE_SHA" > "$SHA_FILE"
+	# Сохраняем SHA в state (для будущих обновлений)
+	echo "$REMOTE_SHA" >"$SHA_FILE"
 
-    echo "→ $BASE загружен и проверен" >> "$LOG_FILE"
-    echo "$BASE - ✅"
+	echo "→ $BASE загружен и проверен" >>"$LOG_FILE"
+	echo "$BASE - ✅"
 }
 
 # Вызовы
 update_geo \
-  "https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat" \
-  "$GEO_DIR/geoip.dat"
+	"https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat" \
+	"$GEO_DIR/geoip.dat"
 
 update_geo \
-  "https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat" \
-  "$GEO_DIR/geosite.dat"
-
+	"https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat" \
+	"$GEO_DIR/geosite.dat"
 
 HWID="$(hexdump -n 16 -v -e '/1 "%02x"' /dev/urandom)"
-echo "$HWID" > "$HWID_FILE"
+echo "$HWID" >"$HWID_FILE"
 chmod 600 "$HWID_FILE"
 
-curl -s -L -m 20 -H "x-hwid: $HWID" "$SUB_URL" \
-| python3 "$PARSER" | python3 "$GENERATOR" --output "$CONFIG_JSON"
+curl -s -L -m 20 -H "x-hwid: $HWID" "$SUB_URL" |
+	python3 "$PARSER" | python3 "$GENERATOR" --output "$CONFIG_JSON"
 
 if [ ! -s "$CONFIG_JSON" ]; then
-    echo "Ошибка: не удалось создать config.json"
-    exit 1
+	echo "Ошибка: не удалось создать config.json"
+	exit 1
 fi
 echo "✅"
 
@@ -331,19 +340,25 @@ echo "✅"
 echo "10. Настройка Crontab:"
 CRON_ENTRY="30 2 * * * $UPDATER"
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
-    (crontab -l 2>/dev/null || true; echo "$CRON_ENTRY") | crontab -
-    echo "✅"
+	(
+		crontab -l 2>/dev/null || true
+		echo "$CRON_ENTRY"
+	) | crontab -
+	echo "✅"
 else
-    echo "❌ Cron-задача уже существует, пропускаем"
+	echo "❌ Cron-задача уже существует, пропускаем"
 fi
 
 # 11. Настройка обновления после включения
 echo "11. Настройка hotplug:"
 
-cat > /etc/hotplug.d/iface/99-xray-autoupdate << 'EOF'
+cat >/etc/hotplug.d/iface/99-xray-autoupdate <<'EOF'
 #!/bin/sh
 [ "$ACTION" = "ifup" ] || exit 0
 [ "$INTERFACE" = "wan" ] || exit 0
+
+exec 200>/tmp/xray-update.lock
+flock -n 200 || exit 0
 
 for i in 1 2 3 4 5 6 7 8; do
     sleep 5
@@ -367,17 +382,17 @@ echo "✅"
 sleep 3
 
 if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
-    echo "Конфиг Xray прошел проверку - ✅"
+	echo "Конфиг Xray прошел проверку - ✅"
 else
-    echo " Конфиг Xray НЕ прошел проверку! - 🚫"
-    exit 1
+	echo " Конфиг Xray НЕ прошел проверку! - 🚫"
+	exit 1
 fi
 
 echo "Проверяем, запущен ли Xray:"
 if pgrep -a xray >/dev/null; then
-    echo "Xray запущен - ✅"
+	echo "Xray запущен - ✅"
 else
-    echo "Xray НЕ запущен - 🚫"
+	echo "Xray НЕ запущен - 🚫"
 fi
 
 echo ""
