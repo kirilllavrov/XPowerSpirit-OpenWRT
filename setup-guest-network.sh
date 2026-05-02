@@ -3,48 +3,65 @@
 # Трафик гостей → WAN напрямую, минуя Xray/TProxy
 
 LOG="/tmp/guest-setup.log"
-: > "$LOG"
+: >"$LOG"
 exec > >(tee -a "$LOG") 2>&1
 
 echo "=== Настройка гостевой Wi-Fi сети ==="
 
-[ "$(id -u)" != "0" ] && { echo "❌ Требуются права root"; exit 1; }
+[ "$(id -u)" != "0" ] && {
+	echo "❌ Требуются права root"
+	exit 1
+}
 
 # === Значения по умолчанию ===
 GUEST_NET="guest"
 GUEST_SSID="Guest-WiFi"
 GUEST_PASS="GuestSecure123!"
-DL_LIMIT="20000"   # Kbps
-UL_LIMIT="10000"   # Kbps
+DL_LIMIT="20000" # Kbps
+UL_LIMIT="10000" # Kbps
 GUEST_IP="192.168.2.1/24"
 
 # === Парсер аргументов ===
 for arg in "$@"; do
-    case $arg in
-        --ssid=*) GUEST_SSID="${arg#*=}" ;;
-        --pass=*) GUEST_PASS="${arg#*=}" ;;
-        --dl=*)   DL_LIMIT="${arg#*=}" ;;
-        --ul=*)   UL_LIMIT="${arg#*=}" ;;
-        *)
-            echo "⚠️ Неизвестный аргумент: $arg"
-            ;;
-    esac
+	case $arg in
+	--ssid=*) GUEST_SSID="${arg#*=}" ;;
+	--pass=*) GUEST_PASS="${arg#*=}" ;;
+	--dl=*) DL_LIMIT="${arg#*=}" ;;
+	--ul=*) UL_LIMIT="${arg#*=}" ;;
+	*)
+		echo "⚠️ Неизвестный аргумент: $arg"
+		;;
+	esac
 done
 
 # === Валидация ===
-[ "${#GUEST_SSID}" -lt 1 ] || [ "${#GUEST_SSID}" -gt 32 ] && { echo "❌ SSID: 1-32 символа"; exit 1; }
-[ "${#GUEST_PASS}" -lt 8 ] || [ "${#GUEST_PASS}" -gt 63 ] && { echo "❌ Пароль: 8-63 символа"; exit 1; }
+[ "${#GUEST_SSID}" -lt 1 ] || [ "${#GUEST_SSID}" -gt 32 ] && {
+	echo "❌ SSID: 1-32 символа"
+	exit 1
+}
+[ "${#GUEST_PASS}" -lt 8 ] || [ "${#GUEST_PASS}" -gt 63 ] && {
+	echo "❌ Пароль: 8-63 символа"
+	exit 1
+}
 
-case "$DL_LIMIT" in ''|*[!0-9]*) echo "❌ DL_LIMIT должен быть числом"; exit 1;; esac
-case "$UL_LIMIT" in ''|*[!0-9]*) echo "❌ UL_LIMIT должен быть числом"; exit 1;; esac
+case "$DL_LIMIT" in '' | *[!0-9]*)
+	echo "❌ DL_LIMIT должен быть числом"
+	exit 1
+	;;
+esac
+case "$UL_LIMIT" in '' | *[!0-9]*)
+	echo "❌ UL_LIMIT должен быть числом"
+	exit 1
+	;;
+esac
 
 MAIN_LAN_IP=$(uci get network.lan.ipaddr 2>/dev/null | cut -d/ -f1)
 [ -z "$MAIN_LAN_IP" ] && MAIN_LAN_IP="192.168.1.1"
 
 # === Функция получения пароля ===
 get_password() {
-    [ -f "/etc/guest-wifi-pass" ] && [ -r "/etc/guest-wifi-pass" ] \
-        && head -n1 /etc/guest-wifi-pass || echo "$GUEST_PASS"
+	[ -f "/etc/guest-wifi-pass" ] && [ -r "/etc/guest-wifi-pass" ] &&
+		head -n1 /etc/guest-wifi-pass || echo "$GUEST_PASS"
 }
 
 WIFI_PASS=$(get_password)
@@ -69,17 +86,17 @@ uci commit network
 echo "Настройка Wi-Fi..."
 
 for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-device.*/\2/p'); do
-    uci -q delete wireless.${GUEST_NET}_${RADIO}
-    uci set wireless.${GUEST_NET}_${RADIO}="wifi-iface"
-    uci set wireless.${GUEST_NET}_${RADIO}.device="$RADIO"
-    uci set wireless.${GUEST_NET}_${RADIO}.mode="ap"
-    uci set wireless.${GUEST_NET}_${RADIO}.network="$GUEST_NET"
-    uci set wireless.${GUEST_NET}_${RADIO}.ssid="$GUEST_SSID"
-    uci set wireless.${GUEST_NET}_${RADIO}.encryption="psk2+ccmp"
-    uci set wireless.${GUEST_NET}_${RADIO}.key="$WIFI_PASS"
-    uci set wireless.${GUEST_NET}_${RADIO}.isolate="1"
-    uci set wireless.${GUEST_NET}_${RADIO}.bridge_isolate="1"
-    uci set wireless.${GUEST_NET}_${RADIO}.disabled="0"
+	uci -q delete wireless.${GUEST_NET}_${RADIO}
+	uci set wireless.${GUEST_NET}_${RADIO}="wifi-iface"
+	uci set wireless.${GUEST_NET}_${RADIO}.device="$RADIO"
+	uci set wireless.${GUEST_NET}_${RADIO}.mode="ap"
+	uci set wireless.${GUEST_NET}_${RADIO}.network="$GUEST_NET"
+	uci set wireless.${GUEST_NET}_${RADIO}.ssid="$GUEST_SSID"
+	uci set wireless.${GUEST_NET}_${RADIO}.encryption="psk2+ccmp"
+	uci set wireless.${GUEST_NET}_${RADIO}.key="$WIFI_PASS"
+	uci set wireless.${GUEST_NET}_${RADIO}.isolate="1"
+	uci set wireless.${GUEST_NET}_${RADIO}.bridge_isolate="1"
+	uci set wireless.${GUEST_NET}_${RADIO}.disabled="0"
 done
 uci commit wireless
 
@@ -123,7 +140,7 @@ uci -q delete firewall.${GUEST_NET}_rtr
 uci set firewall.${GUEST_NET}_rtr="rule"
 uci set firewall.${GUEST_NET}_rtr.name="Block-${GUEST_NET}-to-router"
 uci set firewall.${GUEST_NET}_rtr.src="$GUEST_NET"
-uci set firewall.${GUEST_NET}_rtr.dest="lan"
+uci set firewall.${GUEST_NET}_rtr.dest_ip="$MAIN_LAN_IP/32"
 uci set firewall.${GUEST_NET}_rtr.target="REJECT"
 
 uci -q delete firewall.${GUEST_NET}_dns
@@ -144,24 +161,24 @@ uci set firewall.${GUEST_NET}_dhcp.target="ACCEPT"
 
 uci commit firewall
 
-# === SQM установка для OpenWrt 25.12.x (apk) ===
-echo "Проверка наличия SQM..."
+# === 4.1 SQM (только конфиг) ===
+echo "Настройка SQM..."
 
+# Проверка наличия tc
 if ! command -v tc >/dev/null; then
-    echo "⚠️ tc отсутствует — SQM работать не сможет"
+	echo "⚠️ tc отсутствует — SQM работать не сможет"
 fi
 
+# Проверка наличия sqm-scripts
 if [ ! -x /usr/lib/sqm/run.sh ]; then
-    echo "Устанавливаем sqm-scripts через apk..."
-    if command -v apk >/dev/null; then
-        apk add sqm-scripts || echo "⚠️ Не удалось установить sqm-scripts"
-    elif [ -x /sbin/apk ]; then
-        /sbin/apk add sqm-scripts || echo "⚠️ Не удалось установить sqm-scripts"
-    else
-        echo "❌ apk не найден — установка SQM невозможна"
-    fi
-else
-    echo "SQM уже установлен"
+	echo "Устанавливаем sqm-scripts через apk..."
+	if command -v apk >/dev/null; then
+		apk add sqm-scripts || echo "⚠️ Не удалось установить sqm-scripts"
+	elif [ -x /sbin/apk ]; then
+		/sbin/apk add sqm-scripts || echo "⚠️ Не удалось установить sqm-scripts"
+	else
+		echo "❌ apk не найден — установка SQM невозможна"
+	fi
 fi
 
 uci -q delete sqm.$GUEST_NET
@@ -179,25 +196,30 @@ echo "✅ Конфигурация завершена"
 # === 5. Применение ===
 echo "🔄 Применяем изменения..."
 service network restart
-sleep 3
+sleep 2
 wifi reload
-sleep 3
+sleep 2
 service dnsmasq restart
 service firewall restart
 
-# теперь интерфейс уже есть — можно стартовать SQM
-if [ -x /etc/init.d/sqm ]; then
-    /etc/init.d/sqm restart
-fi
+# Ждём появления br-guest
+for i in $(seq 1 10); do
+	ip link show "br-${GUEST_NET}" >/dev/null 2>&1 && break
+	sleep 1
+done
+ip link show "br-${GUEST_NET}" >/dev/null 2>&1 || echo "⚠️ Мост не поднялся"
 
-[ -x /usr/share/xray/update-nft.sh ] && /usr/share/xray/update-nft.sh && echo "✅ nftables обновлены"
+# Теперь можно запускать SQM
+if [ -x /etc/init.d/sqm ]; then
+	/etc/init.d/sqm restart
+fi
 
 echo ""
 echo "=== Результат ==="
 ip link show "br-${GUEST_NET}" >/dev/null 2>&1 && echo "✅ Мост br-${GUEST_NET} активен" || echo "⚠️ Мост не найден"
 
 if command -v iwinfo >/dev/null; then
-    iwinfo | grep -q "$GUEST_SSID" && echo "✅ Wi-Fi $GUEST_SSID активен"
+	iwinfo | grep -q "$GUEST_SSID" && echo "✅ Wi-Fi $GUEST_SSID активен"
 fi
 
 echo ""
