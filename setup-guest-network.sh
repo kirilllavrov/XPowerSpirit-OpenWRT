@@ -14,17 +14,21 @@ GUEST_PASS="${2:-GuestSecure123!}"
 GUEST_NET="guest"
 GUEST_IP="192.168.2.1"
 
-# 1. Сетевой интерфейс
+# 1. Сетевой интерфейс (идемпотентно)
 if ! uci get network."$GUEST_NET" >/dev/null 2>&1; then
     uci set network."$GUEST_NET"=interface
     uci set network."$GUEST_NET".proto='static'
     uci set network."$GUEST_NET".ipaddr="$GUEST_IP"
     uci set network."$GUEST_NET".netmask='255.255.255.0'
     uci set network."$GUEST_NET".dns='1.1.1.1 8.8.8.8'
+    uci set network."$GUEST_NET".disabled='0'
     uci commit network
     echo "✅ Сеть '$GUEST_NET' создана ($GUEST_IP/24)"
 else
     echo "ℹ️ Сеть '$GUEST_NET' уже существует"
+    # Убедимся, что интерфейс включён
+    uci set network."$GUEST_NET".disabled='0' 2>/dev/null || true
+    uci commit network 2>/dev/null || true
 fi
 
 # 2. Wi-Fi интерфейс
@@ -45,16 +49,21 @@ if ! uci get wireless."${GUEST_NET}_wifi" >/dev/null 2>&1; then
     echo "✅ Wi-Fi точка доступа создана (SSID: $GUEST_SSID)"
 else
     echo "ℹ️ Wi-Fi интерфейс уже настроен"
+    # Обновляем ключевые параметры на всякий случай
+    uci set wireless."${GUEST_NET}_wifi".ssid="$GUEST_SSID" 2>/dev/null || true
+    uci set wireless."${GUEST_NET}_wifi".key="$GUEST_PASS" 2>/dev/null || true
+    uci set wireless."${GUEST_NET}_wifi".disabled='0' 2>/dev/null || true
+    uci commit wireless 2>/dev/null || true
 fi
 
-# 3. DHCP
+# 3. DHCP для гостевой сети
 if ! uci get dhcp.@dnsmasq[0].interface 2>/dev/null | grep -q "$GUEST_NET"; then
     uci add_list dhcp.@dnsmasq[0].interface="$GUEST_NET"
     uci commit dhcp
     echo "✅ DHCP разрешён для '$GUEST_NET'"
 fi
 
-# 4. Firewall
+# 4. Firewall (изоляция + выход в WAN)
 if ! uci show firewall | grep -q "name='$GUEST_NET'"; then
     uci add firewall zone
     uci set firewall.@zone[-1].name="$GUEST_NET"
@@ -79,20 +88,66 @@ if ! uci show firewall | grep -q "name='Block-$GUEST_NET-to-lan'"; then
     uci set firewall.@rule[-1].dest='lan'
     uci set firewall.@rule[-1].target='REJECT'
 fi
+
+# Блокируем доступ к админке роутера из гостевой сети
+if ! uci show firewall | grep -q "name='Block-$GUEST_NET-to-router'"; then
+    uci add firewall rule
+    uci set firewall.@rule[-1].name="Block-$GUEST_NET-to-router"
+    uci set firewall.@rule[-1].src="$GUEST_NET"
+    uci set firewall.@rule[-1].dest_ip='192.168.1.1'
+    uci set firewall.@rule[-1].dest_port='80,443'
+    uci set firewall.@rule[-1].proto='tcp'
+    uci set firewall.@rule[-1].target='REJECT'
+fi
+
 uci commit firewall
 echo "✅ Firewall настроен (изоляция от LAN, выход в WAN)"
 
 # 5. Применяем изменения
 echo "🔄 Применяю конфигурацию..."
 service network reload
+sleep 2
+
+# Явно поднимаем интерфейс (критично!)
+ifup "$GUEST_NET" 2>/dev/null || true
+
+# Ждём появления интерфейса (до 15 сек)
+for i in 1 2 3 4 5 6 7; do
+    ip link show "$GUEST_NET" >/dev/null 2>&1 && break
+    sleep 2
+done
+
 wifi reload
+sleep 2
 service dnsmasq restart
 service firewall restart
+
+# Обновляем nftables, чтобы гостевой трафик точно байпасил TProxy
 [ -x /usr/share/xray/update-nft.sh ] && /usr/share/xray/update-nft.sh 2>/dev/null || true
 
+# Финальная проверка
+echo ""
+if ip link show "$GUEST_NET" >/dev/null 2>&1; then
+    echo "✅ Интерфейс '$GUEST_NET' активен"
+    ip -4 addr show "$GUEST_NET" | grep "inet " | sed 's/^/   /'
+else
+    echo "⚠️ Интерфейс '$GUEST_NET' не поднялся — попробуй вручную: 'ifup $GUEST_NET'"
+fi
+
+if iwinfo | grep -q "$GUEST_SSID"; then
+    echo "✅ Wi-Fi '$GUEST_SSID' активен"
+else
+    echo "⚠️ Wi-Fi '$GUEST_SSID' не виден — проверь 'wifi status'"
+fi
+
+echo ""
 echo "=== Готово! ==="
 echo "📶 SSID: $GUEST_SSID"
 echo "🔑 Пароль: $GUEST_PASS"
 echo "🌐 Шлюз: $GUEST_IP"
 echo "🚀 Трафик идёт НАПРЯМУЮ, минуя Xray/TProxy"
 echo "📝 Лог: $LOG"
+echo ""
+echo "🧪 Проверка:"
+echo "  Подключись к $GUEST_SSID и выполни:"
+echo "  curl ifconfig.me  # должен показать твой реальный внешний IP"
