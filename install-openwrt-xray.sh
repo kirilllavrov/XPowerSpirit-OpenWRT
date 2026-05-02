@@ -172,12 +172,12 @@ WAN_MAC="$(cat /sys/class/net/wan/address 2>/dev/null)"
 
 # Функция увеличения последнего байта
 inc_mac() {
-    IFS=':' read -r b1 b2 b3 b4 b5 b6 <<EOF
+	IFS=':' read -r b1 b2 b3 b4 b5 b6 <<EOF
 $1
 EOF
-    last_dec=$(( 0x$b6 + 1 ))
-    last_hex=$(printf "%02x" $(( last_dec & 0xFF )) )
-    echo "${b1}:${b2}:${b3}:${b4}:${b5}:${last_hex}"
+	last_dec=$((0x$b6 + 1))
+	last_hex=$(printf "%02x" $((last_dec & 0xFF)))
+	echo "${b1}:${b2}:${b3}:${b4}:${b5}:${last_hex}"
 }
 
 # Предлагаемый MAC = LAN_MAC + 1
@@ -185,12 +185,12 @@ GUEST_MAC="$(inc_mac "$LAN_MAC")"
 
 # Если совпал с WAN — увеличиваем ещё раз
 if [ "$GUEST_MAC" = "$WAN_MAC" ]; then
-    GUEST_MAC="$(inc_mac "$GUEST_MAC")"
+	GUEST_MAC="$(inc_mac "$GUEST_MAC")"
 fi
 
 # Если всё равно совпало — fallback на CA
 if [ "$GUEST_MAC" = "$LAN_MAC" ] || [ "$GUEST_MAC" = "$WAN_MAC" ]; then
-    GUEST_MAC="D4:0D:AB:2A:E3:CA"
+	GUEST_MAC="D4:0D:AB:2A:E3:CA"
 fi
 
 uci -q delete network.${GUEST_NET}_dev
