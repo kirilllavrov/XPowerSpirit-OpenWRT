@@ -9,8 +9,8 @@ exec > >(tee -a "$LOG") 2>&1
 echo "=== Настройка Wi-Fi сетей ==="
 
 [ "$(id -u)" != "0" ] && {
-    echo "❌ Требуются права root"
-    exit 1
+	echo "❌ Требуются права root"
+	exit 1
 }
 
 # === Значения по умолчанию ===
@@ -27,34 +27,54 @@ GUEST_IP="192.168.2.1/24"
 
 # === Парсер аргументов ===
 for arg in "$@"; do
-    case $arg in
-        --ssid=*) HOME_SSID="${arg#*=}" ;;
-        --pass=*) HOME_PASS="${arg#*=}" ;;
-        --ssid-guest=*) GUEST_SSID="${arg#*=}" ;;
-        --pass-guest=*) GUEST_PASS="${arg#*=}" ;;
-        --dl-guest=*) DL_GUEST="${arg#*=}" ;;
-        --ul-guest=*) UL_GUEST="${arg#*=}" ;;
-        *)
-            echo "⚠️ Неизвестный аргумент: $arg"
-            ;;
-    esac
+	case $arg in
+	--ssid=*) HOME_SSID="${arg#*=}" ;;
+	--pass=*) HOME_PASS="${arg#*=}" ;;
+	--ssid-guest=*) GUEST_SSID="${arg#*=}" ;;
+	--pass-guest=*) GUEST_PASS="${arg#*=}" ;;
+	--dl-guest=*) DL_GUEST="${arg#*=}" ;;
+	--ul-guest=*) UL_GUEST="${arg#*=}" ;;
+	*)
+		echo "⚠️ Неизвестный аргумент: $arg"
+		;;
+	esac
 done
 
 # === Валидация ===
 validate_len() {
-    local val="$1"
-    local min="$2"
-    local max="$3"
-    [ "${#val}" -lt "$min" ] || [ "${#val}" -gt "$max" ]
+	local val="$1"
+	local min="$2"
+	local max="$3"
+	[ "${#val}" -lt "$min" ] || [ "${#val}" -gt "$max" ]
 }
 
-validate_len "$HOME_SSID" 1 32 && { echo "❌ SSID Home: 1-32 символа"; exit 1; }
-validate_len "$GUEST_SSID" 1 32 && { echo "❌ SSID Guest: 1-32 символа"; exit 1; }
-validate_len "$HOME_PASS" 8 63 && { echo "❌ Пароль Home: 8-63 символа"; exit 1; }
-validate_len "$GUEST_PASS" 8 63 && { echo "❌ Пароль Guest: 8-63 символа"; exit 1; }
+validate_len "$HOME_SSID" 1 32 && {
+	echo "❌ SSID Home: 1-32 символа"
+	exit 1
+}
+validate_len "$GUEST_SSID" 1 32 && {
+	echo "❌ SSID Guest: 1-32 символа"
+	exit 1
+}
+validate_len "$HOME_PASS" 8 63 && {
+	echo "❌ Пароль Home: 8-63 символа"
+	exit 1
+}
+validate_len "$GUEST_PASS" 8 63 && {
+	echo "❌ Пароль Guest: 8-63 символа"
+	exit 1
+}
 
-case "$DL_GUEST" in ''|*[!0-9]*) echo "❌ DL_GUEST должен быть числом"; exit 1;; esac
-case "$UL_GUEST" in ''|*[!0-9]*) echo "❌ UL_GUEST должен быть числом"; exit 1;; esac
+case "$DL_GUEST" in '' | *[!0-9]*)
+	echo "❌ DL_GUEST должен быть числом"
+	exit 1
+	;;
+esac
+case "$UL_GUEST" in '' | *[!0-9]*)
+	echo "❌ UL_GUEST должен быть числом"
+	exit 1
+	;;
+esac
 
 MAIN_LAN_IP=$(uci get network.lan.ipaddr 2>/dev/null | cut -d/ -f1)
 [ -z "$MAIN_LAN_IP" ] && MAIN_LAN_IP="192.168.1.1"
@@ -80,17 +100,17 @@ uci commit network
 echo "Настройка Home Wi-Fi (через Xray)..."
 
 for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-device.*/\2/p'); do
-    uci -q delete wireless.home_${RADIO}
-    uci set wireless.home_${RADIO}="wifi-iface"
-    uci set wireless.home_${RADIO}.device="$RADIO"
-    uci set wireless.home_${RADIO}.mode="ap"
-    uci set wireless.home_${RADIO}.network="lan"   # ← ВАЖНО: через Xray
-    uci set wireless.home_${RADIO}.ssid="$HOME_SSID"
-    uci set wireless.home_${RADIO}.encryption="psk2+ccmp"
-    uci set wireless.home_${RADIO}.key="$HOME_PASS"
-    uci set wireless.home_${RADIO}.isolate="1"
-    uci set wireless.home_${RADIO}.bridge_isolate="1"
-    uci set wireless.home_${RADIO}.disabled="0"
+	uci -q delete wireless.home_${RADIO}
+	uci set wireless.home_${RADIO}="wifi-iface"
+	uci set wireless.home_${RADIO}.device="$RADIO"
+	uci set wireless.home_${RADIO}.mode="ap"
+	uci set wireless.home_${RADIO}.network="lan" # ← ВАЖНО: через Xray
+	uci set wireless.home_${RADIO}.ssid="$HOME_SSID"
+	uci set wireless.home_${RADIO}.encryption="psk2+ccmp"
+	uci set wireless.home_${RADIO}.key="$HOME_PASS"
+	uci set wireless.home_${RADIO}.isolate="1"
+	uci set wireless.home_${RADIO}.bridge_isolate="1"
+	uci set wireless.home_${RADIO}.disabled="0"
 done
 uci commit wireless
 
@@ -98,17 +118,17 @@ uci commit wireless
 echo "Настройка Guest Wi-Fi..."
 
 for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-device.*/\2/p'); do
-    uci -q delete wireless.${GUEST_NET}_${RADIO}
-    uci set wireless.${GUEST_NET}_${RADIO}="wifi-iface"
-    uci set wireless.${GUEST_NET}_${RADIO}.device="$RADIO"
-    uci set wireless.${GUEST_NET}_${RADIO}.mode="ap"
-    uci set wireless.${GUEST_NET}_${RADIO}.network="$GUEST_NET"
-    uci set wireless.${GUEST_NET}_${RADIO}.ssid="$GUEST_SSID"
-    uci set wireless.${GUEST_NET}_${RADIO}.encryption="psk2+ccmp"
-    uci set wireless.${GUEST_NET}_${RADIO}.key="$GUEST_PASS"
-    uci set wireless.${GUEST_NET}_${RADIO}.isolate="1"
-    uci set wireless.${GUEST_NET}_${RADIO}.bridge_isolate="1"
-    uci set wireless.${GUEST_NET}_${RADIO}.disabled="0"
+	uci -q delete wireless.${GUEST_NET}_${RADIO}
+	uci set wireless.${GUEST_NET}_${RADIO}="wifi-iface"
+	uci set wireless.${GUEST_NET}_${RADIO}.device="$RADIO"
+	uci set wireless.${GUEST_NET}_${RADIO}.mode="ap"
+	uci set wireless.${GUEST_NET}_${RADIO}.network="$GUEST_NET"
+	uci set wireless.${GUEST_NET}_${RADIO}.ssid="$GUEST_SSID"
+	uci set wireless.${GUEST_NET}_${RADIO}.encryption="psk2+ccmp"
+	uci set wireless.${GUEST_NET}_${RADIO}.key="$GUEST_PASS"
+	uci set wireless.${GUEST_NET}_${RADIO}.isolate="1"
+	uci set wireless.${GUEST_NET}_${RADIO}.bridge_isolate="1"
+	uci set wireless.${GUEST_NET}_${RADIO}.disabled="0"
 done
 uci commit wireless
 
@@ -154,14 +174,14 @@ uci commit firewall
 echo "Настройка SQM для Guest..."
 
 if ! command -v tc >/dev/null; then
-    echo "⚠️ tc отсутствует — SQM работать не сможет"
+	echo "⚠️ tc отсутствует — SQM работать не сможет"
 fi
 
 if [ ! -x /usr/lib/sqm/run.sh ]; then
-    echo "Устанавливаем sqm-scripts через apk..."
-    if command -v apk >/dev/null; then
-        apk add sqm-scripts || echo "⚠️ Не удалось установить sqm-scripts"
-    fi
+	echo "Устанавливаем sqm-scripts через apk..."
+	if command -v apk >/dev/null; then
+		apk add sqm-scripts || echo "⚠️ Не удалось установить sqm-scripts"
+	fi
 fi
 
 uci -q delete sqm.$GUEST_NET
@@ -184,12 +204,12 @@ service firewall restart
 
 # Ждём появления br-guest
 for i in $(seq 1 10); do
-    ip link show "br-${GUEST_NET}" >/dev/null 2>&1 && break
-    sleep 1
+	ip link show "br-${GUEST_NET}" >/dev/null 2>&1 && break
+	sleep 1
 done
 
 if [ -x /etc/init.d/sqm ]; then
-    /etc/init.d/sqm restart
+	/etc/init.d/sqm restart
 fi
 
 echo "=== Готово ==="
