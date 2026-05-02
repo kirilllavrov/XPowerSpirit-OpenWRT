@@ -128,6 +128,7 @@ chmod 755 /usr/bin/xray
 rm -rf "$TMP_DIR"
 echo "✅ Xray установлен версии $LATEST_VERSION"
 
+# 4. Загружаем скрипты из репозитория
 echo "4. Загружаем скрипты из репозитория:"
 
 download() {
@@ -159,8 +160,30 @@ download "$REPO/update-nft.sh" "$NFT_UPDATER"
 
 echo "✅"
 
-# 5. Настройка dnsmasq и DoH
-echo "5. Настраиваем DNS (dnsmasq):"
+# 5. Создаём br-guest
+echo "5. Создаём br-guest:"
+
+GUEST_NET="guest"
+GUEST_IP="192.168.2.1/24"
+
+uci -q delete network.${GUEST_NET}_dev
+uci set network.${GUEST_NET}_dev="device"
+uci set network.${GUEST_NET}_dev.type="bridge"
+uci set network.${GUEST_NET}_dev.name="br-${GUEST_NET}"
+
+uci -q delete network.$GUEST_NET
+uci set network.$GUEST_NET="interface"
+uci set network.$GUEST_NET.proto="static"
+uci set network.$GUEST_NET.device="br-${GUEST_NET}"
+uci set network.$GUEST_NET.ipaddr="${GUEST_IP%%/*}"
+uci set network.$GUEST_NET.netmask="255.255.255.0"
+uci set network.$GUEST_NET.force_link="1"
+
+uci commit network
+echo "✅"
+
+# 6. Настройка dnsmasq и DoH
+echo "6. Настраиваем DNS (dnsmasq):"
 
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci -q delete dhcp.@dnsmasq[0].server
@@ -170,7 +193,8 @@ uci commit dhcp
 
 echo "✅"
 
-echo "6. Создаём init.d для Xray:"
+# 7. Настройка dnsmasq и DoH
+echo "7. Создаём init.d для Xray:"
 
 cat >/etc/init.d/xray <<'XRAYEOF'
 #!/bin/sh /etc/rc.common
@@ -239,7 +263,8 @@ chmod +x /etc/init.d/xray
 /etc/init.d/xray enable
 echo "✅"
 
-echo "7. Настраиваем routing:"
+# 8. Настраиваем sysctl
+echo "8. Настраиваем routing:"
 
 if ! grep -q "^100[[:space:]]\+xray$" /etc/iproute2/rt_tables; then
 	echo "100 xray" >>/etc/iproute2/rt_tables
@@ -247,8 +272,8 @@ fi
 
 echo "✅"
 
-# 8. Настраиваем sysctl
-echo "8. Настраиваем sysctl:"
+# 9. Настраиваем sysctl
+echo "9. Настраиваем sysctl:"
 
 # Применяем немедленно
 sysctl -w net.ipv4.conf.all.route_localnet=1
@@ -263,8 +288,8 @@ sysctl -p /etc/sysctl.d/99-xray.conf >/dev/null 2>&1
 
 echo "✅"
 
-# 9. Geo + HWID + config.json
-echo "9. Скачиваем геофайлы, делаем HWID, генерируем config.json"
+# 10. Geo + HWID + config.json
+echo "10. Скачиваем геофайлы, делаем HWID, генерируем config.json"
 
 update_geo() {
 	local URL="$1"  # https://cdn.jsdelivr.net/.../geoip.dat
@@ -333,8 +358,8 @@ if [ ! -s "$CONFIG_JSON" ]; then
 fi
 echo "✅"
 
-# 10. Cron: автообновление в 2.30 ночи
-echo "10. Настройка Crontab:"
+# 11. Cron: автообновление в 2.30 ночи
+echo "11. Настройка Crontab:"
 CRON_ENTRY="30 2 * * * $UPDATER"
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
 	(
@@ -346,8 +371,8 @@ else
 	echo "❌ Cron-задача уже существует, пропускаем"
 fi
 
-# 11. Настройка обновления после включения
-echo "11. Настройка hotplug:"
+# 12. Настройка обновления после включения
+echo "12. Настройка hotplug:"
 
 cat >/etc/hotplug.d/iface/99-xray-autoupdate <<'EOF'
 #!/bin/sh
@@ -366,8 +391,8 @@ EOF
 chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
 echo "✅ hotplug настроен"
 
-# 12. Запуск и рестарт служб
-echo "12. Запускаем службы:"
+# 13. Запуск и рестарт служб
+echo "13. Запускаем службы:"
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall restart
 /etc/init.d/xray start

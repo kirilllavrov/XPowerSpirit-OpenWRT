@@ -79,24 +79,7 @@ esac
 MAIN_LAN_IP=$(uci get network.lan.ipaddr 2>/dev/null | cut -d/ -f1)
 [ -z "$MAIN_LAN_IP" ] && MAIN_LAN_IP="192.168.1.1"
 
-# === 1. Guest Network (отдельный bridge) ===
-echo "Настройка гостевой сети..."
-
-uci -q delete network.${GUEST_NET}_dev
-uci set network.${GUEST_NET}_dev="device"
-uci set network.${GUEST_NET}_dev.type="bridge"
-uci set network.${GUEST_NET}_dev.name="br-${GUEST_NET}"
-
-uci -q delete network.$GUEST_NET
-uci set network.$GUEST_NET="interface"
-uci set network.$GUEST_NET.proto="static"
-uci set network.$GUEST_NET.device="br-${GUEST_NET}"
-uci set network.$GUEST_NET.ipaddr="${GUEST_IP%%/*}"
-uci set network.$GUEST_NET.netmask="255.255.255.0"
-uci set network.$GUEST_NET.force_link="1"
-uci commit network
-
-# === 2. Wi-Fi: Home (через Xray, на br-lan) ===
+# === 1. Wi-Fi: Home (через Xray, на br-lan) ===
 echo "Настройка Home Wi-Fi (через Xray)..."
 
 for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-device.*/\2/p'); do
@@ -114,7 +97,7 @@ for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-devic
 done
 uci commit wireless
 
-# === 3. Wi-Fi: Guest (на br-guest) ===
+# === 2. Wi-Fi: Guest (на br-guest) ===
 echo "Настройка Guest Wi-Fi..."
 
 for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-device.*/\2/p'); do
@@ -132,7 +115,7 @@ for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-devic
 done
 uci commit wireless
 
-# === 4. DHCP Guest ===
+# === 3. DHCP Guest ===
 echo "Настройка DHCP Guest..."
 uci -q delete dhcp.$GUEST_NET
 uci set dhcp.$GUEST_NET="dhcp"
@@ -143,7 +126,7 @@ uci set dhcp.$GUEST_NET.leasetime="1h"
 uci set dhcp.$GUEST_NET.force="1"
 uci commit dhcp
 
-# === 5. Firewall Guest ===
+# === 4. Firewall Guest ===
 echo "Настройка Firewall Guest..."
 
 uci -q delete firewall.$GUEST_NET
@@ -170,7 +153,7 @@ uci set firewall.${GUEST_NET}_rtr.target="REJECT"
 
 uci commit firewall
 
-# === 6. SQM только для Guest ===
+# === 5. SQM только для Guest ===
 echo "Настройка SQM для Guest..."
 
 if ! command -v tc >/dev/null; then
