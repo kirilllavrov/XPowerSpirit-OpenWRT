@@ -1,12 +1,12 @@
 #!/bin/sh
-# OpenWrt 25.12.x — Guest Wi-Fi (улучшенная версия по официальной документации)
+# OpenWrt 25.12.x — Guest Wi-Fi на двух радио (один SSID)
 # Трафик гостей → WAN напрямую, минуя Xray/TProxy
 
 LOG="/tmp/guest-setup.log"
 : > "$LOG"
 exec > >(tee -a "$LOG") 2>&1
 
-echo "=== Настройка гостевой Wi-Fi сети ==="
+echo "=== Настройка гостевой Wi-Fi на двух радио (один SSID) ==="
 
 [ "$(id -u)" != "0" ] && { echo "❌ Требуются права root"; exit 1; }
 
@@ -46,26 +46,34 @@ uci set network.$GUEST_NET.dns="1.1.1.1 8.8.8.8"
 uci set network.$GUEST_NET.force_link="1"
 uci commit network
 
-# === 2. Wireless ===
-echo "Настройка Wi-Fi..."
-
-# Более надёжное определение радио
-RADIO=$(uci -q get wireless.@wifi-device[0].name)
-[ -z "$RADIO" ] && RADIO="radio0"
-
+# === 2. Wireless — на всех радио ===
+echo "Настройка Wi-Fi на двух диапазонах..."
 WIFI_PASS=$(get_password)
 
+# Удаляем старые гостевые интерфейсы
+uci -q delete wireless.${GUEST_NET}_wifi_2g
+uci -q delete wireless.${GUEST_NET}_wifi_5g
 uci -q delete wireless.${GUEST_NET}_wifi
-uci set wireless.${GUEST_NET}_wifi="wifi-iface"
-uci set wireless.${GUEST_NET}_wifi.device="$RADIO"
-uci set wireless.${GUEST_NET}_wifi.mode="ap"
-uci set wireless.${GUEST_NET}_wifi.network="$GUEST_NET"
-uci set wireless.${GUEST_NET}_wifi.ssid="$GUEST_SSID"
-uci set wireless.${GUEST_NET}_wifi.encryption="psk2+ccmp"
-uci set wireless.${GUEST_NET}_wifi.key="$WIFI_PASS"
-uci set wireless.${GUEST_NET}_wifi.isolate="1"          # изоляция клиентов на одном радио
-uci set wireless.${GUEST_NET}_wifi.bridge_isolate="1" # изоляция между разными радио
-uci set wireless.${GUEST_NET}_wifi.disabled="0"
+
+# Создаём интерфейс для каждого радио
+for RADIO in $(uci show wireless | grep "=wifi-device" | cut -d. -f2); do
+    BAND=$(uci -q get wireless.$RADIO.band)
+    IFACE_NAME="${GUEST_NET}_wifi_${RADIO}"
+
+    uci set wireless.$IFACE_NAME="wifi-iface"
+    uci set wireless.$IFACE_NAME.device="$RADIO"
+    uci set wireless.$IFACE_NAME.mode="ap"
+    uci set wireless.$IFACE_NAME.network="$GUEST_NET"
+    uci set wireless.$IFACE_NAME.ssid="$GUEST_SSID"
+    uci set wireless.$IFACE_NAME.encryption="psk2+ccmp"
+    uci set wireless.$IFACE_NAME.key="$WIFI_PASS"
+    uci set wireless.$IFACE_NAME.isolate="1"
+    uci set wireless.$IFACE_NAME.bridge_isolate="1"
+    uci set wireless.$IFACE_NAME.disabled="0"
+
+    echo "✅ Добавлена гостевая сеть на $RADIO (${BAND:-unknown} band)"
+done
+
 uci commit wireless
 
 # === 3. DHCP ===
@@ -81,7 +89,6 @@ uci commit dhcp
 
 # === 4. Firewall ===
 echo "Настройка Firewall..."
-
 # Зона guest
 uci -q delete firewall.$GUEST_NET
 uci set firewall.$GUEST_NET="zone"
@@ -107,7 +114,7 @@ uci set firewall.${GUEST_NET}_lan.src="$GUEST_NET"
 uci set firewall.${GUEST_NET}_lan.dest="lan"
 uci set firewall.${GUEST_NET}_lan.target="REJECT"
 
-# Блокировка доступа к роутеру (кроме DHCP/DNS)
+# Блокировка доступа к роутеру
 uci -q delete firewall.${GUEST_NET}_rtr
 uci set firewall.${GUEST_NET}_rtr="rule"
 uci set firewall.${GUEST_NET}_rtr.name="Block-${GUEST_NET}-to-router"
@@ -115,7 +122,7 @@ uci set firewall.${GUEST_NET}_rtr.src="$GUEST_NET"
 uci set firewall.${GUEST_NET}_rtr.dest_ip="$MAIN_LAN_IP/32"
 uci set firewall.${GUEST_NET}_rtr.target="REJECT"
 
-# Разрешаем DHCP и DNS
+# Разрешаем DNS и DHCP
 uci -q delete firewall.${GUEST_NET}_dns
 uci set firewall.${GUEST_NET}_dns="rule"
 uci set firewall.${GUEST_NET}_dns.name="Allow-${GUEST_NET}-DNS"
@@ -145,28 +152,22 @@ sleep 3
 service dnsmasq restart
 service firewall restart
 
-# Обновление nftables для Xray (если есть)
+# Обновление nftables для Xray
 [ -x /usr/share/xray/update-nft.sh ] && /usr/share/xray/update-nft.sh && echo "✅ nftables обновлены"
 
 # === Финальная проверка ===
 echo ""
 echo "=== Результат ==="
-ip link show "br-${GUEST_NET}" >/dev/null 2>&1 && echo "✅ Мост br-${GUEST_NET} активен" || echo "⚠️ Мост не найден"
-
-if command -v iwinfo >/dev/null; then
-    iwinfo | grep -q "$GUEST_SSID" && echo "✅ Wi-Fi $GUEST_SSID активен"
-fi
+ip link show "br-${GUEST_NET}" >/dev/null 2>&1 && echo "✅ Мост br-${GUEST_NET} активен"
 
 echo ""
-echo "📶 SSID     : $GUEST_SSID"
-echo "🔑 Пароль   : (в /etc/guest-wifi-pass или аргумент)"
+echo "📶 SSID     : $GUEST_SSID (2.4 + 5 ГГц)"
 echo "🌐 IP       : ${GUEST_IP%%/*}"
 echo "🛡️  Изоляция: включена"
-echo "🚀 Трафик   : напрямую в WAN (минуя Xray)"
+echo "🚀 Трафик   : напрямую в WAN"
 echo "📝 Лог      : $LOG"
-
 echo ""
-echo "🧪 Тест:"
-echo "   curl ifconfig.me          # должен показать реальный внешний IP"
-echo "   ping 8.8.8.8              # интернет"
-echo "   ping $MAIN_LAN_IP         # должен быть заблокирован"
+echo "Проверь команды:"
+echo "   iwinfo | grep -A5 \"$GUEST_SSID\""
+echo "   wifi status"
+echo "   uci show wireless | grep guest"
