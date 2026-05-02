@@ -106,7 +106,6 @@ uci set firewall.$GUEST_NET.output="ACCEPT"
 uci set firewall.$GUEST_NET.forward="REJECT"
 uci set firewall.$GUEST_NET.masq="1"
 uci set firewall.$GUEST_NET.mtu_fix="1"
-uci set firewall.$GUEST_NET.isolate="1"
 
 uci -q delete firewall.${GUEST_NET}_wan
 uci set firewall.${GUEST_NET}_wan="forwarding"
@@ -145,11 +144,25 @@ uci set firewall.${GUEST_NET}_dhcp.target="ACCEPT"
 
 uci commit firewall
 
-# === 4.1 SQM (официальное ограничение скорости) ===
-echo "Настройка SQM..."
+# === SQM установка для OpenWrt 25.12.x (apk) ===
+echo "Проверка наличия SQM..."
 
-apk update
-apk add sqm-scripts >/dev/null 2>&1
+if ! command -v tc >/dev/null; then
+    echo "⚠️ tc отсутствует — SQM работать не сможет"
+fi
+
+if [ ! -x /usr/lib/sqm/run.sh ]; then
+    echo "Устанавливаем sqm-scripts через apk..."
+    if command -v apk >/dev/null; then
+        apk add sqm-scripts || echo "⚠️ Не удалось установить sqm-scripts"
+    elif [ -x /sbin/apk ]; then
+        /sbin/apk add sqm-scripts || echo "⚠️ Не удалось установить sqm-scripts"
+    else
+        echo "❌ apk не найден — установка SQM невозможна"
+    fi
+else
+    echo "SQM уже установлен"
+fi
 
 uci -q delete sqm.$GUEST_NET
 uci set sqm.$GUEST_NET="queue"
@@ -161,8 +174,6 @@ uci set sqm.$GUEST_NET.script="piece_of_cake.qos"
 uci set sqm.$GUEST_NET.enabled="1"
 uci commit sqm
 
-/etc/init.d/sqm restart
-
 echo "✅ Конфигурация завершена"
 
 # === 5. Применение ===
@@ -173,6 +184,11 @@ wifi reload
 sleep 3
 service dnsmasq restart
 service firewall restart
+
+# теперь интерфейс уже есть — можно стартовать SQM
+if [ -x /etc/init.d/sqm ]; then
+    /etc/init.d/sqm restart
+fi
 
 [ -x /usr/share/xray/update-nft.sh ] && /usr/share/xray/update-nft.sh && echo "✅ nftables обновлены"
 
@@ -190,9 +206,3 @@ echo "🔑 Пароль   : (в /etc/guest-wifi-pass или аргументы)"
 echo "🚀 Лимиты   : DL=${DL_LIMIT} Kbps, UL=${UL_LIMIT} Kbps"
 echo "🛡️  Изоляция: Wi-Fi + firewall"
 echo "📝 Лог      : $LOG"
-
-echo ""
-echo "🧪 Тест:"
-echo "   curl ifconfig.me"
-echo "   ping 8.8.8.8"
-echo "   ping $MAIN_LAN_IP"
