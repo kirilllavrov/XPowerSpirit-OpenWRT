@@ -192,7 +192,6 @@ EOF
             return
         fi
     done
-    # fallback если всё занято
     echo "D4:0D:AB:2A:E3:CC"
 }
 
@@ -214,7 +213,7 @@ uci set network.$GUEST_NET.netmask="255.255.255.0"
 uci set network.$GUEST_NET.force_link="1"
 uci commit network
 
-# DHCP для гостевой сети
+# DHCP
 uci -q delete dhcp.$GUEST_NET
 uci set dhcp.$GUEST_NET="dhcp"
 uci set dhcp.$GUEST_NET.interface="$GUEST_NET"
@@ -223,24 +222,27 @@ uci set dhcp.$GUEST_NET.limit="150"
 uci set dhcp.$GUEST_NET.leasetime="1h"
 uci commit dhcp
 
-# Firewall зона для гостевой сети
-uci add firewall zone
-uci set firewall.@zone[-1].name="guest"
-uci set firewall.@zone[-1].network="$GUEST_NET"
-uci set firewall.@zone[-1].input="REJECT"
-uci set firewall.@zone[-1].forward="REJECT"
-uci set firewall.@zone[-1].output="ACCEPT"
+# Firewall зона
+uci -q delete firewall.$GUEST_NET
+uci set firewall.$GUEST_NET="zone"
+uci set firewall.$GUEST_NET.name="$GUEST_NET"
+uci set firewall.$GUEST_NET.network="$GUEST_NET"
+uci set firewall.$GUEST_NET.input="REJECT"
+uci set firewall.$GUEST_NET.output="ACCEPT"
+uci set firewall.$GUEST_NET.forward="REJECT"
+uci set firewall.$GUEST_NET.masq="1"
+uci set firewall.$GUEST_NET.mtu_fix="1"
 
-# Firewall правило для DHCP
+# DHCP правило
 uci add firewall rule
 uci set firewall.@rule[-1].name="Allow-DHCP-Guest"
-uci set firewall.@rule[-1].src="guest"
+uci set firewall.@rule[-1].src="$GUEST_NET"
 uci set firewall.@rule[-1].proto="udp"
 uci set firewall.@rule[-1].dest_port="67-68"
 uci set firewall.@rule[-1].target="ACCEPT"
 uci commit firewall
 
-echo "br-guest создан — MAC=$GUEST_MAC MTU=1500, DHCP и firewall настроены"
+echo "br-guest создан — MAC=$GUEST_MAC, DHCP и firewall настроены"
 echo "✅"
 
 # 6. Настройка dnsmasq и DoH

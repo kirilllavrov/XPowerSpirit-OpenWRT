@@ -3,6 +3,7 @@
 
 CONF="/etc/xray/config.json"
 LAN_IF="br-lan"
+GUEST_IF="br-guest"
 
 # Автоопределение LAN интерфейса, если br-lan отсутствует
 if ! ip link show br-lan >/dev/null 2>&1; then
@@ -61,6 +62,9 @@ NFT
         udp dport { 67, 68 } return;
 
         iifname "$LAN_IF" meta l4proto { tcp, udp } \
+            tproxy ip to 127.0.0.1:12345 meta mark set 1 accept;
+
+        iifname "$GUEST_IF" meta l4proto { tcp, udp } \
             tproxy ip to 127.0.0.1:12345 meta mark set 1 accept;
     }
 }
