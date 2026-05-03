@@ -160,38 +160,43 @@ download "$REPO/update-nft.sh" "$NFT_UPDATER"
 
 echo "✅"
 
-# 5. Создаём br-guest
+# 5. Создаём br-guest:
 echo "5. Создаём br-guest:"
 
 GUEST_NET="guest"
 GUEST_IP="192.168.2.1/24"
 
-# Получаем MAC br-lan и wan
 LAN_MAC="$(cat /sys/class/net/br-lan/address 2>/dev/null)"
 WAN_MAC="$(cat /sys/class/net/wan/address 2>/dev/null)"
 
-# Функция увеличения последнего байта
-inc_mac() {
-	IFS=':' read -r b1 b2 b3 b4 b5 b6 <<EOF
-$1
-EOF
-	last_dec=$((0x$b6 + 1))
-	last_hex=$(printf "%02x" $((last_dec & 0xFF)))
-	echo "${b1}:${b2}:${b3}:${b4}:${b5}:${last_hex}"
+# Проверка уникальности MAC
+is_conflict() {
+	local mac="$1"
+	for dev in $(ls /sys/class/net); do
+		[ "$mac" = "$(cat /sys/class/net/$dev/address 2>/dev/null)" ] && return 0
+	done
+	return 1
 }
 
-# Предлагаемый MAC = LAN_MAC + 1
-GUEST_MAC="$(inc_mac "$LAN_MAC")"
+# Генерация уникального MAC
+gen_guest_mac() {
+	local base="$LAN_MAC"
+	IFS=':' read -r b1 b2 b3 b4 b5 b6 <<EOF
+$base
+EOF
+	for offset in 2 3 4 5 6 7 8 9 10; do
+		new_hex=$(printf "%02x" $((0x$b6 + offset)))
+		candidate="${b1}:${b2}:${b3}:${b4}:${b5}:${new_hex}"
+		if ! is_conflict "$candidate"; then
+			echo "$candidate"
+			return
+		fi
+	done
+	# fallback если всё занято
+	echo "D4:0D:AB:2A:E3:CC"
+}
 
-# Если совпал с WAN — увеличиваем ещё раз
-if [ "$GUEST_MAC" = "$WAN_MAC" ]; then
-	GUEST_MAC="$(inc_mac "$GUEST_MAC")"
-fi
-
-# Если всё равно совпало — fallback на CA
-if [ "$GUEST_MAC" = "$LAN_MAC" ] || [ "$GUEST_MAC" = "$WAN_MAC" ]; then
-	GUEST_MAC="D4:0D:AB:2A:E3:CA"
-fi
+GUEST_MAC="$(gen_guest_mac)"
 
 uci -q delete network.${GUEST_NET}_dev
 uci set network.${GUEST_NET}_dev="device"
@@ -207,9 +212,27 @@ uci set network.$GUEST_NET.device="br-${GUEST_NET}"
 uci set network.$GUEST_NET.ipaddr="${GUEST_IP%%/*}"
 uci set network.$GUEST_NET.netmask="255.255.255.0"
 uci set network.$GUEST_NET.force_link="1"
-
 uci commit network
-echo "br-guest создан — MAC=$GUEST_MAC MTU=1500"
+
+# DHCP для гостевой сети
+uci -q delete dhcp.$GUEST_NET
+uci set dhcp.$GUEST_NET="dhcp"
+uci set dhcp.$GUEST_NET.interface="$GUEST_NET"
+uci set dhcp.$GUEST_NET.start="100"
+uci set dhcp.$GUEST_NET.limit="150"
+uci set dhcp.$GUEST_NET.leasetime="1h"
+uci commit dhcp
+
+# Firewall правило для DHCP
+uci add firewall rule
+uci set firewall.@rule[-1].name="Allow-DHCP-Guest"
+uci set firewall.@rule[-1].src="$GUEST_NET"
+uci set firewall.@rule[-1].proto="udp"
+uci set firewall.@rule[-1].dest_port="67-68"
+uci set firewall.@rule[-1].target="ACCEPT"
+uci commit firewall
+
+echo "br-guest создан — MAC=$GUEST_MAC MTU=1500, DHCP включён"
 echo "✅"
 
 # 6. Настройка dnsmasq и DoH
