@@ -171,28 +171,33 @@ WAN_MAC="$(cat /sys/class/net/wan/address 2>/dev/null)"
 
 # Проверка уникальности MAC
 is_conflict() {
-    local mac="$1"
-    for dev in $(ls /sys/class/net); do
-        [ "$mac" = "$(cat /sys/class/net/$dev/address 2>/dev/null)" ] && return 0
-    done
-    return 1
+	local mac="$1"
+	# Проверка через sysfs
+	for dev in $(ls /sys/class/net); do
+		[ "$mac" = "$(cat /sys/class/net/$dev/address 2>/dev/null)" ] && return 0
+	done
+	# Проверка через ip link (DSA/виртуальные интерфейсы)
+	if ip link show | grep -qi "$mac"; then
+		return 0
+	fi
+	return 1
 }
 
 # Генерация уникального MAC
 gen_guest_mac() {
-    local base="$LAN_MAC"
-    IFS=':' read -r b1 b2 b3 b4 b5 b6 <<EOF
+	local base="$LAN_MAC"
+	IFS=':' read -r b1 b2 b3 b4 b5 b6 <<EOF
 $base
 EOF
-    for offset in 2 3 4 5 6 7 8 9 10; do
-        new_hex=$(printf "%02x" $((0x$b6 + offset)))
-        candidate="${b1}:${b2}:${b3}:${b4}:${b5}:${new_hex}"
-        if ! is_conflict "$candidate"; then
-            echo "$candidate"
-            return
-        fi
-    done
-    echo "D4:0D:AB:2A:E3:CC"
+	for offset in 2 3 4 5 6 7 8 9 10; do
+		new_hex=$(printf "%02x" $((0x$b6 + offset)))
+		candidate="${b1}:${b2}:${b3}:${b4}:${b5}:${new_hex}"
+		if ! is_conflict "$candidate"; then
+			echo "$candidate"
+			return
+		fi
+	done
+	echo "D4:0D:AB:2A:E3:CC"
 }
 
 GUEST_MAC="$(gen_guest_mac)"
@@ -245,7 +250,7 @@ uci commit firewall
 echo "br-guest создан — MAC=$GUEST_MAC, DHCP и firewall настроены"
 echo "✅"
 
-# 6. Настройка dnsmasq и DoH
+# 6. Настройка dnsmasq -> Xray
 echo "6. Настраиваем DNS (dnsmasq):"
 
 uci set dhcp.@dnsmasq[0].noresolv='1'

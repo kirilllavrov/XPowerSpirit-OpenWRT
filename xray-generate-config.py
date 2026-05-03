@@ -60,7 +60,7 @@ def choose_best_server(servers):
 def base_config():
     return {
         "log": {
-            "loglevel": "warning",  # ← production-ready
+            "loglevel": "warning",
             "access": "/tmp/log/xray-access.log",
             "error": "/tmp/log/xray-error.log"
         },
@@ -119,7 +119,7 @@ def base_config():
                 }
             },
             {
-                "tag": "dns-in-alt",  # ← правильный тег
+                "tag": "dns-in-alt",
                 "listen": "127.0.0.1",
                 "port": 5054,
                 "protocol": "dokodemo-door",
@@ -132,12 +132,9 @@ def base_config():
         ]
     }
 
-
-def build_rules(chosen_tag):
-    return [
-        # ← ИСПРАВЛЕНО: "dns-in-alt" вместо "dns-in-udp"
+def build_rules(chosen_tag, direct_mode=False):
+    rules = [
         {"type": "field", "inboundTag": ["dns-in", "dns-in-alt"], "outboundTag": "direct"},
-        # {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},  # закомментировано, т.к. NextDNS режет рекламу
         {"type": "field", "ip": ["geoip:ru", "geoip:private"], "outboundTag": "direct"},
         {"type": "field", "domain": [
             "geosite:private",
@@ -146,13 +143,14 @@ def build_rules(chosen_tag):
             "geosite:category-mobile",
             "geosite:category-ru"
         ], "outboundTag": "direct"},
-        {"type": "field", "domain": [
+    ]
+    if not direct_mode:
+        rules.append({"type": "field", "domain": [
             "geosite:category-streaming", 
             "geosite:category-games"
-        ], "outboundTag": chosen_tag},
-        # Catch-all: ВСЁ остальное — в прокси (строго в конце!)
-        {"type": "field", "network": "tcp,udp", "outboundTag": chosen_tag}
-    ]
+        ], "outboundTag": chosen_tag})
+    rules.append({"type": "field", "network": "tcp,udp", "outboundTag": chosen_tag})
+    return rules
 
 def main():
     if len(sys.argv) != 3 or sys.argv[1] != "--output":
@@ -170,7 +168,7 @@ def main():
         ]
         cfg["routing"] = {
             "domainStrategy": "ForceIPv4",
-            "rules": build_rules("direct")
+            "rules": build_rules("direct", direct_mode=True)
         }
         print("⚠️ Нет доступных серверов (только заглушки). Создан DIRECT-конфиг.", file=sys.stderr)
     else:
@@ -178,7 +176,6 @@ def main():
         if "tag" not in chosen:
             chosen["tag"] = chosen_tag
         
-        # 🔧 sockopt оптимизации для proxy
         ss = chosen.setdefault("streamSettings", {})
         sockopt = ss.setdefault("sockopt", {})
         sockopt["mark"] = 255
@@ -200,7 +197,7 @@ def main():
         ]
         cfg["routing"] = {
             "domainStrategy": "IPOnDemand",
-            "rules": build_rules(chosen_tag)
+            "rules": build_rules(chosen_tag, direct_mode=False)
         }
         print(f"✅ Выбран сервер: {chosen_tag}", file=sys.stderr)
     
