@@ -171,29 +171,29 @@ WAN_MAC="$(cat /sys/class/net/wan/address 2>/dev/null)"
 
 # Проверка уникальности MAC
 is_conflict() {
-	local mac="$1"
-	for dev in $(ls /sys/class/net); do
-		[ "$mac" = "$(cat /sys/class/net/$dev/address 2>/dev/null)" ] && return 0
-	done
-	return 1
+    local mac="$1"
+    for dev in $(ls /sys/class/net); do
+        [ "$mac" = "$(cat /sys/class/net/$dev/address 2>/dev/null)" ] && return 0
+    done
+    return 1
 }
 
 # Генерация уникального MAC
 gen_guest_mac() {
-	local base="$LAN_MAC"
-	IFS=':' read -r b1 b2 b3 b4 b5 b6 <<EOF
+    local base="$LAN_MAC"
+    IFS=':' read -r b1 b2 b3 b4 b5 b6 <<EOF
 $base
 EOF
-	for offset in 2 3 4 5 6 7 8 9 10; do
-		new_hex=$(printf "%02x" $((0x$b6 + offset)))
-		candidate="${b1}:${b2}:${b3}:${b4}:${b5}:${new_hex}"
-		if ! is_conflict "$candidate"; then
-			echo "$candidate"
-			return
-		fi
-	done
-	# fallback если всё занято
-	echo "D4:0D:AB:2A:E3:CC"
+    for offset in 2 3 4 5 6 7 8 9 10; do
+        new_hex=$(printf "%02x" $((0x$b6 + offset)))
+        candidate="${b1}:${b2}:${b3}:${b4}:${b5}:${new_hex}"
+        if ! is_conflict "$candidate"; then
+            echo "$candidate"
+            return
+        fi
+    done
+    # fallback если всё занято
+    echo "D4:0D:AB:2A:E3:CC"
 }
 
 GUEST_MAC="$(gen_guest_mac)"
@@ -223,16 +223,24 @@ uci set dhcp.$GUEST_NET.limit="150"
 uci set dhcp.$GUEST_NET.leasetime="1h"
 uci commit dhcp
 
+# Firewall зона для гостевой сети
+uci add firewall zone
+uci set firewall.@zone[-1].name="guest"
+uci set firewall.@zone[-1].network="$GUEST_NET"
+uci set firewall.@zone[-1].input="REJECT"
+uci set firewall.@zone[-1].forward="REJECT"
+uci set firewall.@zone[-1].output="ACCEPT"
+
 # Firewall правило для DHCP
 uci add firewall rule
 uci set firewall.@rule[-1].name="Allow-DHCP-Guest"
-uci set firewall.@rule[-1].src="$GUEST_NET"
+uci set firewall.@rule[-1].src="guest"
 uci set firewall.@rule[-1].proto="udp"
 uci set firewall.@rule[-1].dest_port="67-68"
 uci set firewall.@rule[-1].target="ACCEPT"
 uci commit firewall
 
-echo "br-guest создан — MAC=$GUEST_MAC MTU=1500, DHCP включён"
+echo "br-guest создан — MAC=$GUEST_MAC MTU=1500, DHCP и firewall настроены"
 echo "✅"
 
 # 6. Настройка dnsmasq и DoH
