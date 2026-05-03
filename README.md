@@ -6,7 +6,7 @@
 
 ```bash
 apk update
-apk add curl ca-certificates python3 kmod-nft-tproxy kmod-nft-socket unzip sqm-scripts
+apk add curl ca-certificates python3 kmod-nft-tproxy kmod-nft-socket unzip sqm-scripts jq
 ```
 
 #### Установка Xray на OpenWRT
