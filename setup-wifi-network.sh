@@ -149,8 +149,8 @@ service network restart
 sleep 2
 wifi reload
 sleep 2
-service dnsmasq restart
 service firewall restart
+service dnsmasq restart
 
 # Ждём появления br-guest
 for i in $(seq 1 10); do
