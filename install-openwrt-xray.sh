@@ -90,7 +90,7 @@ uci set firewall.$GUEST_NET.forward="REJECT"
 uci set firewall.$GUEST_NET.masq="1"
 uci set firewall.$GUEST_NET.mtu_fix="1"
 
-# 3.4 DNS
+# 3.4 Firewall DNS
 uci -q delete firewall.${GUEST_NET}_dns
 uci set firewall.${GUEST_NET}_dns="rule"
 uci set firewall.${GUEST_NET}_dns.name="Allow-DNS-Guest"
@@ -99,7 +99,7 @@ uci set firewall.${GUEST_NET}_dns.dest_port="53"
 uci set firewall.${GUEST_NET}_dns.proto="tcp udp"
 uci set firewall.${GUEST_NET}_dns.target="ACCEPT"
 
-# 3.5 DHCP
+# 3.5 Firewall DHCP
 uci -q delete firewall.${GUEST_NET}_dhcp
 uci set firewall.${GUEST_NET}_dhcp="rule"
 uci set firewall.${GUEST_NET}_dhcp.name="Allow-DHCP-Guest"
@@ -246,7 +246,7 @@ download "$REPO/update-nft.sh" "$NFT_UPDATER"
 
 echo "✅"
 
-# 6. Настройка dnsmasq и DoH
+# 6. Настройка DNS (dnsmasq)
 echo "6. Настраиваем DNS (dnsmasq):"
 
 uci set dhcp.@dnsmasq[0].noresolv='1'
@@ -257,7 +257,7 @@ uci commit dhcp
 
 echo "✅"
 
-# 7. НСоздаём init.d для Xray
+# 7. Создаём init.d для Xray
 echo "7. Создаём init.d для Xray:"
 
 cat >/etc/init.d/xray <<'XRAYEOF'
@@ -424,6 +424,7 @@ echo "✅"
 
 # 11. Cron: автообновление в 2.30 ночи
 echo "11. Настройка Crontab:"
+
 CRON_ENTRY="30 2 * * * $UPDATER"
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
 	(
@@ -457,6 +458,7 @@ echo "✅ hotplug настроен"
 
 # 13. Запуск и рестарт служб
 echo "13. Запускаем службы:"
+
 service firewall restart
 service dnsmasq restart
 service xray start
