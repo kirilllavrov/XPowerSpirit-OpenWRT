@@ -77,7 +77,7 @@ for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-devic
 	uci set wireless.${RADIO}.channel='auto'
 	uci set wireless.${RADIO}.legacy_rates='0'
 	uci set wireless.${RADIO}.cell_density='2'
-	uci set wireless.${RADIO}.ieee80211w='2'
+	uci set wireless.${RADIO}.ieee80211w='1'
 done
 
 # 5GHz — HE160

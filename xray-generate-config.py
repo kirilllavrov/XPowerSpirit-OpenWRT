@@ -78,11 +78,7 @@ def base_config():
             "servers": [
                 {"address": "https://cloudflare-dns.com/dns-query", "skipFallback": True},
                 {"address": "https://dns.google/dns-query", "skipFallback": True},
-                {
-                  "address": "https://dns.nextdns.io",
-                  "domains": ["geosite:category-ads"],
-                  "skipFallback": True
-                }
+                {"address": "https://dns.nextdns.io", "skipFallback": True}
             ]
         },
         "inbounds": [
@@ -135,7 +131,8 @@ def base_config():
 def build_rules(chosen_tag, direct_mode=False):
     rules = [
         {"type": "field", "inboundTag": ["dns-in", "dns-in-alt"], "outboundTag": "direct"},
-        {"type": "field", "ip": ["geoip:ru", "geoip:private"], "outboundTag": "direct"},
+        {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},
+        {"type": "field", "ip": ["geoip:ru", "geoip:private"], "outboundTag": "direct"},        
         {"type": "field", "domain": [
             "geosite:private",
             "geosite:category-browser", 
