@@ -74,7 +74,7 @@
 1. **Клиент → Гостевая сеть**: Трафик попадает в цепочку `prerouting` nftables
 2. **nftables**: Отфильтровывает локальные адреса, DNS, исключения; остальное направляет на `127.0.0.1:12345`
 3. **Xray TProxy**: Принимает трафик, выполняет DNS-over-HTTPS через встроенный DNS-резолвер
-4. **Маршрутизация**: 
+4. **Маршрутизация**:
    - `geoip:ru`, `geoip:private` → напрямую (`direct`)
    - Остальной трафик → прокси (`proxy`)
 
@@ -83,6 +83,7 @@
 ## 📦 Требования
 
 ### Аппаратные
+
 - Устройство с OpenWrt 25.12.x или совместимой версией
 - Минимум 20 MB свободного места в `/tmp`
 - Поддержка nftables (ядро 4.19+)
@@ -96,8 +97,8 @@ apk add curl ca-certificates python3 kmod-nft-tproxy kmod-nft-socket \
 ```
 
 ### Опционально (для расширенной функциональности)
+
 - `luci-app-sqm` — веб-интерфейс для управления SQM
-- `dnsmasq` — уже входит в стандартную поставку OpenWrt
 
 ---
 
@@ -125,6 +126,7 @@ chmod +x install-openwrt-xray.sh
 ```
 
 **Параметры установки:**
+
 | Параметр | Описание | По умолчанию |
 |----------|----------|--------------|
 | `--sub=URL` | URL подписки VLESS (обязательно) | — |
@@ -178,7 +180,7 @@ chmod +x setup-wifi-network.sh
 9. **Маршрутизация** — добавляет таблицу `xray` (ID 100) в `/etc/iproute2/rt_tables`
 10. **Sysctl** — включает `route_localnet` и `ip_forward`
 11. **Гео-базы** — загружает `geoip.dat` и `geosite.dat` с проверкой SHA256
-12. **HWID** — генерирует уникальный идентификатор устройства (UUID)
+12. **HWID** — генерирует уникальный идентификатор устройства HWID
 13. **Генерация config.json** — парсит подписку и создаёт конфигурацию
 14. **Cron** — добавляет задачу на обновление в 2:30 ночи
 15. **Hotplug** — настраивает автообновление при подъёме WAN-интерфейса
@@ -192,6 +194,7 @@ chmod +x setup-wifi-network.sh
 **Назначение:** Настройка двухдиапазонного Wi-Fi с разделением на домашнюю и гостевую сети.
 
 **Особенности:**
+
 - **Безопасность:** WPA2+WPA3 mixed mode (`sae-mixed`) с обязательным PMF
 - **HE160** — поддержка ширины канала 160 MHz на 5 GHz
 - **Изоляция клиентов** — в гостевой сети клиенты не видят друг друга
@@ -199,6 +202,7 @@ chmod +x setup-wifi-network.sh
 - **Country RU** — оптимизировано для России
 
 **Параметры:**
+
 | Параметр | Описание | По умолчанию |
 |----------|----------|--------------|
 | `--ssid=NAME` | SSID домашней сети | `Home-WiFi` |
@@ -207,6 +211,7 @@ chmod +x setup-wifi-network.sh
 | `--pass-guest=PASS` | Пароль гостевой сети | `GuestSecure123!` |
 
 **Валидация:**
+
 - SSID: 1-32 символа
 - Пароль: 8-63 символа
 
@@ -242,6 +247,7 @@ chmod +x setup-wifi-network.sh
 **Логирование:** `/tmp/log/xray-update.log`
 
 **Запуск:** Вручную или автоматически:
+
 - Cron: `30 2 * * *` (ежедневно в 2:30)
 - Hotplug: при событии `ifup wan`
 
@@ -255,10 +261,12 @@ chmod +x setup-wifi-network.sh
 
 1. **Очистка** — удаляет старые правила и таблицу маршрутов 100
 2. **Policy Routing**:
+
    ```bash
    ip rule add fwmark 1 table 100
    ip route add local 0.0.0.0/0 dev lo table 100
    ```
+
 3. **Извлечение IP серверов** — парсит `config.json` для исключения их из TProxy
 4. **Создание таблицы `inet xray`**:
    - Исключения: localhost, RFC1918, link-local, multicast, резервные адреса
@@ -266,23 +274,6 @@ chmod +x setup-wifi-network.sh
    - Исключение DHCP (порты 67-68)
    - Исключение Mark 0xff (трафик самого Xray)
    - TProxy для TCP/UDP с LAN-интерфейса на `127.0.0.1:12345`
-
-**Пример生成的 правил:**
-```nft
-table inet xray {
-    chain prerouting {
-        type filter hook prerouting priority mangle; policy accept;
-        
-        ip daddr { 127.0.0.0/8, 10.0.0.0/8, ... } return;
-        meta mark 0xff return;
-        ip daddr { <server_ips> } return;
-        udp dport { 67, 68 } return;
-        
-        iifname "br-lan" meta l4proto { tcp, udp } \
-            tproxy ip to 127.0.0.1:12345 meta mark set 1 accept;
-    }
-}
-```
 
 **Автоопределение LAN:** Если `br-lan` отсутствует, автоматически определяет первый non-WAN интерфейс.
 
@@ -310,6 +301,7 @@ table inet xray {
 **Авто-рекомендации:** Скрипт выдаёт конкретные команды для исправления найденных проблем.
 
 **Пример вывода:**
+
 ```
 [FAIL] DNS (порт 53) НЕ исключён! ГЛАВНАЯ ПРИЧИНА: 'сайты не грузятся'
 🔧 РЕКОМЕНДАЦИИ:
@@ -318,6 +310,7 @@ nft delete table ip xray; /etc/init.d/xray-tproxy-rules restart
 ```
 
 **Тест клиента:** В конце выводится команда для проверки с клиента:
+
 ```bash
 curl -v --interface 192.168.1.138 http://ipinfo.io/ip
 ```
@@ -329,6 +322,7 @@ curl -v --interface 192.168.1.138 http://ipinfo.io/ip
 **Назначение:** Парсинг URL подписки и преобразование VLESS-ссылок в JSON-аутбаунды для Xray.
 
 **Поддерживаемые протоколы:**
+
 - VLESS over TCP
 - VLESS over WebSocket (WS)
 - VLESS over gRPC
@@ -336,6 +330,7 @@ curl -v --interface 192.168.1.138 http://ipinfo.io/ip
 - VLESS over XHTTP (с поддержкой `extra` JSON)
 
 **Поддерживаемые режимы безопасности:**
+
 - None (без шифрования)
 - TLS (с SNI, ALPN, fingerprint, allowInsecure)
 - Reality (с publicKey, shortId, spiderX)
@@ -356,11 +351,13 @@ curl -v --interface 192.168.1.138 http://ipinfo.io/ip
 **Выходные данные:** JSON-массив аутбаундов формата Xray
 
 **Пример использования:**
+
 ```bash
 cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
 ```
 
 **Пример выхода:**
+
 ```json
 [
   {
@@ -406,7 +403,7 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
 
 2. **Базовая конфигурация:**
    - **Логирование:** access/error логи в `/tmp/log/`
-   - **DNS:** 
+   - **DNS:**
      - Cloudflare (`1.1.1.1`), Google (`8.8.8.8`)
      - DoH: `cloudflare-dns.com`, `dns.google`, `dns.nextdns.io` (для ads)
      - Стратегия: `UseIPv4`, кэш включён, serveStale
@@ -431,6 +428,7 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
 **Режим без серверов:** Если все сервера — заглушки, создаётся DIRECT-конфиг (весь трафик напрямую).
 
 **Пример использования:**
+
 ```bash
 python3 xray-sub-parser.py < subscription.url | \
 python3 xray-generate-config.py --output /etc/xray/config.json
@@ -529,18 +527,23 @@ DOMAIN_WHITELIST = [
 ### Сайты не грузятся, но Xray запущен
 
 1. **Проверьте исключение DNS в nftables:**
+
    ```bash
    nft list chain ip xray xray_tproxy | grep 53
    ```
+
    Должно быть правило с `return` для порта 53.
 
 2. **Проверьте dnsmasq:**
+
    ```bash
    uci show dhcp.@dnsmasq[0].server
    ```
+
    Должно быть: `127.0.0.1#5053` и `127.0.0.1#5054`
 
 3. **Запустите диагностику:**
+
    ```bash
    /usr/share/xray/diagnose-xray-tproxy.sh
    ```
@@ -548,6 +551,7 @@ DOMAIN_WHITELIST = [
 ### Ошибка: " Недостаточно места в /tmp"
 
 Очистите временные файлы:
+
 ```bash
 rm -rf /tmp/xray_*
 rm -f /tmp/*.log
@@ -556,6 +560,7 @@ rm -f /tmp/*.log
 ### Конфиг не проходит валидацию
 
 Проверьте логи парсера:
+
 ```bash
 curl -s -L -H "x-hwid: $(cat /etc/xray/hwid)" "$(cat /etc/xray/subscription.url)" | \
   python3 /usr/share/xray/xray-sub-parser.py 2>&1 | tee /tmp/debug.json
@@ -564,6 +569,7 @@ curl -s -L -H "x-hwid: $(cat /etc/xray/hwid)" "$(cat /etc/xray/subscription.url)
 ### Geo-файлы не загружаются
 
 Проверьте доступность CDN:
+
 ```bash
 curl -I https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat
 ```
@@ -573,16 +579,19 @@ curl -I https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat
 ### Гостевая сеть не работает
 
 1. Проверьте, создан ли интерфейс:
+
    ```bash
    uci show network.guest
    ```
 
 2. Проверьте firewall:
+
    ```bash
    uci show firewall.guest
    ```
 
 3. Перезапустите службы:
+
    ```bash
    service network restart
    service firewall restart
