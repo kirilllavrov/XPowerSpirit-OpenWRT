@@ -30,6 +30,16 @@ GUEST_IP="192.168.2.1"
 DL_GUEST="5120"
 UL_GUEST="5120"
 
+# Парсер аргументов
+for arg in "$@"; do
+    case $arg in
+        --guest-ip=*) GUEST_IP="${arg#*=}" ;;
+        --guest-dl=*) DL_GUEST="${arg#*=}" ;;
+        --guest-ul=*) UL_GUEST="${arg#*=}" ;;
+        *) echo "⚠️ Неизвестный аргумент: $arg" ;;
+    esac
+done
+
 mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR"
 
 # 1. Устанавливаем Timezone
