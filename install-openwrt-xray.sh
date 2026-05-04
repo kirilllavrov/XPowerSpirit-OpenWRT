@@ -39,10 +39,7 @@ uci set system.@system[0].timezone='MSK-3'
 uci commit system
 echo "✅"
 
-# 2. Подписка
-echo "2. Сохраняем подписку:"
-printf "Введите URL подписки VLESS: "
-read SUB_URL
+# 2. Просим подписку
 [ -z "$SUB_URL" ] && {
 	echo "Ошибка: пустой URL"
 	exit 1
@@ -52,10 +49,10 @@ echo "$SUB_URL" >"$SUB_FILE"
 chmod 600 "$SUB_FILE"
 echo "✅"
 
-# ====================== НАСТРОЙКА ГОСТЕВОЙ СЕТИ ======================
-echo "=== Настройка Guest Network ==="
+# 3. Настраиваем гостевую сеть
+echo "3. Настройка Guest Network:"
 
-# 1. Guest Bridge + Interface
+# 3.1. Guest Bridge + Interface
 uci -q delete network.${GUEST_NET}_dev
 uci set network.${GUEST_NET}_dev="device"
 uci set network.${GUEST_NET}_dev.type="bridge"
@@ -71,7 +68,7 @@ uci set network.$GUEST_NET.netmask="255.255.255.0"
 uci set network.$GUEST_NET.force_link="1"
 uci commit network
 
-# 2. DHCP Guest
+# 3.2. DHCP Guest
 uci -q delete dhcp.$GUEST_NET
 uci set dhcp.$GUEST_NET="dhcp"
 uci set dhcp.$GUEST_NET.interface="$GUEST_NET"
@@ -82,7 +79,7 @@ uci set dhcp.$GUEST_NET.force="1"
 uci set dhcp.$GUEST_NET.ignore="0"
 uci commit dhcp
 
-# 3. Firewall Guest Zone + Rules
+# 3.3. Firewall Guest Zone + Rules
 uci -q delete firewall.$GUEST_NET
 uci set firewall.$GUEST_NET="zone"
 uci set firewall.$GUEST_NET.name="$GUEST_NET"
@@ -93,7 +90,7 @@ uci set firewall.$GUEST_NET.forward="REJECT"
 uci set firewall.$GUEST_NET.masq="1"
 uci set firewall.$GUEST_NET.mtu_fix="1"
 
-# DNS
+# 3.4 DNS
 uci -q delete firewall.${GUEST_NET}_dns
 uci set firewall.${GUEST_NET}_dns="rule"
 uci set firewall.${GUEST_NET}_dns.name="Allow-DNS-Guest"
@@ -102,7 +99,7 @@ uci set firewall.${GUEST_NET}_dns.dest_port="53"
 uci set firewall.${GUEST_NET}_dns.proto="tcp udp"
 uci set firewall.${GUEST_NET}_dns.target="ACCEPT"
 
-# DHCP
+# 3.5 DHCP
 uci -q delete firewall.${GUEST_NET}_dhcp
 uci set firewall.${GUEST_NET}_dhcp="rule"
 uci set firewall.${GUEST_NET}_dhcp.name="Allow-DHCP-Guest"
@@ -111,14 +108,14 @@ uci set firewall.${GUEST_NET}_dhcp.dest_port="67-68"
 uci set firewall.${GUEST_NET}_dhcp.proto="udp"
 uci set firewall.${GUEST_NET}_dhcp.target="ACCEPT"
 
-# Forward to WAN
+# 3.6 Forward to WAN
 uci -q delete firewall.${GUEST_NET}_wan
 uci set firewall.${GUEST_NET}_wan="forwarding"
 uci set firewall.${GUEST_NET}_wan.src="$GUEST_NET"
 uci set firewall.${GUEST_NET}_wan.dest="wan"
 uci commit firewall
 
-# 4. SQM только для Guest
+# 4. Настраиваем SQM только для Guest
 uci -q delete sqm.$GUEST_NET
 uci set sqm.$GUEST_NET="queue"
 uci set sqm.$GUEST_NET.interface="br-${GUEST_NET}"
@@ -129,17 +126,15 @@ uci set sqm.$GUEST_NET.script="piece_of_cake.qos"
 uci set sqm.$GUEST_NET.enabled="1"
 uci commit sqm
 
-echo "✅ Guest Network (br-guest + firewall + SQM) настроена"
-
 echo "🔄 Применяем сетевые изменения..."
 service network restart
 sleep 3
 service firewall restart
 service dnsmasq restart
 
-# ====================== ОСНОВНАЯ УСТАНОВКА XRAY ======================
+echo "✅"
 
-# 3. Установка Xray из GitHub (с .dgst + SHA2-256)
+# 5. Установка Xray из GitHub
 echo "3. Устанавливаем Xray из GitHub:"
 
 LATEST_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest |
@@ -251,8 +246,8 @@ download "$REPO/update-nft.sh" "$NFT_UPDATER"
 
 echo "✅"
 
-# 5. Настройка dnsmasq и DoH
-echo "5. Настраиваем DNS (dnsmasq):"
+# 6. Настройка dnsmasq и DoH
+echo "6. Настраиваем DNS (dnsmasq):"
 
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci -q delete dhcp.@dnsmasq[0].server
@@ -262,7 +257,8 @@ uci commit dhcp
 
 echo "✅"
 
-echo "6. Создаём init.d для Xray:"
+# 7. НСоздаём init.d для Xray
+echo "7. Создаём init.d для Xray:"
 
 cat >/etc/init.d/xray <<'XRAYEOF'
 #!/bin/sh /etc/rc.common
@@ -331,7 +327,8 @@ chmod +x /etc/init.d/xray
 /etc/init.d/xray enable
 echo "✅"
 
-echo "7. Настраиваем routing:"
+# 8. Настраиваем routing
+echo "8. Настраиваем routing:"
 
 if ! grep -q "^100[[:space:]]\+xray$" /etc/iproute2/rt_tables; then
 	echo "100 xray" >>/etc/iproute2/rt_tables
@@ -339,8 +336,8 @@ fi
 
 echo "✅"
 
-# 8. Настраиваем sysctl
-echo "8. Настраиваем sysctl:"
+# 9. Настраиваем sysctl
+echo "9. Настраиваем sysctl:"
 
 # Применяем немедленно
 sysctl -w net.ipv4.conf.all.route_localnet=1
@@ -355,8 +352,8 @@ sysctl -p /etc/sysctl.d/99-xray.conf >/dev/null 2>&1
 
 echo "✅"
 
-# 9. Geo + HWID + config.json
-echo "9. Скачиваем геофайлы, делаем HWID, генерируем config.json"
+# 10. Geo + HWID + config.json
+echo "10. Скачиваем геофайлы, делаем HWID, генерируем config.json"
 
 update_geo() {
 	local URL="$1"  # https://cdn.jsdelivr.net/.../geoip.dat
@@ -425,8 +422,8 @@ if [ ! -s "$CONFIG_JSON" ]; then
 fi
 echo "✅"
 
-# 10. Cron: автообновление в 2.30 ночи
-echo "10. Настройка Crontab:"
+# 11. Cron: автообновление в 2.30 ночи
+echo "11. Настройка Crontab:"
 CRON_ENTRY="30 2 * * * $UPDATER"
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
 	(
@@ -438,8 +435,8 @@ else
 	echo "❌ Cron-задача уже существует, пропускаем"
 fi
 
-# 11. Настройка обновления после включения
-echo "11. Настройка hotplug:"
+# 12. Настройка обновления после включения
+echo "12. Настройка hotplug:"
 
 cat >/etc/hotplug.d/iface/99-xray-autoupdate <<'EOF'
 #!/bin/sh
@@ -458,8 +455,8 @@ EOF
 chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
 echo "✅ hotplug настроен"
 
-# 12. Запуск и рестарт служб
-echo "12. Запускаем службы:"
+# 13. Запуск и рестарт служб
+echo "13. Запускаем службы:"
 service firewall restart
 service dnsmasq restart
 service xray start
@@ -470,7 +467,7 @@ sleep 3
 if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
 	echo "Конфиг Xray прошел проверку - ✅"
 else
-	echo " Конфиг Xray НЕ прошел проверку! - 🚫"
+	echo "Конфиг Xray НЕ прошел проверку! - 🚫"
 	exit 1
 fi
 
