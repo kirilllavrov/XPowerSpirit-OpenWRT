@@ -313,11 +313,11 @@ update_geo() {
 
 # Вызовы
 update_geo \
-	"https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat" \
+	"https://raw.githubusercontent.com/kirilllavrov/geoip-builder/release/geoip.dat" \
 	"$GEO_DIR/geoip.dat"
 
 update_geo \
-	"https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat" \
+	"https://raw.githubusercontent.com/kirilllavrov/geosite-builder/release/geosite.dat" \
 	"$GEO_DIR/geosite.dat"
 
 HWID="$(hexdump -n 16 -v -e '/1 "%02x"' /dev/urandom)"
