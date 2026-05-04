@@ -139,7 +139,7 @@ uci set dhcp.$GUEST_NET="dhcp"
 uci set dhcp.$GUEST_NET.interface="$GUEST_NET"
 uci set dhcp.$GUEST_NET.start="100"
 uci set dhcp.$GUEST_NET.limit="150"
-uci set dhcp.$GUEST_NET.leasetime="1h"
+uci set dhcp.$GUEST_NET.leasetime="12h"
 uci commit dhcp
 
 # === 5. Firewall Guest ===
