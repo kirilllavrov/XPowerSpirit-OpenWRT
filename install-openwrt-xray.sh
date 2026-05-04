@@ -27,8 +27,8 @@ STATE_DIR="/etc/xray/state"
 
 GUEST_NET="guest"
 GUEST_IP="192.168.2.1"
-DL_GUEST="5000"
-UL_GUEST="5000"
+DL_GUEST="5120"
+UL_GUEST="5120"
 
 mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR"
 
