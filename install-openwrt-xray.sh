@@ -131,6 +131,12 @@ uci commit sqm
 
 echo "✅ Guest Network (br-guest + firewall + SQM) настроена"
 
+echo "🔄 Применяем сетевые изменения..."
+service network restart
+sleep 3
+service firewall restart
+service dnsmasq restart
+
 # ====================== ОСНОВНАЯ УСТАНОВКА XRAY ======================
 
 # 3. Установка Xray из GitHub (с .dgst + SHA2-256)
