@@ -139,7 +139,9 @@ chmod +x install-openwrt-xray.sh
 ```bash
 wget https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/setup-wifi-network.sh
 chmod +x setup-wifi-network.sh
+```
 
+```bash
 ./setup-wifi-network.sh \
   --ssid=Home-WiFi \
   --pass=MySecurePass123 \
