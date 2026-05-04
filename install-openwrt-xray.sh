@@ -25,6 +25,11 @@ TMP_DIR="/tmp/xray_install"
 GEO_DIR="/usr/share/xray"
 STATE_DIR="/etc/xray/state"
 
+GUEST_NET="guest"
+GUEST_IP="192.168.2.1"
+DL_GUEST="5000"
+UL_GUEST="5000"
+
 mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR"
 
 # 1. Устанавливаем Timezone
@@ -46,6 +51,87 @@ read SUB_URL
 echo "$SUB_URL" >"$SUB_FILE"
 chmod 600 "$SUB_FILE"
 echo "✅"
+
+# ====================== НАСТРОЙКА ГОСТЕВОЙ СЕТИ ======================
+echo "=== Настройка Guest Network ==="
+
+# 1. Guest Bridge + Interface
+uci -q delete network.${GUEST_NET}_dev
+uci set network.${GUEST_NET}_dev="device"
+uci set network.${GUEST_NET}_dev.type="bridge"
+uci set network.${GUEST_NET}_dev.name="br-${GUEST_NET}"
+uci set network.${GUEST_NET}_dev.bridge_empty="1"
+
+uci -q delete network.$GUEST_NET
+uci set network.$GUEST_NET="interface"
+uci set network.$GUEST_NET.proto="static"
+uci set network.$GUEST_NET.device="br-${GUEST_NET}"
+uci set network.$GUEST_NET.ipaddr="$GUEST_IP"
+uci set network.$GUEST_NET.netmask="255.255.255.0"
+uci set network.$GUEST_NET.force_link="1"
+uci commit network
+
+# 2. DHCP Guest
+uci -q delete dhcp.$GUEST_NET
+uci set dhcp.$GUEST_NET="dhcp"
+uci set dhcp.$GUEST_NET.interface="$GUEST_NET"
+uci set dhcp.$GUEST_NET.start="100"
+uci set dhcp.$GUEST_NET.limit="150"
+uci set dhcp.$GUEST_NET.leasetime="12h"
+uci set dhcp.$GUEST_NET.force="1"
+uci set dhcp.$GUEST_NET.ignore="0"
+uci commit dhcp
+
+# 3. Firewall Guest Zone + Rules
+uci -q delete firewall.$GUEST_NET
+uci set firewall.$GUEST_NET="zone"
+uci set firewall.$GUEST_NET.name="$GUEST_NET"
+uci set firewall.$GUEST_NET.network="$GUEST_NET"
+uci set firewall.$GUEST_NET.input="REJECT"
+uci set firewall.$GUEST_NET.output="ACCEPT"
+uci set firewall.$GUEST_NET.forward="REJECT"
+uci set firewall.$GUEST_NET.masq="1"
+uci set firewall.$GUEST_NET.mtu_fix="1"
+
+# DNS
+uci -q delete firewall.${GUEST_NET}_dns
+uci set firewall.${GUEST_NET}_dns="rule"
+uci set firewall.${GUEST_NET}_dns.name="Allow-DNS-Guest"
+uci set firewall.${GUEST_NET}_dns.src="$GUEST_NET"
+uci set firewall.${GUEST_NET}_dns.dest_port="53"
+uci set firewall.${GUEST_NET}_dns.proto="tcp udp"
+uci set firewall.${GUEST_NET}_dns.target="ACCEPT"
+
+# DHCP
+uci -q delete firewall.${GUEST_NET}_dhcp
+uci set firewall.${GUEST_NET}_dhcp="rule"
+uci set firewall.${GUEST_NET}_dhcp.name="Allow-DHCP-Guest"
+uci set firewall.${GUEST_NET}_dhcp.src="$GUEST_NET"
+uci set firewall.${GUEST_NET}_dhcp.dest_port="67-68"
+uci set firewall.${GUEST_NET}_dhcp.proto="udp"
+uci set firewall.${GUEST_NET}_dhcp.target="ACCEPT"
+
+# Forward to WAN
+uci -q delete firewall.${GUEST_NET}_wan
+uci set firewall.${GUEST_NET}_wan="forwarding"
+uci set firewall.${GUEST_NET}_wan.src="$GUEST_NET"
+uci set firewall.${GUEST_NET}_wan.dest="wan"
+uci commit firewall
+
+# 4. SQM только для Guest
+uci -q delete sqm.$GUEST_NET
+uci set sqm.$GUEST_NET="queue"
+uci set sqm.$GUEST_NET.interface="br-${GUEST_NET}"
+uci set sqm.$GUEST_NET.download="$DL_GUEST"
+uci set sqm.$GUEST_NET.upload="$UL_GUEST"
+uci set sqm.$GUEST_NET.qdisc="cake"
+uci set sqm.$GUEST_NET.script="piece_of_cake.qos"
+uci set sqm.$GUEST_NET.enabled="1"
+uci commit sqm
+
+echo "✅ Guest Network (br-guest + firewall + SQM) настроена"
+
+# ====================== ОСНОВНАЯ УСТАНОВКА XRAY ======================
 
 # 3. Установка Xray из GitHub (с .dgst + SHA2-256)
 echo "3. Устанавливаем Xray из GitHub:"
@@ -160,6 +246,7 @@ download "$REPO/update-nft.sh" "$NFT_UPDATER"
 echo "✅"
 
 # 5. Настройка dnsmasq и DoH
+# 5. Настраиваем dnsmasq и DoH (после guest)
 echo "5. Настраиваем DNS (dnsmasq):"
 
 uci set dhcp.@dnsmasq[0].noresolv='1'
