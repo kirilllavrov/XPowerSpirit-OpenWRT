@@ -2,7 +2,7 @@
 # OpenWrt — Настройка Wi-Fi (Home + Guest) для России
 # WPA2+WPA3 + PMF + HE160 + улучшенная очистка
 
-LOG="/tmp/guest-wifi.log"
+LOG="/tmp/setup-wifi.log"
 : >"$LOG"
 exec > >(tee -a "$LOG") 2>&1
 
@@ -41,7 +41,7 @@ validate_len "$GUEST_SSID" 1 32 && { echo "❌ SSID Guest: 1-32 символа";
 validate_len "$HOME_PASS" 8 63 && { echo "❌ Пароль Home: 8-63 символа"; exit 1; }
 validate_len "$GUEST_PASS" 8 63 && { echo "❌ Пароль Guest: 8-63 символа"; exit 1; }
 
-# === УЛУЧШЕННАЯ ОЧИСТКА ВСЕХ Wi-Fi ИНТЕРФЕЙСОВ ===
+# === ОЧИСТКА ВСЕХ Wi-Fi ИНТЕРФЕЙСОВ ===
 echo "Полная очистка существующих Wi-Fi интерфейсов..."
 
 # Удаляем все wifi-iface
