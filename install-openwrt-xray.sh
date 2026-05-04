@@ -137,6 +137,7 @@ uci set sqm.$GUEST_NET.qdisc="cake"
 uci set sqm.$GUEST_NET.script="piece_of_cake.qos"
 uci set sqm.$GUEST_NET.enabled="1"
 uci commit sqm
+service sqm restart
 
 echo "🔄 Применяем сетевые изменения..."
 service network restart
