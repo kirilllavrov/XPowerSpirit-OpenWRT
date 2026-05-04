@@ -128,7 +128,6 @@ chmod 755 /usr/bin/xray
 rm -rf "$TMP_DIR"
 echo "✅ Xray установлен версии $LATEST_VERSION"
 
-# 4. Загружаем скрипты из репозитория
 echo "4. Загружаем скрипты из репозитория:"
 
 download() {
@@ -160,98 +159,8 @@ download "$REPO/update-nft.sh" "$NFT_UPDATER"
 
 echo "✅"
 
-# 5. Создаём br-guest:
-echo "5. Создаём br-guest:"
-
-GUEST_NET="guest"
-GUEST_IP="192.168.2.1/24"
-
-LAN_MAC="$(cat /sys/class/net/br-lan/address 2>/dev/null)"
-WAN_MAC="$(cat /sys/class/net/wan/address 2>/dev/null)"
-
-# Проверка уникальности MAC
-is_conflict() {
-	local mac="$1"
-	# Проверка через sysfs
-	for dev in $(ls /sys/class/net); do
-		[ "$mac" = "$(cat /sys/class/net/$dev/address 2>/dev/null)" ] && return 0
-	done
-	# Проверка через ip link (DSA/виртуальные интерфейсы)
-	if ip link show | grep -qi "$mac"; then
-		return 0
-	fi
-	return 1
-}
-
-# Генерация уникального MAC
-gen_guest_mac() {
-	local base="$LAN_MAC"
-	IFS=':' read -r b1 b2 b3 b4 b5 b6 <<EOF
-$base
-EOF
-	for offset in 2 3 4 5 6 7 8 9 10; do
-		new_hex=$(printf "%02x" $((0x$b6 + offset)))
-		candidate="${b1}:${b2}:${b3}:${b4}:${b5}:${new_hex}"
-		if ! is_conflict "$candidate"; then
-			echo "$candidate"
-			return
-		fi
-	done
-	echo "D4:0D:AB:2A:E3:CC"
-}
-
-GUEST_MAC="$(gen_guest_mac)"
-
-uci -q delete network.${GUEST_NET}_dev
-uci set network.${GUEST_NET}_dev="device"
-uci set network.${GUEST_NET}_dev.type="bridge"
-uci set network.${GUEST_NET}_dev.name="br-${GUEST_NET}"
-uci set network.${GUEST_NET}_dev.macaddr="$GUEST_MAC"
-uci set network.${GUEST_NET}_dev.mtu="1500"
-
-uci -q delete network.$GUEST_NET
-uci set network.$GUEST_NET="interface"
-uci set network.$GUEST_NET.proto="static"
-uci set network.$GUEST_NET.device="br-${GUEST_NET}"
-uci set network.$GUEST_NET.ipaddr="${GUEST_IP%%/*}"
-uci set network.$GUEST_NET.netmask="255.255.255.0"
-uci set network.$GUEST_NET.force_link="1"
-uci commit network
-
-# DHCP
-uci -q delete dhcp.$GUEST_NET
-uci set dhcp.$GUEST_NET="dhcp"
-uci set dhcp.$GUEST_NET.interface="$GUEST_NET"
-uci set dhcp.$GUEST_NET.start="100"
-uci set dhcp.$GUEST_NET.limit="150"
-uci set dhcp.$GUEST_NET.leasetime="1h"
-uci commit dhcp
-
-# Firewall зона
-uci -q delete firewall.$GUEST_NET
-uci set firewall.$GUEST_NET="zone"
-uci set firewall.$GUEST_NET.name="$GUEST_NET"
-uci set firewall.$GUEST_NET.network="$GUEST_NET"
-uci set firewall.$GUEST_NET.input="REJECT"
-uci set firewall.$GUEST_NET.output="ACCEPT"
-uci set firewall.$GUEST_NET.forward="REJECT"
-uci set firewall.$GUEST_NET.masq="1"
-uci set firewall.$GUEST_NET.mtu_fix="1"
-
-# DHCP правило
-uci add firewall rule
-uci set firewall.@rule[-1].name="Allow-DHCP-Guest"
-uci set firewall.@rule[-1].src="$GUEST_NET"
-uci set firewall.@rule[-1].proto="udp"
-uci set firewall.@rule[-1].dest_port="67-68"
-uci set firewall.@rule[-1].target="ACCEPT"
-uci commit firewall
-
-echo "br-guest создан — MAC=$GUEST_MAC, DHCP и firewall настроены"
-echo "✅"
-
-# 6. Настройка dnsmasq -> Xray
-echo "6. Настраиваем DNS (dnsmasq):"
+# 5. Настройка dnsmasq и DoH
+echo "5. Настраиваем DNS (dnsmasq):"
 
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci -q delete dhcp.@dnsmasq[0].server
@@ -261,8 +170,7 @@ uci commit dhcp
 
 echo "✅"
 
-# 7. Создаём init.d для Xray
-echo "7. Создаём init.d для Xray:"
+echo "6. Создаём init.d для Xray:"
 
 cat >/etc/init.d/xray <<'XRAYEOF'
 #!/bin/sh /etc/rc.common
@@ -331,8 +239,7 @@ chmod +x /etc/init.d/xray
 /etc/init.d/xray enable
 echo "✅"
 
-# 8. Настраиваем sysctl
-echo "8. Настраиваем routing:"
+echo "7. Настраиваем routing:"
 
 if ! grep -q "^100[[:space:]]\+xray$" /etc/iproute2/rt_tables; then
 	echo "100 xray" >>/etc/iproute2/rt_tables
@@ -340,8 +247,8 @@ fi
 
 echo "✅"
 
-# 9. Настраиваем sysctl
-echo "9. Настраиваем sysctl:"
+# 8. Настраиваем sysctl
+echo "8. Настраиваем sysctl:"
 
 # Применяем немедленно
 sysctl -w net.ipv4.conf.all.route_localnet=1
@@ -356,8 +263,8 @@ sysctl -p /etc/sysctl.d/99-xray.conf >/dev/null 2>&1
 
 echo "✅"
 
-# 10. Geo + HWID + config.json
-echo "10. Скачиваем геофайлы, делаем HWID, генерируем config.json"
+# 9. Geo + HWID + config.json
+echo "9. Скачиваем геофайлы, делаем HWID, генерируем config.json"
 
 update_geo() {
 	local URL="$1"  # https://cdn.jsdelivr.net/.../geoip.dat
@@ -413,7 +320,7 @@ update_geo \
 	"https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat" \
 	"$GEO_DIR/geosite.dat"
 
-HWID="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
+HWID="$(hexdump -n 16 -v -e '/1 "%02x"' /dev/urandom)"
 echo "$HWID" >"$HWID_FILE"
 chmod 600 "$HWID_FILE"
 
@@ -426,8 +333,8 @@ if [ ! -s "$CONFIG_JSON" ]; then
 fi
 echo "✅"
 
-# 11. Cron: автообновление в 2.30 ночи
-echo "11. Настройка Crontab:"
+# 10. Cron: автообновление в 2.30 ночи
+echo "10. Настройка Crontab:"
 CRON_ENTRY="30 2 * * * $UPDATER"
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
 	(
@@ -439,8 +346,8 @@ else
 	echo "❌ Cron-задача уже существует, пропускаем"
 fi
 
-# 12. Настройка обновления после включения
-echo "12. Настройка hotplug:"
+# 11. Настройка обновления после включения
+echo "11. Настройка hotplug:"
 
 cat >/etc/hotplug.d/iface/99-xray-autoupdate <<'EOF'
 #!/bin/sh
@@ -459,8 +366,8 @@ EOF
 chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
 echo "✅ hotplug настроен"
 
-# 13. Запуск и рестарт служб
-echo "13. Запускаем службы:"
+# 12. Запуск и рестарт служб
+echo "12. Запускаем службы:"
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall restart
 /etc/init.d/xray start

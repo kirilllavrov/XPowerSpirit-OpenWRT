@@ -150,28 +150,27 @@ MAX_RETRIES=2
 TRY=1
 
 while [ $TRY -le $MAX_RETRIES ]; do
-    TMP_CONFIG="/tmp/xray-config.json"
-    : >"$TMP_CONFIG"
+	TMP_CONFIG="/tmp/xray-config.json"
+	: >"$TMP_CONFIG"
 
-    if curl -s -L -m 20 -H "x-hwid: $HWID" "$SUB_URL" \
-        | python3 "$PARSER" \
-        | python3 "$GENERATOR" --output "$TMP_CONFIG"; then
+	if curl -s -L -m 20 -H "x-hwid: $HWID" "$SUB_URL" |
+		python3 "$PARSER" |
+		python3 "$GENERATOR" --output "$TMP_CONFIG"; then
 
-        if [ ! -s "$TMP_CONFIG" ]; then
-            echo "🚫 Новый config.json пустой (попытка $TRY)" >>"$LOG"
-        elif ! xray run -test -config "$TMP_CONFIG" >/dev/null 2>&1; then
-            echo "🚫 Новый config.json невалиден (попытка $TRY)" >>"$LOG"
-        else
-            # Атомарная замена с правами 600
-            install -m 600 "$TMP_CONFIG" "$CONFIG_JSON"
-            echo "✅ Новый config.json установлен (попытка $TRY)" >>"$LOG"
-            break
-        fi
-    else
-        echo "🚫 Ошибка при получении или разборе подписки (попытка $TRY)" >>"$LOG"
-    fi
+		if [ ! -s "$TMP_CONFIG" ]; then
+			echo "🚫 Новый config.json пустой (попытка $TRY)" >>"$LOG"
+		elif ! xray run -test -config "$TMP_CONFIG" >/dev/null 2>&1; then
+			echo "🚫 Новый config.json невалиден (попытка $TRY)" >>"$LOG"
+		else
+			mv "$TMP_CONFIG" "$CONFIG_JSON"
+			echo "✅ Новый config.json установлен (попытка $TRY)" >>"$LOG"
+			break
+		fi
+	else
+		echo "🚫 Ошибка при получении или разборе подписки (попытка $TRY)" >>"$LOG"
+	fi
 
-    TRY=$((TRY + 1))
+	TRY=$((TRY + 1))
 done
 
 if [ $TRY -gt $MAX_RETRIES ]; then
