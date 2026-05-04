@@ -246,7 +246,6 @@ download "$REPO/update-nft.sh" "$NFT_UPDATER"
 echo "✅"
 
 # 5. Настройка dnsmasq и DoH
-# 5. Настраиваем dnsmasq и DoH (после guest)
 echo "5. Настраиваем DNS (dnsmasq):"
 
 uci set dhcp.@dnsmasq[0].noresolv='1'
