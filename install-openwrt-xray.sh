@@ -29,15 +29,17 @@ GUEST_NET="guest"
 GUEST_IP="192.168.2.1"
 DL_GUEST="5120"
 UL_GUEST="5120"
+SUB_URL=""
 
 # Парсер аргументов
 for arg in "$@"; do
-    case $arg in
-        --guest-ip=*) GUEST_IP="${arg#*=}" ;;
-        --guest-dl=*) DL_GUEST="${arg#*=}" ;;
-        --guest-ul=*) UL_GUEST="${arg#*=}" ;;
-        *) echo "⚠️ Неизвестный аргумент: $arg" ;;
-    esac
+	case $arg in
+	--guest-ip=*) GUEST_IP="${arg#*=}" ;;
+	--guest-dl=*) DL_GUEST="${arg#*=}" ;;
+	--guest-ul=*) UL_GUEST="${arg#*=}" ;;
+	--sub=*) SUB_URL="${arg#*=}" ;;
+	*) echo "⚠️ Неизвестный аргумент: $arg" ;;
+	esac
 done
 
 mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR"
@@ -50,14 +52,14 @@ uci commit system
 echo "✅"
 
 # 2. Просим подписку
-[ -z "$SUB_URL" ] && {
-	echo "Ошибка: пустой URL"
+if [ -z "$SUB_URL" ]; then
+	echo "Ошибка: пустой URL (задайте через --sub=URL)"
 	exit 1
-}
+fi
 
 echo "$SUB_URL" >"$SUB_FILE"
 chmod 600 "$SUB_FILE"
-echo "✅"
+echo "✅ Подписка сохранена: $SUB_URL"
 
 # 3. Настраиваем гостевую сеть
 echo "3. Настройка Guest Network:"
