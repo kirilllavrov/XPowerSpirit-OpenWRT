@@ -137,7 +137,6 @@ uci set sqm.$GUEST_NET.qdisc="cake"
 uci set sqm.$GUEST_NET.script="piece_of_cake.qos"
 uci set sqm.$GUEST_NET.enabled="1"
 uci commit sqm
-service sqm restart
 
 echo "🔄 Применяем сетевые изменения..."
 service network restart
@@ -474,6 +473,7 @@ echo "13. Запускаем службы:"
 
 service firewall restart
 service dnsmasq restart
+service sqm restart
 service xray start
 echo "✅"
 
