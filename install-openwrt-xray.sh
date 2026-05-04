@@ -460,9 +460,9 @@ echo "✅ hotplug настроен"
 
 # 12. Запуск и рестарт служб
 echo "12. Запускаем службы:"
-/etc/init.d/dnsmasq restart
-/etc/init.d/firewall restart
-/etc/init.d/xray start
+service firewall restart
+service dnsmasq restart
+service xray start
 echo "✅"
 
 sleep 3
