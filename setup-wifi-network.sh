@@ -84,7 +84,7 @@ for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-devic
     uci set wireless.home_${RADIO}="wifi-iface"
     uci set wireless.home_${RADIO}.device="$RADIO"
     uci set wireless.home_${RADIO}.mode="ap"
-    uci set wireless.home_${RADIO}.network="lan"   # ← ВАЖНО: через Xray
+    uci set wireless.home_${RADIO}.network="lan"
     uci set wireless.home_${RADIO}.ssid="$HOME_SSID"
     uci set wireless.home_${RADIO}.encryption="psk2+ccmp"
     uci set wireless.home_${RADIO}.key="$HOME_PASS"
@@ -120,7 +120,6 @@ uci set dhcp.$GUEST_NET.interface="$GUEST_NET"
 uci set dhcp.$GUEST_NET.start="100"
 uci set dhcp.$GUEST_NET.limit="150"
 uci set dhcp.$GUEST_NET.leasetime="1h"
-uci set dhcp.$GUEST_NET.force="1"
 uci commit dhcp
 
 # === 5. Firewall Guest ===
@@ -136,17 +135,19 @@ uci set firewall.$GUEST_NET.forward="REJECT"
 uci set firewall.$GUEST_NET.masq="1"
 uci set firewall.$GUEST_NET.mtu_fix="1"
 
+# Разрешаем гостям DNS
+uci add firewall rule
+uci set firewall.@rule[-1].name="Allow-DNS-Guest"
+uci set firewall.@rule[-1].src="$GUEST_NET"
+uci set firewall.@rule[-1].dest_port="53"
+uci set firewall.@rule[-1].proto="tcp udp"
+uci set firewall.@rule[-1].target="ACCEPT"
+
+# Разрешаем гостям выход в WAN
 uci -q delete firewall.${GUEST_NET}_wan
 uci set firewall.${GUEST_NET}_wan="forwarding"
 uci set firewall.${GUEST_NET}_wan.src="$GUEST_NET"
 uci set firewall.${GUEST_NET}_wan.dest="wan"
-
-uci -q delete firewall.${GUEST_NET}_rtr
-uci set firewall.${GUEST_NET}_rtr="rule"
-uci set firewall.${GUEST_NET}_rtr.name="Block-${GUEST_NET}-to-router"
-uci set firewall.${GUEST_NET}_rtr.src="$GUEST_NET"
-uci set firewall.${GUEST_NET}_rtr.dest_ip="$MAIN_LAN_IP/32"
-uci set firewall.${GUEST_NET}_rtr.target="REJECT"
 
 uci commit firewall
 
@@ -160,6 +161,7 @@ fi
 if [ ! -x /usr/lib/sqm/run.sh ]; then
     echo "Устанавливаем sqm-scripts через apk..."
     if command -v apk >/dev/null; then
+        apk update
         apk add sqm-scripts || echo "⚠️ Не удалось установить sqm-scripts"
     fi
 fi
@@ -179,8 +181,8 @@ service network restart
 sleep 2
 wifi reload
 sleep 2
-service dnsmasq restart
 service firewall restart
+service dnsmasq restart
 
 # Ждём появления br-guest
 for i in $(seq 1 10); do
