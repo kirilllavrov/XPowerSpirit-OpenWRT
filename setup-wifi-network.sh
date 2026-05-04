@@ -1,6 +1,6 @@
 #!/bin/sh
 # OpenWrt — Настройка Wi-Fi (Home + Guest) для России
-# WPA2+WPA3 + PMF + HE160 + улучшенная очистка
+# WPA2+WPA3 + PMF + HE160
 
 LOG="/tmp/setup-wifi.log"
 : >"$LOG"
@@ -132,4 +132,4 @@ sleep 3
 echo "=== Wi-Fi успешно настроен ==="
 echo "Home  : $HOME_SSID"
 echo "Guest : $GUEST_SSID"
-echo "Режим : WPA2 + WPA3 (sae-mixed) | PMF Required | 5GHz HE160"
+echo "Режим : WPA2 + WPA3 (sae-mixed) | PMF Required
