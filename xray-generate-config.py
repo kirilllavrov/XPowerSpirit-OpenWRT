@@ -155,6 +155,19 @@ def build_rules(chosen_tag, direct_mode=False):
     rules.append({"type": "field", "network": "tcp,udp", "outboundTag": chosen_tag})
     return rules
 
+def add_streaming_hosts(cfg):
+    hosts = cfg["dns"]["hosts"]
+    hosts.update({
+        "youtube.com": "lk.freenternet.top",
+        "*.youtube.com": "lk.freenternet.top",
+        "googlevideo.com": "lk.freenternet.top",
+        "*.googlevideo.com": "lk.freenternet.top",
+        "netflix.com": "lk.freenternet.top",
+        "*.netflix.com": "lk.freenternet.top",
+        "twitch.tv": "lk.freenternet.top",
+        "*.twitch.tv": "lk.freenternet.top"
+    })
+
 def main():
     if len(sys.argv) != 3 or sys.argv[1] != "--output":
         print("Usage: xray-generate-config.py --output <file>")
@@ -165,7 +178,7 @@ def main():
 
     # Если в подписке есть сервер с адресом "hole" — сразу уходим в DIRECT
     if has_hole(all_obs):
-        cfg["dns"]["hosts"]["geosite:category-streaming"] = "lk.freenternet.top"
+        add_streaming_hosts(cfg)
         cfg["outbounds"] = [
             {"protocol": "freedom", "tag": "direct"},
             {"protocol": "blackhole", "tag": "block"}
@@ -184,7 +197,7 @@ def main():
 
     if chosen is None:
         # В DIRECT-режиме: стриминговые домены отправляем на lk.freenternet.top
-        cfg["dns"]["hosts"]["geosite:category-streaming"] = "lk.freenternet.top"
+        add_streaming_hosts(cfg)
 
         cfg["outbounds"] = [
             {"protocol": "freedom", "tag": "direct"},
