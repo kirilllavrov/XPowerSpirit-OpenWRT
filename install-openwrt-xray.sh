@@ -44,6 +44,7 @@ for arg in "$@"; do
 	esac
 done
 
+# Создаём необходимые директории
 mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR"
 
 # 1. Устанавливаем Timezone
@@ -63,8 +64,8 @@ echo "$SUB_URL" >"$SUB_FILE"
 chmod 600 "$SUB_FILE"
 echo "✅ Подписка сохранена: $SUB_URL"
 
-# 3. Настраиваем гостевую сеть
-echo "3. Настройка Guest Network:"
+# 3. Настраиваем гостевую сеть и лимиты скорости
+echo "3. Настройка Guest Network и SQM:"
 
 # 3.1. Guest Bridge + Interface
 uci -q delete network.${GUEST_NET}_dev
@@ -129,7 +130,7 @@ uci set firewall.${GUEST_NET}_wan.src="$GUEST_NET"
 uci set firewall.${GUEST_NET}_wan.dest="wan"
 uci commit firewall
 
-# 4. Настраиваем SQM только для Guest
+# 3.7 Настраиваем SQM только для Guest
 uci -q delete sqm.$GUEST_NET
 uci set sqm.$GUEST_NET="queue"
 uci set sqm.$GUEST_NET.interface="br-${GUEST_NET}"
@@ -148,8 +149,8 @@ service dnsmasq restart
 
 echo "✅"
 
-# 5. Установка Xray из GitHub
-echo "5. Устанавливаем Xray из GitHub:"
+# 4. Установка Xray из GitHub
+echo "4. Устанавливаем Xray из GitHub:"
 
 LATEST_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest |
 	grep '"tag_name"' | cut -d '"' -f 4)
@@ -172,7 +173,7 @@ ZIP_DEST="$TMP_DIR/xray.zip"
 SHA_FILE="$STATE_DIR/xray.zip.sha256sum"
 DGST_FILE="$STATE_DIR/xray.dgst"
 
-# Парсер SHA2-256 из .dgst
+# Парсер: берем SHA2-256 из .dgst
 extract_sha256() {
 	grep '^SHA2-256' "$1" |
 		sed 's/.*= *//' |
@@ -192,7 +193,7 @@ REMOTE_SHA="$(extract_sha256 "$DGST_FILE")"
 	exit 1
 }
 
-# проверяем свободное место
+# проверяем свободное место в /tmp
 FREE_SPACE_TMP=$(df /tmp | awk 'NR==2 {print $4}')
 if [ "$FREE_SPACE_TMP" -lt 20480 ]; then
 	echo "[ERR] Недостаточно места в /tmp (нужно минимум 20MB)" >>"$LOG_FILE"
@@ -229,8 +230,8 @@ chmod 755 /usr/bin/xray
 rm -rf "$TMP_DIR"
 echo "✅ Xray установлен версии $LATEST_VERSION"
 
-# 6. Загружаем скрипты из репозитория
-echo "6. Загружаем скрипты из репозитория:"
+# 5. Загружаем скрипты из репозитория
+echo "5. Загружаем скрипты из репозитория:"
 
 download() {
 	local url="$1"
@@ -238,7 +239,7 @@ download() {
 
 	wget -q "$url" -O "$dst"
 
-	# Проверка: файл существует и не пустой
+	# Проверка: файл существует и не пустой ли он
 	if [ ! -s "$dst" ]; then
 		echo "❌ Ошибка: файл $dst не скачан или пустой"
 		exit 1
@@ -261,8 +262,8 @@ download "$REPO/update-nft.sh" "$NFT_UPDATER"
 
 echo "✅"
 
-# 7. Настройка DNS (dnsmasq)
-echo "7. Настраиваем DNS (dnsmasq):"
+# 6. Настройка DNS (dnsmasq)
+echo "6. Настраиваем DNS (dnsmasq):"
 
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci set dhcp.@dnsmasq[0].strictorder='1'
@@ -273,8 +274,8 @@ uci commit dhcp
 
 echo "✅"
 
-# 8. Создаём init.d для Xray
-echo "8. Создаём init.d для Xray:"
+# 7. Создаём init.d для Xray
+echo "7. Создаём init.d для Xray:"
 
 cat >/etc/init.d/xray <<'XRAYEOF'
 #!/bin/sh /etc/rc.common
@@ -341,10 +342,11 @@ XRAYEOF
 
 chmod +x /etc/init.d/xray
 /etc/init.d/xray enable
+
 echo "✅"
 
-# 9. Настраиваем routing
-echo "9. Настраиваем routing:"
+# 8. Настраиваем routing
+echo "8. Настраиваем routing:"
 
 if ! grep -q "^100[[:space:]]\+xray$" /etc/iproute2/rt_tables; then
 	echo "100 xray" >>/etc/iproute2/rt_tables
@@ -352,8 +354,8 @@ fi
 
 echo "✅"
 
-# 10. Настраиваем sysctl
-echo "10. Настраиваем sysctl:"
+# 9. Настраиваем sysctl
+echo "9. Настраиваем sysctl:"
 
 # Применяем немедленно
 sysctl -w net.ipv4.conf.all.route_localnet=1
@@ -368,8 +370,8 @@ sysctl -p /etc/sysctl.d/99-xray.conf >/dev/null 2>&1
 
 echo "✅"
 
-# 11. Geo + HWID + config.json
-echo "11. Скачиваем геофайлы, делаем HWID, генерируем config.json"
+# 10. Geo + HWID + config.json
+echo "10. Скачиваем геофайлы, делаем HWID, генерируем config.json"
 
 update_geo() {
 	local URL="$1"  # https://cdn.jsdelivr.net/.../geoip.dat
@@ -438,8 +440,8 @@ if [ ! -s "$CONFIG_JSON" ]; then
 fi
 echo "✅"
 
-# 12. Cron: автообновление в 2.30 ночи
-echo "12. Настройка Crontab:"
+# 11. Cron: автообновление в 2.30 ночи
+echo "11. Настройка Crontab:"
 
 CRON_ENTRY="30 2 * * * $UPDATER"
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
@@ -452,8 +454,8 @@ else
 	echo "❌ Cron-задача уже существует, пропускаем"
 fi
 
-# 13. Настройка hotplug (автообновление после включения WAN)
-echo "13. Настройка hotplug:"
+# 12. Настройка hotplug (автообновление после включения WAN)
+echo "12. Настройка hotplug:"
 
 cat >/etc/hotplug.d/iface/99-xray-autoupdate <<'EOF'
 #!/bin/sh
@@ -476,10 +478,10 @@ done
 EOF
 
 chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
-echo "✅ hotplug настроен"
+echo "✅"
 
-# 14. Запуск и рестарт служб
-echo "14. Запускаем службы:"
+# 13. Запуск и рестарт служб
+echo "13. Запускаем службы:"
 
 service firewall restart
 service sqm restart
@@ -490,6 +492,7 @@ echo "✅"
 
 sleep 3
 
+# Проверяем конфиг Xray
 if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
 	echo "Конфиг Xray прошел проверку - ✅"
 else
