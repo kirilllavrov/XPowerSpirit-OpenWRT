@@ -262,13 +262,14 @@ download "$REPO/update-nft.sh" "$NFT_UPDATER"
 
 echo "✅"
 
-# 6. Настройка DNS (dnsmasq)
-echo "6. Настраиваем DNS (dnsmasq):"
+# 6. Настройка DNS через DoH (dnsmasq + https-dns-proxy)
+echo "6. Настраиваем DNS (dnsmasq + https-dns-proxy):"
 
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci set dhcp.@dnsmasq[0].strictorder='1'
 uci -q delete dhcp.@dnsmasq[0].server
-uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'
+uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5053'
+uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5054'
 uci add_list dhcp.@dnsmasq[0].server='77.88.8.8'
 uci commit dhcp
 
@@ -483,8 +484,10 @@ echo "✅"
 # 13. Запуск и рестарт служб
 echo "13. Запускаем службы:"
 
+#service https-dns-proxy enable
 service firewall restart
 service sqm restart
+#service https-dns-proxy restart
 service xray start
 sleep 3
 service dnsmasq restart
