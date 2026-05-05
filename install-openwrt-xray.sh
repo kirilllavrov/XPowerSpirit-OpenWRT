@@ -159,7 +159,6 @@ LATEST_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/la
 	exit 1
 }
 
-# Убираем 'v' из тега (v26.3.27 → 26.3.27)
 LATEST_VER_NUM="${LATEST_VERSION#v}"
 
 # Проверяем, какая версия уже установлена, если установлена
