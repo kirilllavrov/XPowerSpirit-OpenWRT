@@ -159,16 +159,19 @@ LATEST_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/la
 	exit 1
 }
 
+# Убираем 'v' из тега (v26.3.27 → 26.3.27)
+LATEST_VER_NUM="${LATEST_VERSION#v}"
+
 # Проверяем, какая версия уже установлена, если установлена
 CURRENT_VERSION=""
 if [ -x /usr/bin/xray ]; then
 	CURRENT_VERSION=$(/usr/bin/xray version 2>/dev/null | head -1 | awk '{print $2}')
 fi
 
-if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
+if [ "$CURRENT_VERSION" = "$LATEST_VER_NUM" ]; then
 	echo "  → Xray уже актуальной версии $LATEST_VERSION, пропускаем установку"
 else
-	[ -n "$CURRENT_VERSION" ] && echo "  → Текущая версия: $CURRENT_VERSION, будет обновлено до $LATEST_VERSION"
+	[ -n "$CURRENT_VERSION" ] && echo "  → Текущая версия: $CURRENT_VERSION, будет обновлено до $LATEST_VER_NUM"
 
 	ARCH=$(uname -m)
 	case "$ARCH" in
