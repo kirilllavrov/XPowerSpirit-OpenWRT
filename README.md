@@ -91,9 +91,8 @@
 ### Программные зависимости
 
 ```bash
-apk update
-apk add curl ca-certificates python3 kmod-nft-tproxy kmod-nft-socket \
-        unzip sqm-scripts jq wget nftables iptables
+curl ca-certificates python3 kmod-nft-tproxy kmod-nft-socket \
+unzip sqm-scripts jq wget nftables https-dns-proxy
 ```
 
 ### Опционально (для расширенной функциональности)
@@ -308,12 +307,6 @@ chmod +x setup-wifi-network.sh
 🔧 РЕКОМЕНДАЦИИ:
 [FIX DNS] Выполни:
 nft delete table ip xray; /etc/init.d/xray-tproxy-rules restart
-```
-
-**Тест клиента:** В конце выводится команда для проверки с клиента:
-
-```bash
-curl -v --interface 192.168.1.138 http://ipinfo.io/ip
 ```
 
 ---
