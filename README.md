@@ -108,7 +108,7 @@ apk add curl ca-certificates python3 kmod-nft-tproxy kmod-nft-socket \
 
 ```bash
 apk update
-apk add curl ca-certificates python3 kmod-nft-tproxy kmod-nft-socket unzip sqm-scripts jq wget
+apk add curl ca-certificates python3 kmod-nft-tproxy kmod-nft-socket unzip sqm-scripts jq https-dns-proxy
 ```
 
 ### 2. Загрузка установщика
