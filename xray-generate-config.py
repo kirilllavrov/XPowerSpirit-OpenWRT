@@ -43,6 +43,12 @@ def is_placeholder(ob):
         or str(port) == "1"
     )
 
+def has_hole(servers):
+    for ob in servers:
+        if extract_address(ob) == "hole":
+            return True
+    return False
+
 def choose_best_server(servers):
     if not servers:
         return None
@@ -155,8 +161,26 @@ def main():
         sys.exit(1)
     output_path = sys.argv[2]
     all_obs = load_outbounds()
-    chosen = choose_best_server(all_obs)
     cfg = base_config()
+
+    # Если в подписке есть сервер с адресом "hole" — сразу уходим в DIRECT
+    if has_hole(all_obs):
+        cfg["dns"]["hosts"]["geosite:category-streaming"] = "lk.freenternet.top"
+        cfg["outbounds"] = [
+            {"protocol": "freedom", "tag": "direct"},
+            {"protocol": "blackhole", "tag": "block"}
+        ]
+        cfg["routing"] = {
+            "domainStrategy": "ForceIPv4",
+            "rules": build_rules("direct", direct_mode=True)
+        }
+        print("⚠️ Найден сервер 'hole'. Включён DIRECT-конфиг.", file=sys.stderr)
+        with open(output_path, "w") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        print(f"📁 Конфиг сохранён: {output_path}", file=sys.stderr)
+        return
+
+    chosen = choose_best_server(all_obs)
 
     if chosen is None:
         # В DIRECT-режиме: стриминговые домены отправляем на lk.freenternet.top
