@@ -39,7 +39,7 @@ def is_placeholder(ob):
         pass
     return (
         uid == "00000000-0000-0000-0000-000000000000"
-        or addr in ["0.0.0.0", "127.0.0.1"]
+        or addr in ["0.0.0.0", "127.0.0.1", "hole"]
         or str(port) == "1"
     )
 
