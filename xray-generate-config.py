@@ -132,10 +132,10 @@ def build_rules(chosen_tag, direct_mode=False):
     rules = [
         {"type": "field", "inboundTag": ["dns-in", "dns-in-alt"], "outboundTag": "direct"},
         {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},
-        {"type": "field", "ip": ["geoip:ru", "geoip:private"], "outboundTag": "direct"},        
+        {"type": "field", "ip": ["geoip:ru", "geoip:private"], "outboundTag": "direct"},
         {"type": "field", "domain": [
             "geosite:private",
-            "geosite:category-browser", 
+            "geosite:category-browser",
             "geosite:category-cdn-ru",
             "geosite:category-mobile",
             "geosite:category-ru"
@@ -143,7 +143,7 @@ def build_rules(chosen_tag, direct_mode=False):
     ]
     if not direct_mode:
         rules.append({"type": "field", "domain": [
-            "geosite:category-streaming", 
+            "geosite:category-streaming",
             "geosite:category-games"
         ], "outboundTag": chosen_tag})
     rules.append({"type": "field", "network": "tcp,udp", "outboundTag": chosen_tag})
@@ -157,8 +157,11 @@ def main():
     all_obs = load_outbounds()
     chosen = choose_best_server(all_obs)
     cfg = base_config()
-    
+
     if chosen is None:
+        # В DIRECT-режиме: стриминговые домены отправляем на lk.freenternet.top
+        cfg["dns"]["hosts"]["geosite:category-streaming"] = "lk.freenternet.top"
+
         cfg["outbounds"] = [
             {"protocol": "freedom", "tag": "direct"},
             {"protocol": "blackhole", "tag": "block"}
@@ -172,21 +175,21 @@ def main():
         chosen_tag = chosen.get("tag") or "proxy"
         if "tag" not in chosen:
             chosen["tag"] = chosen_tag
-        
+
         ss = chosen.setdefault("streamSettings", {})
         sockopt = ss.setdefault("sockopt", {})
         sockopt["mark"] = 255
         sockopt["tcpKeepAliveInterval"] = 30
         sockopt["tcpNoDelay"] = True
-        
+
         chosen["mux"] = {"enabled": False}
-        
+
         direct_sockopt = {
             "mark": 255,
             "tcpKeepAliveInterval": 30,
             "tcpNoDelay": True
         }
-        
+
         cfg["outbounds"] = [
             chosen,
             {"protocol": "freedom", "tag": "direct", "streamSettings": {"sockopt": direct_sockopt}},
@@ -197,7 +200,7 @@ def main():
             "rules": build_rules(chosen_tag, direct_mode=False)
         }
         print(f"✅ Выбран сервер: {chosen_tag}", file=sys.stderr)
-    
+
     with open(output_path, "w") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
     print(f"📁 Конфиг сохранён: {output_path}", file=sys.stderr)
