@@ -500,7 +500,7 @@ echo "13. Запускаем службы:"
 #service https-dns-proxy enable
 service firewall restart
 service sqm restart
-#service https-dns-proxy restart
+service https-dns-proxy restart
 service xray start
 sleep 3
 service dnsmasq restart
