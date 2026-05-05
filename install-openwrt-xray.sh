@@ -1,6 +1,7 @@
 #!/bin/sh
 # OpenWrt 25.12.x — Xray TProxy (IPv4-only)
-# логируем установку
+
+# Логируем установку
 LOG_FILE="/tmp/xray_install.log"
 exec 1> >(tee -a "$LOG_FILE")
 exec 2>&1
@@ -12,6 +13,7 @@ echo "  "
 	exit 1
 }
 
+# Переменные
 REPO="https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main"
 GENERATOR="/usr/share/xray/xray-generate-config.py"
 PARSER="/usr/share/xray/xray-sub-parser.py"
@@ -147,7 +149,7 @@ service dnsmasq restart
 echo "✅"
 
 # 5. Установка Xray из GitHub
-echo "3. Устанавливаем Xray из GitHub:"
+echo "5. Устанавливаем Xray из GitHub:"
 
 LATEST_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest |
 	grep '"tag_name"' | cut -d '"' -f 4)
@@ -170,7 +172,7 @@ ZIP_DEST="$TMP_DIR/xray.zip"
 SHA_FILE="$STATE_DIR/xray.zip.sha256sum"
 DGST_FILE="$STATE_DIR/xray.dgst"
 
-# аккуратный парсер SHA2-256 из .dgst
+# Парсер SHA2-256 из .dgst
 extract_sha256() {
 	grep '^SHA2-256' "$1" |
 		sed 's/.*= *//' |
@@ -227,7 +229,8 @@ chmod 755 /usr/bin/xray
 rm -rf "$TMP_DIR"
 echo "✅ Xray установлен версии $LATEST_VERSION"
 
-echo "4. Загружаем скрипты из репозитория:"
+# 6. Загружаем скрипты из репозитория
+echo "6. Загружаем скрипты из репозитория:"
 
 download() {
 	local url="$1"
@@ -258,8 +261,8 @@ download "$REPO/update-nft.sh" "$NFT_UPDATER"
 
 echo "✅"
 
-# 6. Настройка DNS (dnsmasq)
-echo "6. Настраиваем DNS (dnsmasq):"
+# 7. Настройка DNS (dnsmasq)
+echo "7. Настраиваем DNS (dnsmasq):"
 
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci -q delete dhcp.@dnsmasq[0].server
@@ -269,8 +272,8 @@ uci commit dhcp
 
 echo "✅"
 
-# 7. Создаём init.d для Xray
-echo "7. Создаём init.d для Xray:"
+# 8. Создаём init.d для Xray
+echo "8. Создаём init.d для Xray:"
 
 cat >/etc/init.d/xray <<'XRAYEOF'
 #!/bin/sh /etc/rc.common
@@ -339,8 +342,8 @@ chmod +x /etc/init.d/xray
 /etc/init.d/xray enable
 echo "✅"
 
-# 8. Настраиваем routing
-echo "8. Настраиваем routing:"
+# 9. Настраиваем routing
+echo "9. Настраиваем routing:"
 
 if ! grep -q "^100[[:space:]]\+xray$" /etc/iproute2/rt_tables; then
 	echo "100 xray" >>/etc/iproute2/rt_tables
@@ -348,8 +351,8 @@ fi
 
 echo "✅"
 
-# 9. Настраиваем sysctl
-echo "9. Настраиваем sysctl:"
+# 10. Настраиваем sysctl
+echo "10. Настраиваем sysctl:"
 
 # Применяем немедленно
 sysctl -w net.ipv4.conf.all.route_localnet=1
@@ -364,8 +367,8 @@ sysctl -p /etc/sysctl.d/99-xray.conf >/dev/null 2>&1
 
 echo "✅"
 
-# 10. Geo + HWID + config.json
-echo "10. Скачиваем геофайлы, делаем HWID, генерируем config.json"
+# 11. Geo + HWID + config.json
+echo "11. Скачиваем геофайлы, делаем HWID, генерируем config.json"
 
 update_geo() {
 	local URL="$1"  # https://cdn.jsdelivr.net/.../geoip.dat
@@ -434,8 +437,8 @@ if [ ! -s "$CONFIG_JSON" ]; then
 fi
 echo "✅"
 
-# 11. Cron: автообновление в 2.30 ночи
-echo "11. Настройка Crontab:"
+# 12. Cron: автообновление в 2.30 ночи
+echo "12. Настройка Crontab:"
 
 CRON_ENTRY="30 2 * * * $UPDATER"
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
@@ -448,15 +451,21 @@ else
 	echo "❌ Cron-задача уже существует, пропускаем"
 fi
 
-# 12. Настройка обновления после включения
-echo "12. Настройка hotplug:"
+# 13. Настройка hotplug (автообновление после включения WAN)
+echo "13. Настройка hotplug:"
 
 cat >/etc/hotplug.d/iface/99-xray-autoupdate <<'EOF'
 #!/bin/sh
 [ "$ACTION" = "ifup" ] || exit 0
 [ "$INTERFACE" = "wan" ] || exit 0
 
-for i in 1 2 3 4 5 6 7 8; do
+# Если Xray не запущен — запускаем и даём время подняться
+if ! pidof xray >/dev/null; then
+    /etc/init.d/xray start
+    sleep 5
+fi
+
+for i in 1 2 3 4 5 6 7; do
     sleep 5
     if curl -fs --max-time 3 https://www.google.com/gen_204 >/dev/null; then
         /usr/share/xray/update-xray.sh &
@@ -468,8 +477,8 @@ EOF
 chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
 echo "✅ hotplug настроен"
 
-# 13. Запуск и рестарт служб
-echo "13. Запускаем службы:"
+# 14. Запуск и рестарт служб
+echo "14. Запускаем службы:"
 
 service firewall restart
 service dnsmasq restart
