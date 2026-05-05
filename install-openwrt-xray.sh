@@ -145,7 +145,7 @@ echo "🔄 Применяем сетевые изменения..."
 service network restart
 sleep 3
 service firewall restart
-service dnsmasq restart
+#service dnsmasq restart
 
 echo "✅"
 
