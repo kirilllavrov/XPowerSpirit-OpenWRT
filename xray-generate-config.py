@@ -71,21 +71,42 @@ def base_config():
             "error": "/tmp/log/xray-error.log"
         },
         "dns": {
+            "tag": "dns-out",
             "hosts": {
                 "cloudflare-dns.com": "1.1.1.1",
-                "dns.google": "8.8.8.8"
+                "dns.google": "8.8.8.8",
+                "dns.nextdns.io": "45.90.28.0",
+                "dns.adguard-dns.com": "94.140.14.14"
             },
             "queryStrategy": "UseIPv4",
-            "enableParallelQuery": True,
             "disableCache": False,
-            "cacheStrategy": "cacheEnabled",
             "serveStale": True,
             "disableFallback": False,
             "servers": [
-                {"address": "https://cloudflare-dns.com/dns-query", "skipFallback": True},
-                {"address": "https://dns.google/dns-query", "skipFallback": True},
-                {"address": "https://dns.nextdns.io", "skipFallback": True},
-                {"address": "77.88.8.8", "port": 53, "skipFallback": True}
+                {
+                    "address": "77.88.8.8",
+                    "port": 53,
+                    "domains": ["geosite:category-ru"],
+                    "skipFallback": True
+                },
+                {
+                    "address": "https://dns.adguard-dns.com/dns-query",
+                    "domains": ["geosite:category-ads"],
+                    "skipFallback": True,
+                    "expectIPs": ["0.0.0.0"]
+                },
+                {
+                    "address": "https://cloudflare-dns.com/dns-query",
+                    "skipFallback": False
+                },
+                {
+                    "address": "https://dns.google/dns-query",
+                    "skipFallback": False
+                },
+                {
+                    "address": "https://dns.nextdns.io",
+                    "skipFallback": False
+                }
             ]
         },
         "inbounds": [
@@ -111,25 +132,12 @@ def base_config():
                 }
             },
             {
-                "tag": "dns-in",
+                "tag": "dns-local",
                 "listen": "127.0.0.1",
-                "port": 5053,
-                "protocol": "dokodemo-door",
+                "port": 5353,
+                "protocol": "dns",
                 "settings": {
-                    "address": "8.8.8.8",
-                    "port": 53,
-                    "network": "udp"
-                }
-            },
-            {
-                "tag": "dns-in-alt",
-                "listen": "127.0.0.1",
-                "port": 5054,
-                "protocol": "dokodemo-door",
-                "settings": {
-                    "address": "1.1.1.1",
-                    "port": 53,
-                    "network": "udp"
+                    "network": "tcp,udp"
                 }
             }
         ]
@@ -137,23 +145,47 @@ def base_config():
 
 def build_rules(chosen_tag, direct_mode=False):
     rules = [
-        {"type": "field", "inboundTag": ["dns-in", "dns-in-alt"], "outboundTag": "direct"},
-        {"type": "field", "domain": ["geosite:category-ads"], "outboundTag": "block"},
-        {"type": "field", "ip": ["geoip:ru", "geoip:private"], "outboundTag": "direct"},
-        {"type": "field", "domain": [
-            "geosite:private",
-            "geosite:category-browser",
-            "geosite:category-cdn-ru",
-            "geosite:category-mobile",
-            "geosite:category-ru"
-        ], "outboundTag": "direct"},
+        {
+            "type": "field",
+            "inboundTag": ["dns-out"],
+            "outboundTag": "direct"
+        },
+        {
+            "type": "field",
+            "domain": ["geosite:category-ads"],
+            "outboundTag": "block"
+        },
+        {
+            "type": "field",
+            "ip": ["geoip:ru", "geoip:private"],
+            "outboundTag": "direct"
+        },
+        {
+            "type": "field",
+            "domain": [
+                "geosite:private",
+                "geosite:category-browser",
+                "geosite:category-cdn-ru",
+                "geosite:category-mobile",
+                "geosite:category-ru"
+            ],
+            "outboundTag": "direct"
+        },
     ]
     if not direct_mode:
-        rules.append({"type": "field", "domain": [
-            "geosite:category-streaming",
-            "geosite:category-games"
-        ], "outboundTag": chosen_tag})
-    rules.append({"type": "field", "network": "tcp,udp", "outboundTag": chosen_tag})
+        rules.append({
+            "type": "field",
+            "domain": [
+                "geosite:category-streaming",
+                "geosite:category-games"
+            ],
+            "outboundTag": chosen_tag
+        })
+    rules.append({
+        "type": "field",
+        "network": "tcp,udp",
+        "outboundTag": chosen_tag
+    })
     return rules
 
 def main():
@@ -171,7 +203,7 @@ def main():
             {"protocol": "blackhole", "tag": "block"}
         ]
         cfg["routing"] = {
-            "domainStrategy": "ForceIPv4",
+            "domainStrategy": "AsIs",
             "rules": build_rules("direct", direct_mode=True)
         }
         print("⚠️ Найден сервер 'hole'. Включён DIRECT-конфиг.", file=sys.stderr)
@@ -188,7 +220,7 @@ def main():
             {"protocol": "blackhole", "tag": "block"}
         ]
         cfg["routing"] = {
-            "domainStrategy": "ForceIPv4",
+            "domainStrategy": "AsIs",
             "rules": build_rules("direct", direct_mode=True)
         }
         print("⚠️ Нет доступных серверов (только заглушки). Создан DIRECT-конфиг.", file=sys.stderr)
@@ -213,7 +245,11 @@ def main():
 
         cfg["outbounds"] = [
             chosen,
-            {"protocol": "freedom", "tag": "direct", "streamSettings": {"sockopt": direct_sockopt}},
+            {
+                "protocol": "freedom",
+                "tag": "direct",
+                "streamSettings": {"sockopt": direct_sockopt}
+            },
             {"protocol": "blackhole", "tag": "block"}
         ]
         cfg["routing"] = {
