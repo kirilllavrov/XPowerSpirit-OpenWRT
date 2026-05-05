@@ -84,7 +84,8 @@ def base_config():
             "servers": [
                 {"address": "https://cloudflare-dns.com/dns-query", "skipFallback": True},
                 {"address": "https://dns.google/dns-query", "skipFallback": True},
-                {"address": "https://dns.nextdns.io", "skipFallback": True}
+                {"address": "https://dns.nextdns.io", "skipFallback": True},
+                {"address": "77.88.8.8", "port": 53, "skipFallback": True}
             ]
         },
         "inbounds": [
