@@ -54,18 +54,10 @@ validate_len "$GUEST_PASS" 8 63 && {
 }
 
 # === ОЧИСТКА ВСЕХ Wi-Fi ИНТЕРФЕЙСОВ ===
-echo "Полная очистка существующих Wi-Fi интерфейсов..."
+echo "Очистка существующих Wi-Fi интерфейсов..."
 
 # Удаляем все wifi-iface
-uci show wireless | grep -E "=wifi-iface$" | cut -d. -f1,2 | while read -r cfg; do
-	uci -q delete "$cfg"
-done
-
-# Дополнительно удаляем конкретные старые имена (на всякий случай)
-for old in home_ guest_ iot_ work_; do
-	uci -q delete wireless.${old}radio0 2>/dev/null
-	uci -q delete wireless.${old}radio1 2>/dev/null
-done
+while uci -q delete wireless.@wifi-iface[0]; do :; done
 
 uci commit wireless
 echo "✅ Очистка завершена"
