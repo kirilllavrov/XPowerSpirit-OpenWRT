@@ -159,75 +159,87 @@ LATEST_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/la
 	exit 1
 }
 
-ARCH=$(uname -m)
-case "$ARCH" in
-x86_64 | amd64) MACHINE="64" ;;
-aarch64) MACHINE="arm64-v8a" ;;
-armv7l) MACHINE="arm32-v7a" ;;
-*) MACHINE="64" ;;
-esac
-
-ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/Xray-linux-${MACHINE}.zip"
-ZIP_DEST="$TMP_DIR/xray.zip"
-SHA_FILE="$STATE_DIR/xray.zip.sha256sum"
-DGST_FILE="$STATE_DIR/xray.dgst"
-
-# Парсер: берем SHA2-256 из .dgst
-extract_sha256() {
-	grep '^SHA2-256' "$1" |
-		sed 's/.*= *//' |
-		tr -cd '0-9a-fA-F' |
-		cut -c1-64
-}
-
-echo "  → Скачиваем .dgst для Xray..."
-curl -s -L "${ZIP_URL}.dgst" -o "$DGST_FILE" || {
-	echo "Ошибка: не удалось скачать .dgst для Xray"
-	exit 1
-}
-
-REMOTE_SHA="$(extract_sha256 "$DGST_FILE")"
-[ -z "$REMOTE_SHA" ] && {
-	echo "Ошибка: не удалось извлечь SHA2-256 из .dgst"
-	exit 1
-}
-
-# проверяем свободное место в /tmp
-FREE_SPACE_TMP=$(df /tmp | awk 'NR==2 {print $4}')
-if [ "$FREE_SPACE_TMP" -lt 20480 ]; then
-	echo "[ERR] Недостаточно места в /tmp (нужно минимум 20MB)" >>"$LOG_FILE"
-	exit 1
+# Проверяем, какая версия уже установлена, если установлена
+CURRENT_VERSION=""
+if [ -x /usr/bin/xray ]; then
+	CURRENT_VERSION=$(/usr/bin/xray version 2>/dev/null | head -1 | awk '{print $2}')
 fi
 
-# если уже есть ZIP с таким же SHA — не качаем заново
-if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ] && [ -f "$ZIP_DEST" ]; then
-	echo "  → Найден локальный ZIP с тем же SHA, повторное скачивание не требуется"
+if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
+	echo "  → Xray уже актуальной версии $LATEST_VERSION, пропускаем установку"
 else
-	echo "  → Скачиваем Xray ZIP (${LATEST_VERSION})..."
-	curl -f -L "$ZIP_URL" -o "$ZIP_DEST" || {
-		echo "Ошибка: не удалось скачать Xray ZIP"
+	[ -n "$CURRENT_VERSION" ] && echo "  → Текущая версия: $CURRENT_VERSION, будет обновлено до $LATEST_VERSION"
+
+	ARCH=$(uname -m)
+	case "$ARCH" in
+	x86_64 | amd64) MACHINE="64" ;;
+	aarch64) MACHINE="arm64-v8a" ;;
+	armv7l) MACHINE="arm32-v7a" ;;
+	*) MACHINE="64" ;;
+	esac
+
+	ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/Xray-linux-${MACHINE}.zip"
+	ZIP_DEST="$TMP_DIR/xray.zip"
+	SHA_FILE="$STATE_DIR/xray.zip.sha256sum"
+	DGST_FILE="$STATE_DIR/xray.dgst"
+
+	# Парсер: берем SHA2-256 из .dgst
+	extract_sha256() {
+		grep '^SHA2-256' "$1" |
+			sed 's/.*= *//' |
+			tr -cd '0-9a-fA-F' |
+			cut -c1-64
+	}
+
+	echo "  → Скачиваем .dgst для Xray..."
+	curl -s -L "${ZIP_URL}.dgst" -o "$DGST_FILE" || {
+		echo "Ошибка: не удалось скачать .dgst для Xray"
 		exit 1
 	}
 
-	LOCAL_SHA="$(sha256sum "$ZIP_DEST" | awk '{print $1}')"
-	if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-		echo "Ошибка: SHA не совпадает!"
-		echo "  ожидалось: $REMOTE_SHA"
-		echo "  получено : $LOCAL_SHA"
+	REMOTE_SHA="$(extract_sha256 "$DGST_FILE")"
+	[ -z "$REMOTE_SHA" ] && {
+		echo "Ошибка: не удалось извлечь SHA2-256 из .dgst"
+		exit 1
+	}
+
+	# проверяем свободное место в /tmp
+	FREE_SPACE_TMP=$(df /tmp | awk 'NR==2 {print $4}')
+	if [ "$FREE_SPACE_TMP" -lt 20480 ]; then
+		echo "[ERR] Недостаточно места в /tmp (нужно минимум 20MB)" >>"$LOG_FILE"
 		exit 1
 	fi
 
-	echo "$REMOTE_SHA" >"$SHA_FILE"
+	# если уже есть ZIP с таким же SHA — не качаем заново
+	if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ] && [ -f "$ZIP_DEST" ]; then
+		echo "  → Найден локальный ZIP с тем же SHA, повторное скачивание не требуется"
+	else
+		echo "  → Скачиваем Xray ZIP (${LATEST_VERSION})..."
+		curl -f -L "$ZIP_URL" -o "$ZIP_DEST" || {
+			echo "Ошибка: не удалось скачать Xray ZIP"
+			exit 1
+		}
+
+		LOCAL_SHA="$(sha256sum "$ZIP_DEST" | awk '{print $1}')"
+		if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
+			echo "Ошибка: SHA не совпадает!"
+			echo "  ожидалось: $REMOTE_SHA"
+			echo "  получено : $LOCAL_SHA"
+			exit 1
+		fi
+
+		echo "$REMOTE_SHA" >"$SHA_FILE"
+	fi
+
+	unzip -q "$ZIP_DEST" -d "$TMP_DIR"
+
+	# Устанавливаем основной бинарник
+	cp "$TMP_DIR/xray" /usr/bin/xray
+	chmod 755 /usr/bin/xray
+
+	rm -rf "$TMP_DIR"
+	echo "✅ Xray установлен версии $LATEST_VERSION"
 fi
-
-unzip -q "$ZIP_DEST" -d "$TMP_DIR"
-
-# Устанавливаем основной бинарник
-cp "$TMP_DIR/xray" /usr/bin/xray
-chmod 755 /usr/bin/xray
-
-rm -rf "$TMP_DIR"
-echo "✅ Xray установлен версии $LATEST_VERSION"
 
 # 5. Загружаем скрипты из репозитория
 echo "5. Загружаем скрипты из репозитория:"
