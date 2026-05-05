@@ -482,9 +482,10 @@ echo "✅ hotplug настроен"
 echo "14. Запускаем службы:"
 
 service firewall restart
-service dnsmasq restart
 service sqm restart
 service xray start
+sleep 3
+service dnsmasq restart
 echo "✅"
 
 sleep 3
