@@ -135,8 +135,10 @@ def base_config():
                 "tag": "dns-local",
                 "listen": "127.0.0.1",
                 "port": 5353,
-                "protocol": "dns",
+                "protocol": "dokodemo-door",
                 "settings": {
+                    "address": "77.88.8.8",
+                    "port": 53,
                     "network": "tcp,udp"
                 }
             }
@@ -147,7 +149,7 @@ def build_rules(chosen_tag, direct_mode=False):
     rules = [
         {
             "type": "field",
-            "inboundTag": ["dns-out"],
+            "inboundTag": ["dns-local", "dns-out"],
             "outboundTag": "direct"
         },
         {
