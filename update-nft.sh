@@ -54,8 +54,16 @@ table inet xray {
         meta mark 0xff return;
 NFT
 
-	[ -n "$bypass_ips" ] &&
-		echo "        ip daddr { $bypass_ips } return;" >>"$nft_file"
+	if [ -n "$bypass_ips" ]; then
+		# Проверяем, что все IP валидны (не попала строка типа "hole" или пустота)
+		VALID_IPS=$(echo "$bypass_ips" | tr ',' '\n' | grep -Ex '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | tr '\n' ',' | sed 's/,$//')
+		if [ -n "$VALID_IPS" ]; then
+			echo "        ip daddr { $VALID_IPS } return;" >>"$nft_file"
+			logger -t update-nft "Bypass IPs added: $VALID_IPS"
+		else
+			logger -t update-nft "No valid bypass IPs found, skipping bypass rule"
+		fi
+	fi
 
 	cat >>"$nft_file" <<NFT
         udp dport { 67, 68 } return;
@@ -67,7 +75,7 @@ NFT
 NFT
 
 	if nft -f "$nft_file"; then
-		logger -t update-nft "Network rules applied (bypass: ${bypass_ips:-none})"
+		logger -t update-nft "Network rules applied successfully"
 	else
 		logger -t update-nft "nftables apply failed"
 		rm -f "$nft_file"
