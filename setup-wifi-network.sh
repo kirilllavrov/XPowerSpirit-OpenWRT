@@ -132,4 +132,4 @@ sleep 3
 echo "=== Wi-Fi успешно настроен ==="
 echo "Home  : $HOME_SSID"
 echo "Guest : $GUEST_SSID"
-echo "Режим : WPA2 + WPA3 (sae-mixed) | PMF Required
+echo "Режим : WPA2 + WPA3 (sae-mixed) | PMF Required"
