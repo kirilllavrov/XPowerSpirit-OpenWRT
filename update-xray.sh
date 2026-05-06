@@ -109,8 +109,8 @@ SUB_URL="$(cat "$SUB_FILE")"
 #   Обновление Xray
 # ============================
 
-LATEST_VERSION=$(curl -s --user-agent "OpenWrt-Xray/1.0" https://api.github.com/repos/XTLS/Xray-core/releases/latest |
-	grep '"tag_name"' | cut -d '"' -f 4)
+LATEST_VERSION=$(curl -s --user-agent "OpenWrt-Xray/1.0" --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest |
+	sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
 
 [ -z "$LATEST_VERSION" ] && die "Не удалось получить версию Xray"
 
@@ -128,33 +128,36 @@ SHA_FILE="$STATE_DIR/xray.zip.sha256sum"
 
 fetch_url "${ZIP_URL}.dgst" "$STATE_DIR/xray.dgst" || {
 	echo "⚠️ Не удалось скачать .dgst — пропускаем обновление Xray" >>"$LOG"
-	# Продолжаем без обновления Xray
 }
 REMOTE_SHA=$(extract_sha256 "$STATE_DIR/xray.dgst")
 
-FREE_SPACE_TMP=$(df /tmp | awk 'NR==2 {print $4}')
-[ "$FREE_SPACE_TMP" -lt 20480 ] && die "Недостаточно места в /tmp (нужно минимум 20MB)"
+if [ -n "$REMOTE_SHA" ]; then
+	FREE_SPACE_TMP=$(df /tmp | awk 'NR==2 {print $4}')
+	[ "$FREE_SPACE_TMP" -lt 20480 ] && die "Недостаточно места в /tmp (нужно минимум 20MB)"
 
-if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
-	echo "✅ Xray ZIP не изменился" >>"$LOG"
-else
-	echo "→ Скачиваем Xray ZIP..." >>"$LOG"
-	if ! fetch_url "$ZIP_URL" "$ZIP_DEST"; then
-		echo "⚠️ Не удалось скачать Xray ZIP — пропускаем обновление" >>"$LOG"
-		rm -f "$ZIP_DEST"
+	if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
+		echo "✅ Xray ZIP не изменился" >>"$LOG"
 	else
-		LOCAL_SHA=$(sha256sum "$ZIP_DEST" | awk '{print $1}')
-		if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-			echo "🚫 SHA mismatch Xray ZIP" >>"$LOG"
+		echo "→ Скачиваем Xray ZIP..." >>"$LOG"
+		if ! fetch_url "$ZIP_URL" "$ZIP_DEST"; then
+			echo "⚠️ Не удалось скачать Xray ZIP — пропускаем обновление" >>"$LOG"
 			rm -f "$ZIP_DEST"
 		else
-			echo "$REMOTE_SHA" >"$SHA_FILE"
-			unzip -q "$ZIP_DEST" -d "$TMP_DIR"
-			cp "$TMP_DIR/xray" /usr/bin/xray
-			chmod 755 /usr/bin/xray
-			echo "✅ Xray обновлён до $LATEST_VERSION" >>"$LOG"
+			LOCAL_SHA=$(sha256sum "$ZIP_DEST" | awk '{print $1}')
+			if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
+				echo "🚫 SHA mismatch Xray ZIP" >>"$LOG"
+				rm -f "$ZIP_DEST"
+			else
+				echo "$REMOTE_SHA" >"$SHA_FILE"
+				unzip -q "$ZIP_DEST" -d "$TMP_DIR"
+				cp "$TMP_DIR/xray" /usr/bin/xray
+				chmod 755 /usr/bin/xray
+				echo "✅ Xray обновлён до $LATEST_VERSION" >>"$LOG"
+			fi
 		fi
 	fi
+else
+	echo "⚠️ Не удалось извлечь SHA из .dgst — пропускаем обновление Xray" >>"$LOG"
 fi
 
 # ============================
