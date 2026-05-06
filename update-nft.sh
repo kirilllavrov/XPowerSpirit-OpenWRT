@@ -13,21 +13,67 @@ fi
 
 # Извлекаем IP‑адреса серверов из config.json
 extract_server_ips() {
-	python3 -c '
+	local raw
+	# Пробуем Python-парсер
+	raw=$(python3 -c '
 import json, sys
 try:
     with open(sys.argv[1]) as f:
         cfg = json.load(f)
-    ips = set()
+    addrs = set()
     for ob in cfg.get("outbounds", []):
         for vnext in ob.get("settings", {}).get("vnext", []):
             addr = vnext.get("address")
             if isinstance(addr, str) and "." in addr:
-                ips.add(addr)
-    print(",".join(sorted(ips)))
-except Exception as e:
-    print("", file=sys.stderr)
-' "$CONF"
+                addrs.add(addr)
+    for a in sorted(addrs):
+        print(a)
+except:
+    pass
+' "$CONF" 2>/dev/null)
+
+	# Fallback на grep
+	if [ -z "$raw" ]; then
+		raw=$(grep -o '"address"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONF" 2>/dev/null | \
+			sed 's/.*"\([^"]*\)"$/\1/' | \
+			sort -u)
+	fi
+
+	[ -z "$raw" ] && return
+
+	# Разделяем IP и домены, резолвим домены
+	local ips=""
+	while IFS= read -r addr; do
+		case "$addr" in
+			"hole"|"0.0.0.0"|"127.0.0.1"|"")
+				continue
+				;;
+			*[a-zA-Z]*)
+				# Домен — резолвим через 77.88.8.8 напрямую
+				local resolved
+				resolved=$(nslookup -timeout=2 -retry=1 "$addr" 77.88.8.8 2>/dev/null | \
+					awk '/^Address [0-9]+: / {print $3}' | \
+					grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | \
+					head -1)
+				if [ -n "$resolved" ]; then
+					ips="$ips,$resolved"
+					logger -t update-nft "Resolved $addr → $resolved"
+				else
+					logger -t update-nft "Failed to resolve $addr"
+				fi
+				;;
+			*.*.*.*)
+				# Уже IP — проверяем валидность
+				if echo "$addr" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+					ips="$ips,$addr"
+				fi
+				;;
+		esac
+	done <<EOF
+$raw
+EOF
+
+	echo "$ips" | sed 's/^,//'
 }
 
 setup_network() {
