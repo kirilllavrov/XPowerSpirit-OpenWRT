@@ -276,11 +276,21 @@ else
 		exit 1
 	}
 
+	# Проверяем, что .dgst не пустой и содержит SHA2-256
+	if [ ! -s "$DGST_FILE" ] || ! grep -q 'SHA2-256' "$DGST_FILE" 2>/dev/null; then
+		echo "Ошибка: .dgst файл пустой или не содержит SHA2-256"
+		echo "Содержимое:"
+		cat "$DGST_FILE" 2>/dev/null || echo "(файл пустой)"
+		exit 1
+	fi
+
 	REMOTE_SHA="$(extract_sha256 "$DGST_FILE")"
 	[ -z "$REMOTE_SHA" ] && {
 		echo "Ошибка: не удалось извлечь SHA2-256 из .dgst"
 		exit 1
 	}
+
+	echo "  → Ожидаемый SHA2-256: ${REMOTE_SHA:0:16}..."
 
 	# проверяем свободное место в /tmp
 	FREE_SPACE_TMP=$(df /tmp | awk 'NR==2 {print $4}')
@@ -295,9 +305,15 @@ else
 	else
 		echo "  → Скачиваем Xray ZIP (${LATEST_VERSION})..."
 		fetch_url "$ZIP_URL" "$ZIP_DEST" || {
-			echo "Ошибка: не удалось скачать Xray ZIP"
+			echo "Ошибка: не удалось скачать Xray ZIP (проверьте URL: $ZIP_URL)"
 			exit 1
 		}
+
+		# Проверяем, что ZIP не пустой
+		if [ ! -s "$ZIP_DEST" ]; then
+			echo "Ошибка: скачанный ZIP файл пустой"
+			exit 1
+		fi
 
 		LOCAL_SHA="$(sha256sum "$ZIP_DEST" | awk '{print $1}')"
 		if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
