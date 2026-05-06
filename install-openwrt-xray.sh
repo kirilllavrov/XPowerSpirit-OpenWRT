@@ -310,12 +310,12 @@ CONF="/etc/xray/config.json"
 ASSET_DIR="/usr/share/xray"
 
 start_service() {
-    # Ждём готовности сети (default route + пинг до 77.88.8.8)
+    # Ждём готовности сети (default route + DNS через 77.88.8.8)
     for i in $(seq 1 15); do
-        if ip route | grep -q default && ping -c1 -W2 77.88.8.8 >/dev/null 2>&1; then
+        if ip route | grep -q default && nslookup -timeout=2 -retry=1 google.com 77.88.8.8 >/dev/null 2>&1; then
             break
         fi
-        logger -t xray "Waiting for network... ($i)"
+        logger -t xray "Waiting for network/DNS... ($i)"
         sleep 2
     done
 
