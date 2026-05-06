@@ -306,11 +306,13 @@ CONF="/etc/xray/config.json"
 ASSET_DIR="/usr/share/xray"
 
 start_service() {
-    # Ждём готовности сети (наличие default route)
-    for i in $(seq 1 10); do
-        ip route | grep -q default && break
+    # Ждём готовности сети (default route + пинг до 77.88.8.8)
+    for i in $(seq 1 15); do
+        if ip route | grep -q default && ping -c1 -W2 77.88.8.8 >/dev/null 2>&1; then
+            break
+        fi
         logger -t xray "Waiting for network... ($i)"
-        sleep 1
+        sleep 2
     done
 
     # Проверка geodata
@@ -325,7 +327,7 @@ start_service() {
         return 1
     fi
 
-    # Настройка сети через отдельный скрипт
+    # Настройка сети с помощью update-nft.sh
     /usr/share/xray/update-nft.sh || return 1
 
     # Запуск Xray через procd
