@@ -296,8 +296,6 @@ else
 		echo "Ошибка: .dgst файл пустой или не содержит SHA2-256"
 		echo "Содержимое ответа:"
 		cat "$DGST_FILE" 2>/dev/null || echo "(файл пустой)"
-		echo ""
-		echo "Проверьте URL вручную: curl -I ${ZIP_URL}.dgst"
 		exit 1
 	fi
 
