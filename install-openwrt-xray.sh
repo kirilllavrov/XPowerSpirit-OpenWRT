@@ -50,14 +50,79 @@ mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR"
 # Создаём директорию для https-dns-proxy, иначе ругается
 mkdir -p /usr/share/nftables.d/ruleset-post
 
+# =============================================
+# Единые функции загрузки (curl)
+# =============================================
+
+# Базовая загрузка файла
+fetch_url() {
+	local url="$1"
+	local dst="$2"
+	local max_retries=3
+	local retry=1
+
+	while [ $retry -le $max_retries ]; do
+		curl -s -L --user-agent "OpenWrt-Xray/1.0" --max-time 15 -o "$dst" "$url"
+		local rc=$?
+
+		if [ $rc -eq 0 ] && [ -s "$dst" ]; then
+			if head -n 1 "$dst" 2>/dev/null | grep -qi "<html\|<!DOCTYPE"; then
+				rm -f "$dst"
+			else
+				return 0
+			fi
+		fi
+
+		if [ $retry -lt $max_retries ]; then
+			sleep 2
+		fi
+		retry=$((retry + 1))
+	done
+
+	return 1
+}
+
+# Загрузка с кастомным заголовком (для подписки)
+fetch_url_with_header() {
+	local url="$1"
+	local dst="$2"
+	local header="$3"
+	local max_retries=2
+	local retry=1
+
+	while [ $retry -le $max_retries ]; do
+		curl -s -L --user-agent "OpenWrt-Xray/1.0" -H "$header" --max-time 20 -o "$dst" "$url"
+		local rc=$?
+
+		if [ $rc -eq 0 ] && [ -s "$dst" ]; then
+			if head -n 1 "$dst" 2>/dev/null | grep -qi "<html\|<!DOCTYPE"; then
+				rm -f "$dst"
+			else
+				return 0
+			fi
+		fi
+
+		if [ $retry -lt $max_retries ]; then
+			sleep 2
+		fi
+		retry=$((retry + 1))
+	done
+
+	return 1
+}
+
+# =============================================
 # 1. Устанавливаем Timezone
+# =============================================
 echo "1. Устанавливаем Timezone:"
 uci set system.@system[0].zonename='Europe/Moscow'
 uci set system.@system[0].timezone='MSK-3'
 uci commit system
 echo "✅"
 
+# =============================================
 # 2. Просим подписку
+# =============================================
 if [ -z "$SUB_URL" ]; then
 	echo "Ошибка: пустой URL (задайте через --sub=URL)"
 	exit 1
@@ -67,7 +132,9 @@ echo "$SUB_URL" >"$SUB_FILE"
 chmod 600 "$SUB_FILE"
 echo "✅ Подписка сохранена: $SUB_URL"
 
+# =============================================
 # 3. Настраиваем гостевую сеть и лимиты скорости
+# =============================================
 echo "3. Настройка Guest Network и SQM:"
 
 # 3.1. Guest Bridge + Interface
@@ -156,10 +223,12 @@ service firewall restart
 
 echo "✅"
 
+# =============================================
 # 4. Установка Xray из GitHub
+# =============================================
 echo "4. Устанавливаем Xray из GitHub:"
 
-LATEST_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest |
+LATEST_VERSION=$(curl -s --user-agent "OpenWrt-Xray/1.0" https://api.github.com/repos/XTLS/Xray-core/releases/latest |
 	grep '"tag_name"' | cut -d '"' -f 4)
 
 [ -z "$LATEST_VERSION" ] && {
@@ -202,7 +271,7 @@ else
 	}
 
 	echo "  → Скачиваем .dgst для Xray..."
-	curl -s -L "${ZIP_URL}.dgst" -o "$DGST_FILE" || {
+	fetch_url "${ZIP_URL}.dgst" "$DGST_FILE" || {
 		echo "Ошибка: не удалось скачать .dgst для Xray"
 		exit 1
 	}
@@ -225,7 +294,7 @@ else
 		echo "  → Найден локальный ZIP с тем же SHA, повторное скачивание не требуется"
 	else
 		echo "  → Скачиваем Xray ZIP (${LATEST_VERSION})..."
-		curl -f -L "$ZIP_URL" -o "$ZIP_DEST" || {
+		fetch_url "$ZIP_URL" "$ZIP_DEST" || {
 			echo "Ошибка: не удалось скачать Xray ZIP"
 			exit 1
 		}
@@ -251,29 +320,22 @@ else
 	echo "✅ Xray установлен версии $LATEST_VERSION"
 fi
 
+# =============================================
 # 5. Загружаем скрипты из репозитория
+# =============================================
 echo "5. Загружаем скрипты из репозитория:"
 
 download() {
 	local url="$1"
 	local dst="$2"
 
-	wget -q "$url" -O "$dst"
-
-	# Проверка: файл существует и не пустой ли он
-	if [ ! -s "$dst" ]; then
-		echo "❌ Ошибка: файл $dst не скачан или пустой"
+	if fetch_url "$url" "$dst"; then
+		chmod +x "$dst"
+		echo "→ $dst"
+	else
+		echo "❌ Ошибка: не удалось скачать $dst"
 		exit 1
 	fi
-
-	# Проверка: не HTML-ошибка
-	if head -n 1 "$dst" | grep -qi "<html"; then
-		echo "❌ Ошибка: сервер вернул HTML вместо файла ($dst)"
-		exit 1
-	fi
-
-	chmod +x "$dst"
-	echo "→ $dst"
 }
 
 download "$REPO/xray-generate-config.py" "$GENERATOR"
@@ -283,7 +345,9 @@ download "$REPO/update-nft.sh" "$NFT_UPDATER"
 
 echo "✅"
 
+# =============================================
 # 6. Настройка DNS через DoH (dnsmasq + https-dns-proxy)
+# =============================================
 echo "6. Настраиваем DNS (dnsmasq + https-dns-proxy):"
 
 uci set dhcp.@dnsmasq[0].noresolv='1'
@@ -296,7 +360,9 @@ uci commit dhcp
 
 echo "✅"
 
+# =============================================
 # 7. Создаём init.d для Xray
+# =============================================
 echo "7. Создаём init.d для Xray:"
 
 cat >/etc/init.d/xray <<'XRAYEOF'
@@ -376,7 +442,9 @@ chmod +x /etc/init.d/xray
 
 echo "✅"
 
+# =============================================
 # 8. Настраиваем routing
+# =============================================
 echo "8. Настраиваем routing:"
 
 if ! grep -q "^100[[:space:]]\+xray$" /etc/iproute2/rt_tables; then
@@ -385,7 +453,9 @@ fi
 
 echo "✅"
 
+# =============================================
 # 9. Настраиваем sysctl
+# =============================================
 echo "9. Настраиваем sysctl:"
 
 # Применяем немедленно
@@ -401,12 +471,14 @@ sysctl -p /etc/sysctl.d/99-xray.conf >/dev/null 2>&1
 
 echo "✅"
 
+# =============================================
 # 10. Geo + HWID + config.json
+# =============================================
 echo "10. Скачиваем геофайлы, делаем HWID, генерируем config.json"
 
 update_geo() {
-	local URL="$1"  # https://cdn.jsdelivr.net/.../geoip.dat
-	local DEST="$2" # /etc/xray/geo/geoip.dat
+	local URL="$1"
+	local DEST="$2"
 
 	local BASE="$(basename "$DEST")"
 	local TMP="/tmp/$BASE.tmp"
@@ -416,7 +488,10 @@ update_geo() {
 	echo "  → Скачиваем $BASE"
 
 	# Скачиваем SHA256
-	curl -H "Cache-Control: no-cache" -sSL -o "$TMP_SHA" "${URL}.sha256sum"
+	fetch_url "${URL}.sha256sum" "$TMP_SHA" || {
+		echo "🚫 Не удалось получить SHA256 для $BASE" >>"$LOG_FILE"
+		exit 1
+	}
 	REMOTE_SHA="$(cut -d' ' -f1 "$TMP_SHA")"
 
 	if [ -z "$REMOTE_SHA" ]; then
@@ -425,7 +500,10 @@ update_geo() {
 	fi
 
 	# Скачиваем сам файл во временное место
-	curl -f -H "Cache-Control: no-cache" -sSL -o "$TMP" "$URL"
+	fetch_url "$URL" "$TMP" || {
+		echo "🚫 Не удалось скачать $BASE" >>"$LOG_FILE"
+		exit 1
+	}
 
 	# Считаем локальный SHA256
 	LOCAL_SHA="$(sha256sum "$TMP" | awk '{print $1}')"
@@ -462,8 +540,10 @@ HWID="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
 echo "$HWID" >"$HWID_FILE"
 chmod 600 "$HWID_FILE"
 
-curl -s -L -m 20 -H "x-hwid: $HWID" "$SUB_URL" |
-	python3 "$PARSER" | python3 "$GENERATOR" --output "$CONFIG_JSON"
+# Генерация config.json
+fetch_url_with_header "$SUB_URL" "/tmp/sub_raw.txt" "x-hwid: $HWID" && \
+	python3 "$PARSER" < "/tmp/sub_raw.txt" | python3 "$GENERATOR" --output "$CONFIG_JSON"
+rm -f "/tmp/sub_raw.txt"
 
 if [ ! -s "$CONFIG_JSON" ]; then
 	echo "Ошибка: не удалось создать config.json"
@@ -471,7 +551,9 @@ if [ ! -s "$CONFIG_JSON" ]; then
 fi
 echo "✅"
 
+# =============================================
 # 11. Cron: автообновление в 2.30 ночи
+# =============================================
 echo "11. Настройка Crontab:"
 
 CRON_ENTRY="30 2 * * * $UPDATER"
@@ -485,7 +567,9 @@ else
 	echo "❌ Cron-задача уже существует, пропускаем"
 fi
 
+# =============================================
 # 12. Настройка hotplug (автообновление после включения WAN)
+# =============================================
 echo "12. Настройка hotplug:"
 
 cat >/etc/hotplug.d/iface/99-xray-autoupdate <<'EOF'
@@ -511,7 +595,9 @@ EOF
 chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
 echo "✅"
 
+# =============================================
 # 13. Запуск и рестарт служб
+# =============================================
 echo "13. Запускаем службы:"
 
 service firewall restart
