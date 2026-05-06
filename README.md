@@ -231,7 +231,7 @@ chmod +x setup-wifi-network.sh
    - Скачивает только если есть изменения
    - Проверяет целостность после загрузки
 3. **Обновление geoip/geosite**:
-   - Загружает с CDN kirilllavrov/geoip-builder и geosite-builder
+   - Загружает с CDN (jsdelivr.net) с проверкой SHA256
    - Кэширует SHA256 в `/etc/xray/state/`
 4. **Пересборка config.json**:
    - Загружает подписку с заголовком `x-hwid: <uuid>`
@@ -287,18 +287,21 @@ chmod +x setup-wifi-network.sh
 
 | # | Компонент | Что проверяется |
 |---|-----------|-----------------|
-| 1 | Процесс Xray | Запущен ли `xray` |
-| 2 | Порты | Слушается ли порт 12345 |
+| 1 | Процесс Xray | Запущен ли `xray` (`pgrep -a xray`) |
+| 2 | Порты | Слушается ли порт 12345 (через `netstat -tulnp`) |
 | 3 | Конфигурация | Наличие `tproxy` и `mark: 255` в `config.json` |
-| 4 | nftables | Таблица `ip xray`, исключение DNS (порт 53), hook prerouting |
-| 5 | Интеграция fw4 | Jump в цепочку `xray_tproxy` из fw4 |
-| 6 | Маршрутизация | `ip rule` с fwmark 1, таблица `xray` |
+| 4 | nftables | Таблица `ip xray`, исключение DNS (порт 53), hook prerouting priority mangle |
+| 5 | Интеграция fw4 | Jump в цепочку `xray_tproxy` из `inet fw4 mangle_prerouting` |
+| 6 | Маршрутизация | `ip rule` с fwmark 0x1, таблица `xray` с `local default` |
 | 7 | dnsmasq | Перенаправление на `127.0.0.1#1053` |
 | 8 | Логи Xray | Последние 3 ошибки из `/tmp/log/xray-error.log` |
 | 9 | Доступность сервера | HTTPS/ICMP проверка сервера из конфига |
 | 10 | DNS-тесты | Ответы от `127.0.0.1` и `1.1.1.1` |
 
-**Авто-рекомендации:** Скрипт выдаёт конкретные команды для исправления найденных проблем.
+**Авто-рекомендации:** Скрипт выдаёт конкретные команды для исправления найденных проблем:
+
+- `[FIX DNS]` — если порт 53 не исключён из TProxy
+- `[FIX DNSMASQ]` — если dnsmasq не перенаправляет на Xray
 
 **Пример вывода:**
 
@@ -307,6 +310,12 @@ chmod +x setup-wifi-network.sh
 🔧 РЕКОМЕНДАЦИИ:
 [FIX DNS] Выполни:
 nft delete table ip xray; /etc/init.d/xray-tproxy-rules restart
+```
+
+**Запуск:**
+
+```bash
+/usr/share/xray/diagnose-xray-tproxy.sh
 ```
 
 ---
@@ -395,31 +404,37 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
    - Приоритет доменов из whitelist (`router.freenternet.top`)
    - Выбор первого доступного сервера
 
-2. **Базовая конфигурация:**
+2. **Режим "hole" (DIRECT-конфиг)**:
+   - Если в подписке обнаружен сервер с адресом `"hole"` — автоматически генерируется конфигурация без прокси
+   - Весь трафик идёт напрямую (`direct`), кроме блокировки рекламы
+   - Полезно для временного отключения прокси без изменения подписки
+
+3. **Базовая конфигурация:**
    - **Логирование:** access/error логи в `/tmp/log/`
    - **DNS:**
-     - Cloudflare (`1.1.1.1`), Google (`8.8.8.8`)
-     - DoH: `cloudflare-dns.com`, `dns.google`, `dns.nextdns.io` (для ads)
+     - Yandex (`77.88.8.8`) для `.ru` доменов
+     - Cloudflare (`1.1.1.1`), Google (`8.8.8.8`), NextDNS (`45.90.28.0`)
+     - DoH: `cloudflare-dns.com`, `dns.google`, `dns.nextdns.io`
      - Стратегия: `UseIPv4`, кэш включён, serveStale
    - **Inbound:**
      - `tproxy-in`: порт 12345, dokodemo-door, TProxy sockopt
      - `dns-in`: порт 5053, forward на `8.8.8.8:53`
      - `dns-in-alt`: порт 5054, forward на `1.1.1.1:53`
 
-3. **Правила маршрутизации:**
+4. **Правила маршрутизации:**
    - DNS-трафик → `direct`
    - `geoip:ru`, `geoip:private` → `direct`
    - `geosite:private`, `geosite:category-browser`, `geosite:category-cdn-ru`, `geosite:category-mobile`, `geosite:category-ru` → `direct`
    - `geosite:category-streaming`, `geosite:category-games` → `proxy`
    - Остальной TCP/UDP → `proxy`
 
-4. **Stream settings:**
+5. **Stream settings:**
    - `mark: 255` — исключение трафика Xray из TProxy
    - `tcpKeepAliveInterval: 30`
    - `tcpNoDelay: true`
    - Mux отключён
 
-**Режим без серверов:** Если все сервера — заглушки, создаётся DIRECT-конфиг (весь трафик напрямую).
+**Режим без серверов:** Если все сервера — заглушки или отсутствует рабочий сервер, создаётся DIRECT-конфиг (весь трафик напрямую).
 
 **Пример использования:**
 
@@ -520,7 +535,13 @@ DOMAIN_WHITELIST = [
 
 ### Сайты не грузятся, но Xray запущен
 
-1. **Проверьте исключение DNS в nftables:**
+1. **Запустите глубокую диагностику:**
+
+   ```bash
+   /usr/share/xray/diagnose-xray-tproxy.sh
+   ```
+
+2. **Проверьте исключение DNS в nftables:**
 
    ```bash
    nft list chain ip xray xray_tproxy | grep 53
@@ -528,7 +549,7 @@ DOMAIN_WHITELIST = [
 
    Должно быть правило с `return` для порта 53.
 
-2. **Проверьте dnsmasq:**
+3. **Проверьте dnsmasq:**
 
    ```bash
    uci show dhcp.@dnsmasq[0].server
@@ -536,10 +557,16 @@ DOMAIN_WHITELIST = [
 
    Должно быть: `127.0.0.1#5053` и `127.0.0.1#5054`
 
-3. **Запустите диагностику:**
+4. **Автоматическое исправление (если диагностика выявила проблемы):**
 
    ```bash
-   /usr/share/xray/diagnose-xray-tproxy.sh
+   # Если DNS не исключён из TProxy:
+   nft delete table ip xray; service xray restart
+   
+   # Если dnsmasq не настроен:
+   uci set dhcp.@dnsmasq[0].noresolv='1'
+   uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5053'
+   uci commit && service dnsmasq restart
    ```
 
 ### Ошибка: " Недостаточно места в /tmp"
