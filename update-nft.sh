@@ -6,7 +6,7 @@ LAN_IF="br-lan"
 
 # Автоопределение LAN интерфейса, если br-lan отсутствует
 if ! ip link show br-lan >/dev/null 2>&1; then
-	LAN_IF="$(uci show network | grep "=interface" | grep -v 'wan\|loopback' | head -1 | cut -d. -f2)"
+	LAN_IF=$(uci -q get network.lan.device 2>/dev/null)
 	[ -z "$LAN_IF" ] && LAN_IF="br-lan"
 	logger -t update-nft "LAN интерфейс auto-detected: $LAN_IF"
 fi

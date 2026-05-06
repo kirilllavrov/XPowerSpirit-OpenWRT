@@ -76,6 +76,7 @@ uci set network.${GUEST_NET}_dev="device"
 uci set network.${GUEST_NET}_dev.type="bridge"
 uci set network.${GUEST_NET}_dev.name="br-${GUEST_NET}"
 uci set network.${GUEST_NET}_dev.bridge_empty="1"
+uci set network.${GUEST_NET}_dev.mtu="1500"
 
 uci -q delete network.$GUEST_NET
 uci set network.$GUEST_NET="interface"
@@ -107,6 +108,7 @@ uci set firewall.$GUEST_NET.output="ACCEPT"
 uci set firewall.$GUEST_NET.forward="REJECT"
 uci set firewall.$GUEST_NET.masq="1"
 uci set firewall.$GUEST_NET.mtu_fix="1"
+uci commit firewall
 
 # 3.4 Firewall DNS
 uci -q delete firewall.${GUEST_NET}_dns
@@ -116,6 +118,7 @@ uci set firewall.${GUEST_NET}_dns.src="$GUEST_NET"
 uci set firewall.${GUEST_NET}_dns.dest_port="53"
 uci set firewall.${GUEST_NET}_dns.proto="tcp udp"
 uci set firewall.${GUEST_NET}_dns.target="ACCEPT"
+uci commit firewall
 
 # 3.5 Firewall DHCP
 uci -q delete firewall.${GUEST_NET}_dhcp
@@ -125,6 +128,7 @@ uci set firewall.${GUEST_NET}_dhcp.src="$GUEST_NET"
 uci set firewall.${GUEST_NET}_dhcp.dest_port="67-68"
 uci set firewall.${GUEST_NET}_dhcp.proto="udp"
 uci set firewall.${GUEST_NET}_dhcp.target="ACCEPT"
+uci commit firewall
 
 # 3.6 Forward to WAN
 uci -q delete firewall.${GUEST_NET}_wan
@@ -146,9 +150,12 @@ uci commit sqm
 
 echo "🔄 Применяем сетевые изменения..."
 service network restart
-sleep 3
+sleep 5
+for i in $(seq 1 10); do
+	ip link show br-guest >/dev/null 2>&1 && break
+	sleep 1
+done
 service firewall restart
-sleep 3
 
 echo "✅"
 
