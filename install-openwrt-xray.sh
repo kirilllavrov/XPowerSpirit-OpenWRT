@@ -541,8 +541,8 @@ echo "$HWID" >"$HWID_FILE"
 chmod 600 "$HWID_FILE"
 
 # Генерация config.json
-fetch_url_with_header "$SUB_URL" "/tmp/sub_raw.txt" "x-hwid: $HWID" && \
-	python3 "$PARSER" < "/tmp/sub_raw.txt" | python3 "$GENERATOR" --output "$CONFIG_JSON"
+fetch_url_with_header "$SUB_URL" "/tmp/sub_raw.txt" "x-hwid: $HWID" &&
+	python3 "$PARSER" <"/tmp/sub_raw.txt" | python3 "$GENERATOR" --output "$CONFIG_JSON"
 rm -f "/tmp/sub_raw.txt"
 
 if [ ! -s "$CONFIG_JSON" ]; then
