@@ -75,7 +75,7 @@ def base_config():
             "hosts": {
                 "cloudflare-dns.com": "1.1.1.1",
                 "dns.google": "8.8.8.8",
-                "dns.nextdns.io": "45.90.28.0",
+                "dns.nextdns.io": "45.90.28.0"
             },
             "queryStrategy": "UseIPv4",
             "disableCache": False,
