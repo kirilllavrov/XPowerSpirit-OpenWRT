@@ -108,7 +108,6 @@ uci set firewall.$GUEST_NET.output="ACCEPT"
 uci set firewall.$GUEST_NET.forward="REJECT"
 uci set firewall.$GUEST_NET.masq="1"
 uci set firewall.$GUEST_NET.mtu_fix="1"
-uci commit firewall
 
 # 3.4 Firewall DNS
 uci -q delete firewall.${GUEST_NET}_dns
@@ -118,7 +117,6 @@ uci set firewall.${GUEST_NET}_dns.src="$GUEST_NET"
 uci set firewall.${GUEST_NET}_dns.dest_port="53"
 uci set firewall.${GUEST_NET}_dns.proto="tcp udp"
 uci set firewall.${GUEST_NET}_dns.target="ACCEPT"
-uci commit firewall
 
 # 3.5 Firewall DHCP
 uci -q delete firewall.${GUEST_NET}_dhcp
@@ -128,7 +126,6 @@ uci set firewall.${GUEST_NET}_dhcp.src="$GUEST_NET"
 uci set firewall.${GUEST_NET}_dhcp.dest_port="67-68"
 uci set firewall.${GUEST_NET}_dhcp.proto="udp"
 uci set firewall.${GUEST_NET}_dhcp.target="ACCEPT"
-uci commit firewall
 
 # 3.6 Forward to WAN
 uci -q delete firewall.${GUEST_NET}_wan
