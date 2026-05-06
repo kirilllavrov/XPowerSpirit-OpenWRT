@@ -228,11 +228,21 @@ echo "✅"
 # =============================================
 echo "4. Устанавливаем Xray из GitHub:"
 
-LATEST_VERSION=$(curl -s --user-agent "OpenWrt-Xray/1.0" https://api.github.com/repos/XTLS/Xray-core/releases/latest |
+# Ждём доступности GitHub API (сеть могла только что перезапуститься)
+for i in $(seq 1 10); do
+	if curl -s --user-agent "OpenWrt-Xray/1.0" --max-time 3 https://api.github.com >/dev/null 2>&1; then
+		break
+	fi
+	echo "  → Ожидание доступа к GitHub... ($i)"
+	sleep 2
+done
+
+LATEST_VERSION=$(curl -s --user-agent "OpenWrt-Xray/1.0" --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest |
 	grep '"tag_name"' | cut -d '"' -f 4)
 
 [ -z "$LATEST_VERSION" ] && {
 	echo "Ошибка: не удалось получить версию Xray"
+	echo "Проверьте: curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep tag_name"
 	exit 1
 }
 
@@ -270,17 +280,23 @@ else
 			cut -c1-64
 	}
 
+	echo "  → Версия: $LATEST_VERSION, архитектура: $MACHINE"
+	echo "  → URL: ${ZIP_URL}.dgst"
+
 	echo "  → Скачиваем .dgst для Xray..."
 	fetch_url "${ZIP_URL}.dgst" "$DGST_FILE" || {
 		echo "Ошибка: не удалось скачать .dgst для Xray"
+		echo "Проверьте URL: ${ZIP_URL}.dgst"
 		exit 1
 	}
 
 	# Проверяем, что .dgst не пустой и содержит SHA2-256
 	if [ ! -s "$DGST_FILE" ] || ! grep -q 'SHA2-256' "$DGST_FILE" 2>/dev/null; then
 		echo "Ошибка: .dgst файл пустой или не содержит SHA2-256"
-		echo "Содержимое:"
+		echo "Содержимое ответа:"
 		cat "$DGST_FILE" 2>/dev/null || echo "(файл пустой)"
+		echo ""
+		echo "Проверьте URL вручную: curl -I ${ZIP_URL}.dgst"
 		exit 1
 	fi
 
@@ -305,13 +321,13 @@ else
 	else
 		echo "  → Скачиваем Xray ZIP (${LATEST_VERSION})..."
 		fetch_url "$ZIP_URL" "$ZIP_DEST" || {
-			echo "Ошибка: не удалось скачать Xray ZIP (проверьте URL: $ZIP_URL)"
+			echo "Ошибка: не удалось скачать Xray ZIP"
+			echo "Проверьте URL: $ZIP_URL"
 			exit 1
 		}
 
-		# Проверяем, что ZIP не пустой
 		if [ ! -s "$ZIP_DEST" ]; then
-			echo "Ошибка: скачанный ZIP файл пустой"
+			echo "Ошибка: скачанный ZIP пустой"
 			exit 1
 		fi
 
