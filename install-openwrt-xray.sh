@@ -148,6 +148,7 @@ echo "🔄 Применяем сетевые изменения..."
 service network restart
 sleep 3
 service firewall restart
+sleep 3
 
 echo "✅"
 
