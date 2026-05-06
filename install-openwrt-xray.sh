@@ -237,8 +237,9 @@ for i in $(seq 1 10); do
 	sleep 2
 done
 
+# Получаем версию Xray
 LATEST_VERSION=$(curl -s --user-agent "OpenWrt-Xray/1.0" --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest |
-	grep '"tag_name"' | cut -d '"' -f 4)
+	sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
 
 [ -z "$LATEST_VERSION" ] && {
 	echo "Ошибка: не удалось получить версию Xray"
