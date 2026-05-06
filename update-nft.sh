@@ -13,10 +13,21 @@ fi
 
 # Извлекаем IP‑адреса серверов из config.json
 extract_server_ips() {
-	grep -o '"address"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONF" 2>/dev/null |
-		sed 's/.*"\([^"]*\)"$/\1/' |
-		grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' |
-		sort -u
+	python3 -c '
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        cfg = json.load(f)
+    ips = set()
+    for ob in cfg.get("outbounds", []):
+        for vnext in ob.get("settings", {}).get("vnext", []):
+            addr = vnext.get("address")
+            if isinstance(addr, str) and "." in addr:
+                ips.add(addr)
+    print(",".join(sorted(ips)))
+except Exception as e:
+    print("", file=sys.stderr)
+' "$CONF"
 }
 
 setup_network() {
@@ -30,7 +41,7 @@ setup_network() {
 
 	# Bypass IPs
 	local bypass_ips
-	bypass_ips=$(extract_server_ips | tr '\n' ',' | sed 's/,$//')
+	bypass_ips=$(extract_server_ips)
 
 	# nftables
 	nft list table inet xray >/dev/null 2>&1 && nft delete table inet xray
@@ -55,7 +66,7 @@ table inet xray {
 NFT
 
 	if [ -n "$bypass_ips" ]; then
-		# Проверяем, что все IP валидны (не попала строка типа "hole" или пустота)
+		# Проверяем, что все IP валидны
 		VALID_IPS=$(echo "$bypass_ips" | tr ',' '\n' | grep -Ex '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | tr '\n' ',' | sed 's/,$//')
 		if [ -n "$VALID_IPS" ]; then
 			echo "        ip daddr { $VALID_IPS } return;" >>"$nft_file"
