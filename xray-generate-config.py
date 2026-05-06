@@ -76,7 +76,6 @@ def base_config():
                 "cloudflare-dns.com": "1.1.1.1",
                 "dns.google": "8.8.8.8",
                 "dns.nextdns.io": "45.90.28.0",
-                "dns.adguard-dns.com": "94.140.14.14"
             },
             "queryStrategy": "UseIPv4",
             "disableCache": False,
@@ -88,12 +87,6 @@ def base_config():
                     "port": 53,
                     "domains": ["geosite:category-ru"],
                     "skipFallback": True
-                },
-                {
-                    "address": "https://dns.adguard-dns.com/dns-query",
-                    "domains": ["geosite:category-ads"],
-                    "skipFallback": True,
-                    "expectIPs": ["0.0.0.0"]
                 },
                 {
                     "address": "https://cloudflare-dns.com/dns-query",

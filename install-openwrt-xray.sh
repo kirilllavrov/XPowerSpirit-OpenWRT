@@ -302,6 +302,13 @@ CONF="/etc/xray/config.json"
 ASSET_DIR="/usr/share/xray"
 
 start_service() {
+    # Ждём готовности сети (наличие default route)
+    for i in $(seq 1 10); do
+        ip route | grep -q default && break
+        logger -t xray "Waiting for network... ($i)"
+        sleep 1
+    done
+
     # Проверка geodata
     if [ ! -s "$ASSET_DIR/geoip.dat" ] || [ ! -s "$ASSET_DIR/geosite.dat" ]; then
         logger -t xray "Geo assets missing — run update-xray.sh"
@@ -497,13 +504,15 @@ echo "✅"
 # 13. Запуск и рестарт служб
 echo "13. Запускаем службы:"
 
-#service https-dns-proxy enable
 service firewall restart
 service sqm restart
+#service https-dns-proxy enable
 service https-dns-proxy restart
-service xray start
 sleep 3
+service xray start
+sleep 2
 service dnsmasq restart
+
 echo "✅"
 
 sleep 3
