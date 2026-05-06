@@ -47,6 +47,9 @@ done
 # Создаём необходимые директории
 mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR"
 
+# Создаём директорию для https-dns-proxy, иначе ругается
+mkdir -p /usr/share/nftables.d/ruleset-post
+
 # 1. Устанавливаем Timezone
 echo "1. Устанавливаем Timezone:"
 uci set system.@system[0].zonename='Europe/Moscow'
