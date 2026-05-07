@@ -51,10 +51,8 @@ except:
 		*[a-zA-Z]*)
 			# Домен — резолвим через 77.88.8.8 напрямую
 			local resolved
-			resolved=$(nslookup -timeout=2 -retry=1 "$addr" 77.88.8.8 2>/dev/null |
-				awk '/^Name:/ {found=1; next} found && /^Address [0-9]+: / {print $3; exit}' |
-				grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' |
-				head -1)
+			resolved=$(nslookup -timeout=2 -retry=1 "$addr" 77.88.8.8 2>&1 |
+				awk '/Name:/ {found=1; next} found && /Address:/ && $2 ~ /\./ {print $2; exit}')
 			if [ -n "$resolved" ]; then
 				ips="$ips,$resolved"
 				logger -t update-nft "Resolved $addr → $resolved"
