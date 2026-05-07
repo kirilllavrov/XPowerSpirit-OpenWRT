@@ -1,6 +1,6 @@
 #!/bin/sh
-# Xray TProxy — Глубокая диагностика (v3)
-echo "=== Xray TProxy DEEP DIAGNOSTICS v3 ==="
+# Xray TProxy — Глубокая диагностика (v4)
+echo "=== Xray TProxy DEEP DIAGNOSTICS v4 ==="
 
 # Хелперы статуса
 _ok()   { echo "[OK]   $1"; }
@@ -8,100 +8,120 @@ _warn() { echo "[WARN] $1"; }
 _fail() { echo "[FAIL] $1"; }
 
 # 1. Процесс
-echo "[1] Xray process:"
+printf "\n[1] Xray process:\n"
 pgrep -a xray >/dev/null && _ok "Xray запущен" || _fail "Xray НЕ запущен"
 
-# 2. Порты
-echo -e "\n[2] Listening on port 12345:"
-netstat -tulnp 2>/dev/null && \
-  _ok "Порт 12345 активен (LISTEN не отображается для TProxy — это норма)" || \
-  _fail "Порт 12345 не слушается"
+# 2. Порты (TProxy не показывает LISTEN, проверяем через ss)
+printf "\n[2] Listening on port 12345:\n"
+if ss -ulnp 2>/dev/null | grep -q ':12345' || ss -tlnp 2>/dev/null | grep -q ':12345'; then
+    _ok "Порт 12345 активен (LISTEN)"
+else
+    _warn "Порт 12345 не виден в ss (норма для TProxy — сокет открывается при первом пакете)"
+fi
 
 # 3. Конфиг (TProxy + Mark)
-echo -e "\n[3] Конфигурация Xray:"
+printf "\n[3] Конфигурация Xray:\n"
 CFG="/etc/xray/config.json"
 [ -f "$CFG" ] || { _fail "$CFG отсутствует!"; exit 1; }
 grep -q '"tproxy": "tproxy"' "$CFG" && _ok "TProxy включён в inbound" || _fail "TProxy не настроен"
 grep -q '"mark": 255' "$CFG" && _ok "Mark 255 (исключение трафика Xray) на месте" || _fail "Mark 255 отсутствует! Трафик уйдёт в цикл."
 
-# 4. nftables (критично: исключение DNS)
-echo -e "\n[4] Правила nftables (ip xray):"
-if nft list table ip xray 2>/dev/null >/dev/null; then
-    _ok "Таблица ip xray загружена"
-    # Проверка исключения порта 53
-    if nft list chain ip xray xray_tproxy 2>/dev/null | grep -qE 'dport.*53.*return'; then
-        _ok "DNS (порт 53) ИСКЛЮЧЁН из TProxy"
+# 4. nftables — таблица inet xray (family=inet, как создаётся update-nft.sh)
+printf "\n[4] Правила nftables (inet xray):\n"
+if nft list table inet xray >/dev/null 2>&1; then
+    _ok "Таблица inet xray загружена"
+    # Проверка hook/priority в цепочке prerouting
+    if nft list chain inet xray prerouting 2>/dev/null | grep -q "type filter hook prerouting priority mangle"; then
+        _ok "Цепочка prerouting хукает mangle priority"
     else
-        _fail "DNS (порт 53) НЕ исключён! ГЛАВНАЯ ПРИЧИНА: 'сайты не грузятся'"
+        _fail "Цепочка inet xray prerouting не найдена или имеет неверный hook"
     fi
-    # Проверка hook/priority
-    if nft list chain ip xray xray_tproxy 2>/dev/null | grep -q "type filter hook prerouting priority mangle"; then
-        _ok "Цепочка хукает prerouting priority mangle"
+    # Проверка, что трафик на DHCP-порты исключён
+    if nft list chain inet xray prerouting 2>/dev/null | grep -qE 'dport.*67|dport.*68'; then
+        _ok "DHCP (67/68) исключён из TProxy"
     else
-        _fail "Цепочка имеет неверный hook/priority"
+        _warn "DHCP-исключение не обнаружено"
     fi
 else
-    _fail "Таблица ip xray отсутствует!"
+    _fail "Таблица inet xray отсутствует!"
 fi
 
-# 5. Интеграция с fw4
-echo -e "\n[5] Интеграция с fw4:"
-if nft list chain inet fw4 mangle_prerouting 2>/dev/null | grep -q "jump xray_tproxy"; then
-    _ok "jump xray_tproxy вставлен в fw4"
+# 5. Policy Routing
+printf "\n[5] Policy Routing:\n"
+ip -4 rule show | grep -q "fwmark 0x1 lookup" && _ok "ip rule с fwmark 0x1 настроен" || _fail "ip rule отсутствует"
+ip route show table 100 2>/dev/null | grep -q "local" && _ok "Таблица маршрутов 100 верна" || \
+    ip route show table xray 2>/dev/null | grep -q "local" && _ok "Таблица маршрутов xray верна" || \
+    _fail "Таблица маршрутов (100/xray) не настроена"
+
+# 6. dnsmasq → https-dns-proxy (порты 5053/5054)
+printf "\n[6] DNS Forwarding (dnsmasq → https-dns-proxy):\n"
+if uci show dhcp.@dnsmasq[0].server 2>/dev/null | grep -qE "127\.0\.0\.1#505[34]"; then
+    _ok "dnsmasq перенаправляет на https-dns-proxy (5053/5054)"
 else
-    _warn "jump отсутствует (не критично, цепочка работает автономно)"
+    _fail "dnsmasq НЕ настроен на https-dns-proxy:5053/5054"
 fi
 
-# 6. Routing
-echo -e "\n[6] Policy Routing:"
-ip -4 rule show | grep -q "fwmark 0x1 lookup xray" && _ok "ip rule настроен" || _fail "ip rule отсутствует"
-ip route show table xray 2>/dev/null | grep -q "local default" && _ok "Таблица маршрутов xray верна" || _fail "Таблица маршрутов xray неверна"
-
-# 7. dnsmasq → 1053
-echo -e "\n[7] DNS Forwarding (dnsmasq):"
-uci show dhcp.@dnsmasq[0].server 2>/dev/null | grep -q "127.0.0.1#1053" && \
-  _ok "dnsmasq перенаправляет на Xray:1053" || _fail "dnsmasq НЕ настроен на Xray"
-
-# 8. Ошибки Xray
-echo -e "\n[8] Ошибки Xray (/tmp/log/xray-error.log):"
+# 7. Ошибки Xray
+printf "\n[7] Ошибки Xray (/tmp/log/xray-error.log):\n"
 if [ -s /tmp/log/xray-error.log ]; then
-    tail -3 /tmp/log/xray-error.log | while read -r line; do echo "  → $line"; done
+    tail -3 /tmp/log/xray-error.log | while IFS= read -r line; do echo "  → $line"; done
 else
-    _ok "Ошибок в логах нет"
+    _ok "Ошибок в логах нет (или лог пустой)"
 fi
 
-# 9. Доступность сервера
-echo -e "\n[9] Доступность VLESS сервера:"
-SERVER=$(grep -o '"address": "[^"]*"' "$CFG" | head -1 | cut -d'"' -f4)
+# 8. Доступность сервера
+printf "\n[8] Доступность VLESS сервера:\n"
+SERVER=$(python3 -c '
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        cfg = json.load(f)
+    for ob in cfg.get("outbounds", []):
+        for vnext in ob.get("settings", {}).get("vnext", []):
+            addr = vnext.get("address", "")
+            if addr and addr not in ("0.0.0.0", "127.0.0.1", "hole"):
+                print(addr)
+                break
+except Exception:
+    pass
+' "$CFG" 2>/dev/null | head -1)
 if [ -n "$SERVER" ]; then
-    echo -n "  Проверка $SERVER... "
-    curl -sI -m 3 "https://$SERVER" >/dev/null 2>&1 && _ok "Доступен (HTTPS)" || \
-    ping -c 1 -W 2 "$SERVER" >/dev/null 2>&1 && _ok "Доступен (ICMP)" || _warn "Сервер не отвечает (Reality может дропать зонды — это норма)"
+    echo "  Проверка $SERVER..."
+    if curl -sI -m 3 "https://$SERVER" >/dev/null 2>&1; then
+        _ok "Доступен (HTTPS)"
+    elif ping -c 1 -W 2 "$SERVER" >/dev/null 2>&1; then
+        _ok "Доступен (ICMP)"
+    else
+        _warn "Сервер не отвечает (Reality может дропать зонды — это норма)"
+    fi
 else
-    _warn "Адрес сервера не найден"
+    _warn "Адрес сервера не найден в config.json"
 fi
 
-# 10. Быстрый DNS-тест
-echo -e "\n[10] Локальный DNS-тест:"
-nslookup google.com 127.0.0.1 2>/dev/null | grep -q "Address:" && _ok "Xray DNS отвечает" || _warn "Локальный DNS не отвечает"
-echo -e "\n[10] 1.1.1.1 DNS-тест:"
-nslookup google.com 1.1.1.1 2>/dev/null | grep -q "Address:" && _ok "Xray DNS отвечает" || _warn "1.1.1.1 DNS не отвечает"
+# 9. DNS-тест через dnsmasq
+printf "\n[9] DNS-тест через локальный dnsmasq:\n"
+nslookup google.com 127.0.0.1 2>/dev/null | grep -q "Address" && _ok "dnsmasq отвечает" || _warn "Локальный DNS не отвечает"
+printf "\n[9b] DNS-тест через 1.1.1.1:\n"
+nslookup google.com 1.1.1.1 2>/dev/null | grep -q "Address" && _ok "1.1.1.1 DNS отвечает" || _warn "1.1.1.1 DNS не отвечает"
 
 # === АВТО-РЕКОМЕНДАЦИИ ===
-echo -e "\n🔧 РЕКОМЕНДАЦИИ:"
-if ! nft list chain ip xray xray_tproxy 2>/dev/null | grep -qE 'dport.*53.*return'; then
-    echo "[FIX DNS] Выполни:"
-    echo "nft delete table ip xray; /etc/init.d/xray-tproxy-rules restart"
+printf "\n🔧 РЕКОМЕНДАЦИИ:\n"
+if ! nft list table inet xray >/dev/null 2>&1; then
+    echo "[FIX NFTABLES] Таблица inet xray отсутствует. Выполни:"
+    echo "  /usr/share/xray/update-nft.sh"
 fi
-if ! uci show dhcp.@dnsmasq[0].server 2>/dev/null | grep -q "127.0.0.1#1053"; then
-    echo "[FIX DNSMASQ] Выполни:"
-    echo "uci set dhcp.@dnsmasq[0].noresolv='1'"
-    echo "uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#1053' && uci commit && /etc/init.d/dnsmasq restart"
+if ! uci show dhcp.@dnsmasq[0].server 2>/dev/null | grep -qE "127\.0\.0\.1#505[34]"; then
+    echo "[FIX DNSMASQ] dnsmasq не направлен на https-dns-proxy. Выполни:"
+    echo "  uci set dhcp.@dnsmasq[0].noresolv='1'"
+    echo "  uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5053'"
+    echo "  uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5054'"
+    echo "  uci commit dhcp && /etc/init.d/dnsmasq restart"
 fi
 if grep -q '"mark": 255' "$CFG" 2>/dev/null; then
     echo "[OK] Конфиг валиден. Если сайты не грузятся → очистите DNS-кэш на клиенте."
 fi
 echo "=== END ==="
 
-echo " На клиенте (Windows / Linux)"
+echo ""
+echo "На клиенте (Windows / Linux):"
 echo "curl -v --interface 192.168.1.138 http://ipinfo.io/ip"

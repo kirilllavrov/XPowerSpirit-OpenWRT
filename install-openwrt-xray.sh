@@ -590,9 +590,20 @@ echo "  ✓ HWID сохранён: $HWID"
 
 # Генерация config.json
 echo "  → Генерируем config.json из подписки..."
-fetch_url_with_header "$SUB_URL" "/tmp/sub_raw.txt" "x-hwid: $HWID" &&
-	python3 "$PARSER" <"/tmp/sub_raw.txt" | python3 "$GENERATOR" --output "$CONFIG_JSON"
-rm -f "/tmp/sub_raw.txt"
+if fetch_url_with_header "$SUB_URL" "/tmp/sub_raw.txt" "x-hwid: $HWID"; then
+	TMP_PARSED="/tmp/sub_parsed.json"
+	if python3 "$PARSER" <"/tmp/sub_raw.txt" >"$TMP_PARSED" && python3 "$GENERATOR" --output "$CONFIG_JSON" <"$TMP_PARSED"; then
+		rm -f "/tmp/sub_raw.txt" "$TMP_PARSED"
+	else
+		rm -f "/tmp/sub_raw.txt" "$TMP_PARSED"
+		echo "  [X] Ошибка при разборе подписки или генерации конфига" >>"$LOG_FILE"
+		exit 1
+	fi
+else
+	rm -f "/tmp/sub_raw.txt"
+	echo "  [X] Ошибка: не удалось скачать подписку" >>"$LOG_FILE"
+	exit 1
+fi
 
 if [ ! -s "$CONFIG_JSON" ]; then
 	echo "  [X] Ошибка: не удалось создать config.json" >>"$LOG_FILE"
@@ -669,9 +680,9 @@ sleep 3
 # =============================================
 echo "14. Проверяем config.json для Xray:"
 if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
-	echo "  ✓ "$CONFIG_JSON" прошел проверку"
+	echo "  ✓ \"$CONFIG_JSON\" прошел проверку"
 else
-	echo "  [X] "$CONFIG_JSON" НЕ прошел проверку!"
+	echo "  [X] \"$CONFIG_JSON\" НЕ прошел проверку!"
 	exit 1
 fi
 

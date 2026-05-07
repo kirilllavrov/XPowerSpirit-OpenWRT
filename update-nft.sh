@@ -51,8 +51,10 @@ except:
 			*[a-zA-Z]*)
 				# Домен — резолвим через 77.88.8.8 напрямую
 				local resolved
+				# В выводе BusyBox nslookup первая строка "Address N:" — IP nameserver'а,
+				# нужная нам строка идёт после строки "Name:". Пропускаем до "Name:".
 				resolved=$(nslookup -timeout=2 -retry=1 "$addr" 77.88.8.8 2>/dev/null | \
-					awk '/^Address [0-9]+: / {print $3}' | \
+					awk '/^Name:/{found=1} found && /^Address [0-9]+: /{print $3; exit}' | \
 					grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | \
 					head -1)
 				if [ -n "$resolved" ]; then

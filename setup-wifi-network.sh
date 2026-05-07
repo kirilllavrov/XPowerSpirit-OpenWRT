@@ -69,7 +69,7 @@ for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-devic
 	uci set wireless.${RADIO}.channel='auto'
 	uci set wireless.${RADIO}.legacy_rates='0'
 	uci set wireless.${RADIO}.cell_density='2'
-	uci set wireless.${RADIO}.ieee80211w='1'
+	# ieee80211w — свойство wifi-iface, а не wifi-device; устанавливается ниже на каждый интерфейс
 done
 
 # 5GHz — HE160
@@ -94,6 +94,7 @@ for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-devic
 	uci set wireless.home_${RADIO}.isolate="0"
 	uci set wireless.home_${RADIO}.bridge_isolate="0"
 	uci set wireless.home_${RADIO}.wmm='1'
+	uci set wireless.home_${RADIO}.ieee80211w='1'
 	uci set wireless.home_${RADIO}.disassoc_low_ack='0'
 	uci set wireless.home_${RADIO}.disabled="0"
 done
@@ -112,6 +113,7 @@ for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-devic
 	uci set wireless.guest_${RADIO}.isolate="1"
 	uci set wireless.guest_${RADIO}.bridge_isolate="1"
 	uci set wireless.guest_${RADIO}.wmm='1'
+	uci set wireless.guest_${RADIO}.ieee80211w='1'
 	uci set wireless.guest_${RADIO}.disassoc_low_ack='0'
 	uci set wireless.guest_${RADIO}.disabled="0"
 done

@@ -2,6 +2,7 @@
 # OpenWrt — обновление Xray, geoip, geosite и config.json
 
 LOG="/tmp/log/xray-update.log"
+mkdir -p /tmp/log
 
 die() {
 	echo "🚫 $1" >>"$LOG"
@@ -126,10 +127,13 @@ ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/X
 ZIP_DEST="$TMP_DIR/xray.zip"
 SHA_FILE="$STATE_DIR/xray.zip.sha256sum"
 
-fetch_url "${ZIP_URL}.dgst" "$STATE_DIR/xray.dgst" || {
+REMOTE_SHA=""
+if fetch_url "${ZIP_URL}.dgst" "$STATE_DIR/xray.dgst"; then
+	REMOTE_SHA=$(extract_sha256 "$STATE_DIR/xray.dgst")
+	[ -z "$REMOTE_SHA" ] && echo "⚠️ Не удалось извлечь SHA из .dgst — пропускаем обновление Xray" >>"$LOG"
+else
 	echo "⚠️ Не удалось скачать .dgst — пропускаем обновление Xray" >>"$LOG"
-}
-REMOTE_SHA=$(extract_sha256 "$STATE_DIR/xray.dgst")
+fi
 
 if [ -n "$REMOTE_SHA" ]; then
 	FREE_SPACE_TMP=$(df /tmp | awk 'NR==2 {print $4}')
@@ -167,36 +171,44 @@ fi
 update_geo() {
 	local URL="$1"
 	local DEST="$2"
-	local SHA_FILE="${STATE_DIR}/$(basename "$DEST").sha256sum"
+	local BASE
+	BASE="$(basename "$DEST")"
+	local SHA_FILE="${STATE_DIR}/${BASE}.sha256sum"
+	local TMP_SHA="${TMP_DIR}/${BASE}.sha256sum.tmp"
+	local TMP_DEST="${TMP_DIR}/${BASE}.tmp"
 
-	if ! fetch_url "${URL}.sha256sum" "${DEST}.sha256sum"; then
-		echo "⚠️ Не удалось скачать sha256sum для $(basename "$DEST") — пропускаем" >>"$LOG"
+	if ! fetch_url "${URL}.sha256sum" "$TMP_SHA"; then
+		echo "⚠️ Не удалось скачать sha256sum для $BASE — пропускаем" >>"$LOG"
 		return
 	fi
-	REMOTE_SHA=$(cut -d' ' -f1 "${DEST}.sha256sum")
+	REMOTE_SHA=$(cut -d' ' -f1 "$TMP_SHA")
+	rm -f "$TMP_SHA"
 	[ -z "$REMOTE_SHA" ] && {
-		echo "⚠️ Пустой sha256sum для $(basename "$DEST") — пропускаем" >>"$LOG"
+		echo "⚠️ Пустой sha256sum для $BASE — пропускаем" >>"$LOG"
 		return
 	}
 
 	if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
-		echo "✅ $(basename "$DEST") не изменился" >>"$LOG"
+		echo "✅ $BASE не изменился" >>"$LOG"
 		return
 	fi
 
-	if ! fetch_url "$URL" "$DEST"; then
-		echo "⚠️ Не удалось скачать $(basename "$DEST") — пропускаем" >>"$LOG"
+	if ! fetch_url "$URL" "$TMP_DEST"; then
+		echo "⚠️ Не удалось скачать $BASE — пропускаем" >>"$LOG"
+		rm -f "$TMP_DEST"
 		return
 	fi
-	LOCAL_SHA=$(sha256sum "$DEST" | awk '{print $1}')
+	LOCAL_SHA=$(sha256sum "$TMP_DEST" | awk '{print $1}')
 
 	if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-		echo "🚫 SHA mismatch $(basename "$DEST")" >>"$LOG"
+		echo "🚫 SHA mismatch $BASE" >>"$LOG"
+		rm -f "$TMP_DEST"
 		return
 	fi
 
+	mv "$TMP_DEST" "$DEST"
 	echo "$REMOTE_SHA" >"$SHA_FILE"
-	echo "✅ $(basename "$DEST") обновлён" >>"$LOG"
+	echo "✅ $BASE обновлён" >>"$LOG"
 }
 
 update_geo "$GEOIP_URL" "$GEOIP"
@@ -248,7 +260,7 @@ fi
 if ! xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
 	echo "🚫 Итоговый config.json невалиден — отключаем Xray" >>"$LOG"
 	/etc/init.d/xray stop
-	exit 0
+	exit 1
 fi
 
 # ============================
