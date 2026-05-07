@@ -590,13 +590,26 @@ echo "  ✓ HWID сохранён: $HWID"
 
 # Генерация config.json
 echo "  → Генерируем config.json из подписки..."
-fetch_url_with_header "$SUB_URL" "/tmp/sub_raw.txt" "x-hwid: $HWID" &&
-	python3 "$PARSER" <"/tmp/sub_raw.txt" | python3 "$GENERATOR" --output "$CONFIG_JSON"
-rm -f "/tmp/sub_raw.txt"
+if fetch_url_with_header "$SUB_URL" "/tmp/sub_raw.txt" "x-hwid: $HWID"; then
+    python3 "$PARSER" < "/tmp/sub_raw.txt" > "/tmp/parsed_outbounds.json" || {
+        echo "  [X] Ошибка парсера подписки"
+        rm -f "/tmp/sub_raw.txt"
+        exit 1
+    }
+    python3 "$GENERATOR" --output "$CONFIG_JSON" < "/tmp/parsed_outbounds.json" || {
+        echo "  [X] Ошибка генератора конфига"
+        rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
+        exit 1
+    }
+    rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
+else
+    echo "  [X] Не удалось скачать подписку"
+    exit 1
+fi
 
 if [ ! -s "$CONFIG_JSON" ]; then
-	echo "  [X] Ошибка: не удалось создать config.json" >>"$LOG_FILE"
-	exit 1
+    echo "  [X] Ошибка: не удалось создать config.json" >>"$LOG_FILE"
+    exit 1
 fi
 echo "  ✓ config.json создан"
 echo ""

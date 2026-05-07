@@ -34,8 +34,8 @@ except:
 
 	# Fallback на grep
 	if [ -z "$raw" ]; then
-		raw=$(grep -o '"address"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONF" 2>/dev/null | \
-			sed 's/.*"\([^"]*\)"$/\1/' | \
+		raw=$(grep -o '"address"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONF" 2>/dev/null |
+			sed 's/.*"\([^"]*\)"$/\1/' |
 			sort -u)
 	fi
 
@@ -45,29 +45,29 @@ except:
 	local ips=""
 	while IFS= read -r addr; do
 		case "$addr" in
-			"hole"|"0.0.0.0"|"127.0.0.1"|"")
-				continue
-				;;
-			*[a-zA-Z]*)
-				# Домен — резолвим через 77.88.8.8 напрямую
-				local resolved
-				resolved=$(nslookup -timeout=2 -retry=1 "$addr" 77.88.8.8 2>/dev/null | \
-					awk '/^Address [0-9]+: / {print $3}' | \
-					grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | \
-					head -1)
-				if [ -n "$resolved" ]; then
-					ips="$ips,$resolved"
-					logger -t update-nft "Resolved $addr → $resolved"
-				else
-					logger -t update-nft "Failed to resolve $addr"
-				fi
-				;;
-			*.*.*.*)
-				# Уже IP — проверяем валидность
-				if echo "$addr" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
-					ips="$ips,$addr"
-				fi
-				;;
+		"hole" | "0.0.0.0" | "127.0.0.1" | "")
+			continue
+			;;
+		*[a-zA-Z]*)
+			# Домен — резолвим через 77.88.8.8 напрямую
+			local resolved
+			resolved=$(nslookup -timeout=2 -retry=1 "$addr" 77.88.8.8 2>/dev/null |
+				awk '/^Name:/ {found=1; next} found && /^Address [0-9]+: / {print $3; exit}' |
+				grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' |
+				head -1)
+			if [ -n "$resolved" ]; then
+				ips="$ips,$resolved"
+				logger -t update-nft "Resolved $addr → $resolved"
+			else
+				logger -t update-nft "Failed to resolve $addr"
+			fi
+			;;
+		*.*.*.*)
+			# Уже IP — проверяем валидность
+			if echo "$addr" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+				ips="$ips,$addr"
+			fi
+			;;
 		esac
 	done <<EOF
 $raw
