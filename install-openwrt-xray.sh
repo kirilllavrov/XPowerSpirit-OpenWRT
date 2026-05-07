@@ -40,7 +40,7 @@ for arg in "$@"; do
 	--guest-dl=*) DL_GUEST="${arg#*=}" ;;
 	--guest-ul=*) UL_GUEST="${arg#*=}" ;;
 	--sub=*) SUB_URL="${arg#*=}" ;;
-	*) echo "⚠️ Неизвестный аргумент: $arg" ;;
+	*) echo "[!] Неизвестный аргумент: $arg" ;;
 	esac
 done
 
@@ -120,7 +120,7 @@ uci set system.@system[0].timezone='MSK-3'
 uci commit system
 ntpd -q -p 77.88.8.8 2>/dev/null ||
 ntpd -q -p 1.1.1.1 2>/dev/null ||
-echo "⚠️ Синхронизация времени не удалась, продолжаем..."
+echo " [!] Синхронизация времени не удалась, продолжаем..."
 echo "[+] Timezone установлен в Europe/Moscow, время синхронизировано"
 
 # =============================================
