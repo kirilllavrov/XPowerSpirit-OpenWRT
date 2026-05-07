@@ -665,13 +665,13 @@ echo "[+] Службы запущены"
 sleep 3
 
 # =============================================
-# 14 Проверяем конфиг Xray
+# 14 Проверяем что у нас Xray запущен и config.json валидный
 # =============================================
-echo "14. Проверяем конфиг Xray:"
+echo "14. Проверяем config.json для Xray:"
 if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
-	echo "  ✓ Конфиг Xray прошел проверку"
+	echo "  ✓ "$CONFIG_JSON" прошел проверку"
 else
-	echo "  [X] Конфиг Xray НЕ прошел проверку!"
+	echo "  [X] "$CONFIG_JSON" НЕ прошел проверку!"
 	exit 1
 fi
 
