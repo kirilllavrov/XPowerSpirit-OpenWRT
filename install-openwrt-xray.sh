@@ -121,11 +121,12 @@ uci commit system
 ntpd -q -p 77.88.8.8 2>/dev/null ||
 ntpd -q -p 1.1.1.1 2>/dev/null ||
 echo "⚠️ Синхронизация времени не удалась, продолжаем..."
-echo "✅"
+echo "[+] Timezone установлен в Europe/Moscow, время синхронизировано"
 
 # =============================================
 # 2. Просим подписку
 # =============================================
+echo "2. Просим подписку:"
 if [ -z "$SUB_URL" ]; then
 	echo "Ошибка: пустой URL (задайте через --sub=URL)"
 	exit 1
@@ -133,7 +134,7 @@ fi
 
 echo "$SUB_URL" >"$SUB_FILE"
 chmod 600 "$SUB_FILE"
-echo "✅ Подписка сохранена: $SUB_URL"
+echo "[+] Подписка сохранена: $SUB_URL"
 
 # =============================================
 # 3. Настраиваем гостевую сеть и лимиты скорости
@@ -156,6 +157,7 @@ uci set network.$GUEST_NET.ipaddr="$GUEST_IP"
 uci set network.$GUEST_NET.netmask="255.255.255.0"
 uci set network.$GUEST_NET.force_link="1"
 uci commit network
+echo "  → Guest Bridge + Interface настроены: br-${GUEST_NET} (${GUEST_IP}/24)"
 
 # 3.2. DHCP Guest
 uci -q delete dhcp.$GUEST_NET
@@ -167,6 +169,7 @@ uci set dhcp.$GUEST_NET.leasetime="12h"
 uci set dhcp.$GUEST_NET.force="1"
 uci set dhcp.$GUEST_NET.ignore="0"
 uci commit dhcp
+echo "  → DHCP для Guest настроен: $GUEST_NET"
 
 # 3.3. Firewall Guest Zone + Rules
 uci -q delete firewall.$GUEST_NET
@@ -178,6 +181,7 @@ uci set firewall.$GUEST_NET.output="ACCEPT"
 uci set firewall.$GUEST_NET.forward="REJECT"
 uci set firewall.$GUEST_NET.masq="1"
 uci set firewall.$GUEST_NET.mtu_fix="1"
+echo "  → Firewall зона для Guest создана: $GUEST_NET"
 
 # 3.4 Firewall DNS
 uci -q delete firewall.${GUEST_NET}_dns
@@ -187,6 +191,7 @@ uci set firewall.${GUEST_NET}_dns.src="$GUEST_NET"
 uci set firewall.${GUEST_NET}_dns.dest_port="53"
 uci set firewall.${GUEST_NET}_dns.proto="tcp udp"
 uci set firewall.${GUEST_NET}_dns.target="ACCEPT"
+echo "  → Firewall правило для DNS создано: $GUEST_NET"
 
 # 3.5 Firewall DHCP
 uci -q delete firewall.${GUEST_NET}_dhcp
@@ -196,6 +201,7 @@ uci set firewall.${GUEST_NET}_dhcp.src="$GUEST_NET"
 uci set firewall.${GUEST_NET}_dhcp.dest_port="67-68"
 uci set firewall.${GUEST_NET}_dhcp.proto="udp"
 uci set firewall.${GUEST_NET}_dhcp.target="ACCEPT"
+echo "  → Firewall правило для DHCP создано: $GUEST_NET"
 
 # 3.6 Forward to WAN
 uci -q delete firewall.${GUEST_NET}_wan
@@ -203,6 +209,7 @@ uci set firewall.${GUEST_NET}_wan="forwarding"
 uci set firewall.${GUEST_NET}_wan.src="$GUEST_NET"
 uci set firewall.${GUEST_NET}_wan.dest="wan"
 uci commit firewall
+echo "  → Firewall правило для доступа Guest в WAN создано: $GUEST_NET → wan"
 
 # 3.7 Настраиваем SQM только для Guest
 uci -q delete sqm.$GUEST_NET
@@ -214,8 +221,9 @@ uci set sqm.$GUEST_NET.qdisc="cake"
 uci set sqm.$GUEST_NET.script="piece_of_cake.qos"
 uci set sqm.$GUEST_NET.enabled="1"
 uci commit sqm
+echo "  → SQM настроен для Guest: ${DL_GUEST}kbps down / ${UL_GUEST}kbps up"
 
-echo "🔄 Применяем сетевые изменения..."
+echo "Применяем сетевые изменения..."
 service network restart
 sleep 5
 for i in $(seq 1 10); do
@@ -224,7 +232,7 @@ for i in $(seq 1 10); do
 done
 service firewall restart
 
-echo "✅"
+echo "[+] Настройка Guest Network и SQM завершена"
 
 # =============================================
 # 4. Установка Xray из GitHub
@@ -245,8 +253,7 @@ LATEST_VERSION=$(curl -s --user-agent "OpenWrt-Xray/1.0" --max-time 10 https://a
 	sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
 
 [ -z "$LATEST_VERSION" ] && {
-	echo "Ошибка: не удалось получить версию Xray"
-	echo "Проверьте: curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep tag_name"
+	echo "  [X] Ошибка: не удалось получить версию Xray"
 	exit 1
 }
 
@@ -259,7 +266,7 @@ if [ -x /usr/bin/xray ]; then
 fi
 
 if [ "$CURRENT_VERSION" = "$LATEST_VER_NUM" ]; then
-	echo "  → Xray уже актуальной версии $LATEST_VERSION, пропускаем установку"
+	echo "  ✓ Xray уже актуальной версии $LATEST_VERSION, пропускаем установку"
 else
 	[ -n "$CURRENT_VERSION" ] && echo "  → Текущая версия: $CURRENT_VERSION, будет обновлено до $LATEST_VER_NUM"
 
@@ -289,22 +296,21 @@ else
 
 	echo "  → Скачиваем .dgst для Xray..."
 	fetch_url "${ZIP_URL}.dgst" "$DGST_FILE" || {
-		echo "Ошибка: не удалось скачать .dgst для Xray"
-		echo "Проверьте URL: ${ZIP_URL}.dgst"
+		echo "  [X] Ошибка: не удалось скачать .dgst для Xray"
 		exit 1
 	}
 
 	# Проверяем, что .dgst не пустой и содержит SHA2-256
 	if [ ! -s "$DGST_FILE" ] || ! grep -q 'SHA2-256' "$DGST_FILE" 2>/dev/null; then
-		echo "Ошибка: .dgst файл пустой или не содержит SHA2-256"
-		echo "Содержимое ответа:"
-		cat "$DGST_FILE" 2>/dev/null || echo "(файл пустой)"
+		echo "  [X] Ошибка: .dgst файл пустой или не содержит SHA2-256"
+		echo "  → Содержимое ответа:"
+		cat "$DGST_FILE" 2>/dev/null || echo " (файл пустой)"
 		exit 1
 	fi
 
 	REMOTE_SHA="$(extract_sha256 "$DGST_FILE")"
 	[ -z "$REMOTE_SHA" ] && {
-		echo "Ошибка: не удалось извлечь SHA2-256 из .dgst"
+		echo "  [X] Ошибка: не удалось извлечь SHA2-256 из .dgst"
 		exit 1
 	}
 
@@ -313,29 +319,28 @@ else
 	# проверяем свободное место в /tmp
 	FREE_SPACE_TMP=$(df /tmp | awk 'NR==2 {print $4}')
 	if [ "$FREE_SPACE_TMP" -lt 20480 ]; then
-		echo "[ERR] Недостаточно места в /tmp (нужно минимум 20MB)" >>"$LOG_FILE"
+		echo "  [X] Недостаточно места в /tmp (нужно минимум 20MB)" >>"$LOG_FILE"
 		exit 1
 	fi
 
 	# если уже есть ZIP с таким же SHA — не качаем заново
 	if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ] && [ -f "$ZIP_DEST" ]; then
-		echo "  → Найден локальный ZIP с тем же SHA, повторное скачивание не требуется"
+		echo "  ✓ Найден локальный ZIP с тем же SHA, повторное скачивание не требуется"
 	else
 		echo "  → Скачиваем Xray ZIP (${LATEST_VERSION})..."
 		fetch_url "$ZIP_URL" "$ZIP_DEST" || {
-			echo "Ошибка: не удалось скачать Xray ZIP"
-			echo "Проверьте URL: $ZIP_URL"
+			echo "  [X] Ошибка: не удалось скачать Xray ZIP"
 			exit 1
 		}
 
 		if [ ! -s "$ZIP_DEST" ]; then
-			echo "Ошибка: скачанный ZIP пустой"
+			echo "  [X] Ошибка: скачанный ZIP пустой"
 			exit 1
 		fi
 
 		LOCAL_SHA="$(sha256sum "$ZIP_DEST" | awk '{print $1}')"
 		if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-			echo "Ошибка: SHA не совпадает!"
+			echo "  [X] Ошибка: SHA не совпадает!"
 			echo "  ожидалось: $REMOTE_SHA"
 			echo "  получено : $LOCAL_SHA"
 			exit 1
@@ -351,7 +356,7 @@ else
 	chmod 755 /usr/bin/xray
 
 	rm -rf "$TMP_DIR"
-	echo "✅ Xray установлен версии $LATEST_VERSION"
+	echo "[+] Xray установлен версии $LATEST_VERSION"
 fi
 
 # =============================================
@@ -367,7 +372,7 @@ download() {
 		chmod +x "$dst"
 		echo "→ $dst"
 	else
-		echo "❌ Ошибка: не удалось скачать $dst"
+		echo "  [X] Ошибка: не удалось скачать $dst"
 		exit 1
 	fi
 }
@@ -377,7 +382,7 @@ download "$REPO/xray-sub-parser.py" "$PARSER"
 download "$REPO/update-xray.sh" "$UPDATER"
 download "$REPO/update-nft.sh" "$NFT_UPDATER"
 
-echo "✅"
+echo "[+] Все скрипты загружены и готовы к использованию"
 
 # =============================================
 # 6. Настройка DNS через DoH (dnsmasq + https-dns-proxy)
@@ -392,7 +397,7 @@ uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5054'
 uci add_list dhcp.@dnsmasq[0].server='77.88.8.8'
 uci commit dhcp
 
-echo "✅"
+echo "[+] DNS настроен"
 
 # =============================================
 # 7. Создаём init.d для Xray
@@ -480,7 +485,7 @@ XRAYEOF
 chmod +x /etc/init.d/xray
 /etc/init.d/xray enable
 
-echo "✅"
+echo "[+] init.d для Xray создан и включён"
 
 # =============================================
 # 8. Настраиваем routing
@@ -491,7 +496,7 @@ if ! grep -q "^100[[:space:]]\+xray$" /etc/iproute2/rt_tables; then
 	echo "100 xray" >>/etc/iproute2/rt_tables
 fi
 
-echo "✅"
+echo "[+] Routing настроен"
 
 # =============================================
 # 9. Настраиваем sysctl
@@ -509,7 +514,7 @@ net.ipv4.ip_forward=1
 EOF
 sysctl -p /etc/sysctl.d/99-xray.conf >/dev/null 2>&1
 
-echo "✅"
+echo "[+] Sysctl настроен"
 
 # =============================================
 # 10. Geo + HWID + config.json
@@ -529,19 +534,19 @@ update_geo() {
 
 	# Скачиваем SHA256
 	fetch_url "${URL}.sha256sum" "$TMP_SHA" || {
-		echo "🚫 Не удалось получить SHA256 для $BASE" >>"$LOG_FILE"
+		echo "  [X] Не удалось получить SHA256 для $BASE" >>"$LOG_FILE"
 		exit 1
 	}
 	REMOTE_SHA="$(cut -d' ' -f1 "$TMP_SHA")"
 
 	if [ -z "$REMOTE_SHA" ]; then
-		echo "🚫 Не удалось получить SHA256 для $BASE" >>"$LOG_FILE"
+		echo "  [X] Не удалось получить SHA256 для $BASE" >>"$LOG_FILE"
 		exit 1
 	fi
 
 	# Скачиваем сам файл во временное место
 	fetch_url "$URL" "$TMP" || {
-		echo "🚫 Не удалось скачать $BASE" >>"$LOG_FILE"
+		echo "  [X] Не удалось скачать $BASE" >>"$LOG_FILE"
 		exit 1
 	}
 
@@ -550,9 +555,9 @@ update_geo() {
 
 	# Проверяем совпадение
 	if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-		echo "🚫 SHA mismatch $BASE" >>"$LOG_FILE"
-		echo "expected: $REMOTE_SHA" >>"$LOG_FILE"
-		echo "actual:   $LOCAL_SHA" >>"$LOG_FILE"
+		echo "  [X] SHA не совпадает для $BASE" >>"$LOG_FILE"
+		echo "ожидаемый: $REMOTE_SHA" >>"$LOG_FILE"
+		echo "фактический:   $LOCAL_SHA" >>"$LOG_FILE"
 		rm -f "$TMP" "$TMP_SHA"
 		exit 1
 	fi
@@ -563,8 +568,8 @@ update_geo() {
 	# Сохраняем SHA в state (для будущих обновлений)
 	echo "$REMOTE_SHA" >"$SHA_FILE"
 
-	echo "→ $BASE загружен и проверен" >>"$LOG_FILE"
-	echo "$BASE - ✅"
+	echo "  → $BASE загружен и проверен" >>"$LOG_FILE"
+	echo "  ✓ - $BASE"
 }
 
 # Вызовы
@@ -576,20 +581,26 @@ update_geo \
 	"https://raw.githubusercontent.com/kirilllavrov/geosite-builder/release/geosite.dat" \
 	"$GEO_DIR/geosite.dat"
 
+# Генерируем HWID и сохраняем в файл
+echo "  → Генерируем HWID..."
 HWID="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
 echo "$HWID" >"$HWID_FILE"
 chmod 600 "$HWID_FILE"
+echo "  ✓ HWID сохранён: $HWID"
 
 # Генерация config.json
+echo "  → Генерируем config.json из подписки..."
 fetch_url_with_header "$SUB_URL" "/tmp/sub_raw.txt" "x-hwid: $HWID" &&
 	python3 "$PARSER" <"/tmp/sub_raw.txt" | python3 "$GENERATOR" --output "$CONFIG_JSON"
 rm -f "/tmp/sub_raw.txt"
 
 if [ ! -s "$CONFIG_JSON" ]; then
-	echo "Ошибка: не удалось создать config.json"
+	echo "  [X] Ошибка: не удалось создать config.json" >>"$LOG_FILE"
 	exit 1
 fi
-echo "✅"
+echo "  ✓ config.json создан"
+echo ""
+echo "[+] Геофайлы загружены, конфиг сгенерирован"
 
 # =============================================
 # 11. Cron: автообновление в 2.30 ночи
@@ -602,9 +613,9 @@ if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
 		crontab -l 2>/dev/null || true
 		echo "$CRON_ENTRY"
 	) | crontab -
-	echo "✅"
+	echo "[+] Cron-задача для обновления Xray добавлена: $CRON_ENTRY"
 else
-	echo "❌ Cron-задача уже существует, пропускаем"
+	echo "[-] Cron-задача уже существует, пропускаем"
 fi
 
 # =============================================
@@ -633,7 +644,7 @@ done
 EOF
 
 chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
-echo "✅"
+echo "[+] Hotplug для автообновления после включения WAN настроен"
 
 # =============================================
 # 13. Запуск и рестарт служб
@@ -649,23 +660,26 @@ service xray start
 sleep 2
 service dnsmasq restart
 
-echo "✅"
+echo "[+] Службы запущены"
 
 sleep 3
 
-# Проверяем конфиг Xray
+# =============================================
+# 14 Проверяем конфиг Xray
+# =============================================
+echo "14. Проверяем конфиг Xray:"
 if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
-	echo "Конфиг Xray прошел проверку - ✅"
+	echo "  ✓ Конфиг Xray прошел проверку"
 else
-	echo "Конфиг Xray НЕ прошел проверку! - 🚫"
+	echo "  [X] Конфиг Xray НЕ прошел проверку!"
 	exit 1
 fi
 
-echo "Проверяем, запущен ли Xray:"
+echo "  → Проверяем, запущен ли Xray:"
 if pgrep -a xray >/dev/null; then
-	echo "Xray запущен - ✅"
+	echo "  ✓ Xray запущен"
 else
-	echo "Xray НЕ запущен - 🚫"
+	echo "  [X] Xray НЕ запущен"
 fi
 
 echo ""
