@@ -190,10 +190,10 @@ def main():
             "domainStrategy": "AsIs",
             "rules": build_rules("direct", direct_mode=True)
         }
-        print("⚠️ Найден сервер 'hole'. Включён DIRECT-конфиг.", file=sys.stderr)
+        print("[!] Найден сервер 'hole'. Включён DIRECT-конфиг.", file=sys.stderr)
         with open(output_path, "w") as f:
             json.dump(cfg, f, indent=2, ensure_ascii=False)
-        print(f"📁 Конфиг сохранён: {output_path}", file=sys.stderr)
+        print(f"✓ Конфиг сохранён: {output_path}", file=sys.stderr)
         return
 
     chosen = choose_best_server(all_obs)
@@ -207,7 +207,7 @@ def main():
             "domainStrategy": "AsIs",
             "rules": build_rules("direct", direct_mode=True)
         }
-        print("⚠️ Нет доступных серверов (только заглушки). Создан DIRECT-конфиг.", file=sys.stderr)
+        print("[!] Нет доступных серверов (только заглушки). Создан DIRECT-конфиг.", file=sys.stderr)
     else:
         chosen_tag = chosen.get("tag") or "proxy"
         if "tag" not in chosen:
@@ -240,11 +240,11 @@ def main():
             "domainStrategy": "IPOnDemand",
             "rules": build_rules(chosen_tag, direct_mode=False)
         }
-        print(f"✅ Выбран сервер: {chosen_tag}", file=sys.stderr)
+        print(f"[+] Выбран сервер: {chosen_tag}", file=sys.stderr)
 
     with open(output_path, "w") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
-    print(f"📁 Конфиг сохранён: {output_path}", file=sys.stderr)
+    print(f"✓ Конфиг сохранён: {output_path}", file=sys.stderr)
 
 if __name__ == "__main__":
     main()
