@@ -1,5 +1,5 @@
 #!/bin/sh
-# OpenWrt — обновление Xray, geoip, geosite и config.json
+# OpenWrt — обновление Xray, geoip, geosite, подписки и config.json
 
 LOG="/tmp/log/xray-update.log"
 
