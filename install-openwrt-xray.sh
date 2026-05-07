@@ -112,12 +112,15 @@ fetch_url_with_header() {
 }
 
 # =============================================
-# 1. Устанавливаем Timezone
+# 1. Устанавливаем Timezone и синхронизируем время
 # =============================================
-echo "1. Устанавливаем Timezone:"
+echo "1. Устанавливаем Timezone и синхронизируем время:"
 uci set system.@system[0].zonename='Europe/Moscow'
 uci set system.@system[0].timezone='MSK-3'
 uci commit system
+ntpd -q -p 77.88.8.8 2>/dev/null ||
+ntpd -q -p 1.1.1.1 2>/dev/null ||
+echo "⚠️ Синхронизация времени не удалась, продолжаем..."
 echo "✅"
 
 # =============================================
@@ -407,7 +410,13 @@ CONF="/etc/xray/config.json"
 ASSET_DIR="/usr/share/xray"
 
 start_service() {
-    # Ждём готовности сети (default route + DNS через 77.88.8.8)
+    # Разовая синхронизация времени
+    ntpd -q -p 77.88.8.8 2>/dev/null || \
+    ntpd -q -p 1.1.1.1 2>/dev/null || \
+    logger -t xray "Time sync failed, continuing anyway"
+    sleep 1
+	
+	# Ждём готовности сети (default route + DNS через 77.88.8.8)
     for i in $(seq 1 15); do
         if ip route | grep -q default && nslookup -timeout=2 -retry=1 google.com 77.88.8.8 >/dev/null 2>&1; then
             break
