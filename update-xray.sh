@@ -4,7 +4,7 @@
 LOG="/tmp/log/xray-update.log"
 
 die() {
-	echo "🚫 $1" >>"$LOG"
+	echo "[X] $1" >>"$LOG"
 	exit 1
 }
 
@@ -127,7 +127,7 @@ ZIP_DEST="$TMP_DIR/xray.zip"
 SHA_FILE="$STATE_DIR/xray.zip.sha256sum"
 
 fetch_url "${ZIP_URL}.dgst" "$STATE_DIR/xray.dgst" || {
-	echo "⚠️ Не удалось скачать .dgst — пропускаем обновление Xray" >>"$LOG"
+	echo "[!] Не удалось скачать .dgst — пропускаем обновление Xray" >>"$LOG"
 }
 REMOTE_SHA=$(extract_sha256 "$STATE_DIR/xray.dgst")
 
@@ -136,28 +136,28 @@ if [ -n "$REMOTE_SHA" ]; then
 	[ "$FREE_SPACE_TMP" -lt 20480 ] && die "Недостаточно места в /tmp (нужно минимум 20MB)"
 
 	if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
-		echo "✅ Xray ZIP не изменился" >>"$LOG"
+		echo "✓ Xray ZIP не изменился" >>"$LOG"
 	else
 		echo "→ Скачиваем Xray ZIP..." >>"$LOG"
 		if ! fetch_url "$ZIP_URL" "$ZIP_DEST"; then
-			echo "⚠️ Не удалось скачать Xray ZIP — пропускаем обновление" >>"$LOG"
+			echo "[!] Не удалось скачать Xray ZIP — пропускаем обновление" >>"$LOG"
 			rm -f "$ZIP_DEST"
 		else
 			LOCAL_SHA=$(sha256sum "$ZIP_DEST" | awk '{print $1}')
 			if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-				echo "🚫 SHA mismatch Xray ZIP" >>"$LOG"
+				echo "[X] SHA не совпадает для Xray ZIP" >>"$LOG"
 				rm -f "$ZIP_DEST"
 			else
 				echo "$REMOTE_SHA" >"$SHA_FILE"
 				unzip -q "$ZIP_DEST" -d "$TMP_DIR"
 				cp "$TMP_DIR/xray" /usr/bin/xray
 				chmod 755 /usr/bin/xray
-				echo "✅ Xray обновлён до $LATEST_VERSION" >>"$LOG"
+				echo "[+] Xray обновлён до $LATEST_VERSION" >>"$LOG"
 			fi
 		fi
 	fi
 else
-	echo "⚠️ Не удалось извлечь SHA из .dgst — пропускаем обновление Xray" >>"$LOG"
+	echo "[!] Не удалось извлечь SHA из .dgst — пропускаем обновление Xray" >>"$LOG"
 fi
 
 # ============================
@@ -170,33 +170,33 @@ update_geo() {
 	local SHA_FILE="${STATE_DIR}/$(basename "$DEST").sha256sum"
 
 	if ! fetch_url "${URL}.sha256sum" "${DEST}.sha256sum"; then
-		echo "⚠️ Не удалось скачать sha256sum для $(basename "$DEST") — пропускаем" >>"$LOG"
+		echo "[!] Не удалось скачать sha256sum для $(basename "$DEST") — пропускаем" >>"$LOG"
 		return
 	fi
 	REMOTE_SHA=$(cut -d' ' -f1 "${DEST}.sha256sum")
 	[ -z "$REMOTE_SHA" ] && {
-		echo "⚠️ Пустой sha256sum для $(basename "$DEST") — пропускаем" >>"$LOG"
+		echo "[!] Пустой sha256sum для $(basename "$DEST") — пропускаем" >>"$LOG"
 		return
 	}
 
 	if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
-		echo "✅ $(basename "$DEST") не изменился" >>"$LOG"
+		echo "✓ $(basename "$DEST") не изменился" >>"$LOG"
 		return
 	fi
 
 	if ! fetch_url "$URL" "$DEST"; then
-		echo "⚠️ Не удалось скачать $(basename "$DEST") — пропускаем" >>"$LOG"
+		echo "[!] Не удалось скачать $(basename "$DEST") — пропускаем" >>"$LOG"
 		return
 	fi
 	LOCAL_SHA=$(sha256sum "$DEST" | awk '{print $1}')
 
 	if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-		echo "🚫 SHA mismatch $(basename "$DEST")" >>"$LOG"
+		echo "[X] SHA не совпадает для $(basename "$DEST")" >>"$LOG"
 		return
 	fi
 
 	echo "$REMOTE_SHA" >"$SHA_FILE"
-	echo "✅ $(basename "$DEST") обновлён" >>"$LOG"
+	echo "[+] $(basename "$DEST") обновлён" >>"$LOG"
 }
 
 update_geo "$GEOIP_URL" "$GEOIP"
@@ -221,24 +221,24 @@ while [ $TRY -le $MAX_RETRIES ]; do
 		rm -f "/tmp/xray-sub-raw.txt"
 
 		if [ ! -s "$TMP_CONFIG" ]; then
-			echo "🚫 Новый config.json пустой (попытка $TRY)" >>"$LOG"
+			echo "[] Новый config.json пустой (попытка $TRY)" >>"$LOG"
 		elif ! xray run -test -config "$TMP_CONFIG" >/dev/null 2>&1; then
-			echo "🚫 Новый config.json невалиден (попытка $TRY)" >>"$LOG"
+			echo "[X] Новый config.json невалиден (попытка $TRY)" >>"$LOG"
 		else
 			mv "$TMP_CONFIG" "$CONFIG_JSON"
-			echo "✅ Новый config.json установлен (попытка $TRY)" >>"$LOG"
+			echo "[+] Новый config.json установлен (попытка $TRY)" >>"$LOG"
 			break
 		fi
 	else
 		rm -f "/tmp/xray-sub-raw.txt"
-		echo "🚫 Ошибка при получении или разборе подписки (попытка $TRY)" >>"$LOG"
+		echo "[X] Ошибка при получении или разборе подписки (попытка $TRY)" >>"$LOG"
 	fi
 
 	TRY=$((TRY + 1))
 done
 
 if [ $TRY -gt $MAX_RETRIES ]; then
-	echo "⚠️ Все попытки обновления неудачны — сохраняем старый конфиг" >>"$LOG"
+	echo "[!] Все попытки обновления неудачны — сохраняем старый конфиг" >>"$LOG"
 fi
 
 # ============================
@@ -246,7 +246,7 @@ fi
 # ============================
 
 if ! xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
-	echo "🚫 Итоговый config.json невалиден — отключаем Xray" >>"$LOG"
+	echo "[X] Итоговый config.json невалиден — отключаем Xray" >>"$LOG"
 	/etc/init.d/xray stop
 	exit 0
 fi
@@ -256,7 +256,7 @@ fi
 # ============================
 
 /usr/share/xray/update-nft.sh >>"$LOG" 2>&1 || {
-	echo "🚫 Ошибка при обновлении nftables" >>"$LOG"
+	echo "[X] Ошибка при обновлении nftables" >>"$LOG"
 	/etc/init.d/xray stop
 	exit 1
 }
@@ -266,9 +266,9 @@ fi
 # ============================
 
 if /etc/init.d/xray restart >>"$LOG" 2>&1; then
-	echo "✅ Xray перезапущен успешно" >>"$LOG"
+	echo "[+] Xray перезапущен успешно" >>"$LOG"
 else
-	echo "⚠️ Не удалось перезапустить Xray" >>"$LOG"
+	echo "[!] Не удалось перезапустить Xray" >>"$LOG"
 fi
 echo "Готово." >>"$LOG"
 
