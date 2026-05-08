@@ -14,6 +14,7 @@ fi
 # Извлекаем IP‑адреса серверов из config.json
 extract_server_ips() {
 	local raw
+	
 	# Пробуем Python-парсер
 	raw=$(python3 -c '
 import json, sys
