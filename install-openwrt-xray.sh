@@ -118,9 +118,11 @@ echo "1. Устанавливаем Timezone и синхронизируем в�
 uci set system.@system[0].zonename='Europe/Moscow'
 uci set system.@system[0].timezone='MSK-3'
 uci commit system
+
 ntpd -q -p 77.88.8.8 2>/dev/null ||
 ntpd -q -p 1.1.1.1 2>/dev/null ||
 echo " [!] Синхронизация времени не удалась, продолжаем..."
+
 echo "[+] Timezone установлен в Europe/Moscow, время синхронизировано"
 
 # =============================================
@@ -591,25 +593,25 @@ echo "  ✓ HWID сохранён: $HWID"
 # Генерация config.json
 echo "  → Генерируем config.json из подписки..."
 if fetch_url_with_header "$SUB_URL" "/tmp/sub_raw.txt" "x-hwid: $HWID"; then
-    python3 "$PARSER" < "/tmp/sub_raw.txt" > "/tmp/parsed_outbounds.json" || {
-        echo "  [X] Ошибка парсера подписки"
-        rm -f "/tmp/sub_raw.txt"
-        exit 1
-    }
-    python3 "$GENERATOR" --output "$CONFIG_JSON" < "/tmp/parsed_outbounds.json" || {
-        echo "  [X] Ошибка генератора конфига"
-        rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
-        exit 1
-    }
-    rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
+	python3 "$PARSER" <"/tmp/sub_raw.txt" >"/tmp/parsed_outbounds.json" || {
+		echo "  [X] Ошибка парсера подписки"
+		rm -f "/tmp/sub_raw.txt"
+		exit 1
+	}
+	python3 "$GENERATOR" --output "$CONFIG_JSON" <"/tmp/parsed_outbounds.json" || {
+		echo "  [X] Ошибка генератора конфига"
+		rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
+		exit 1
+	}
+	rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
 else
-    echo "  [X] Не удалось скачать подписку"
-    exit 1
+	echo "  [X] Не удалось скачать подписку"
+	exit 1
 fi
 
 if [ ! -s "$CONFIG_JSON" ]; then
-    echo "  [X] Ошибка: не удалось создать config.json" >>"$LOG_FILE"
-    exit 1
+	echo "  [X] Ошибка: не удалось создать config.json" >>"$LOG_FILE"
+	exit 1
 fi
 echo "  ✓ config.json создан"
 echo ""
@@ -669,7 +671,7 @@ service sqm restart
 service https-dns-proxy restart
 sleep 3
 service xray start
-sleep 2
+sleep 3
 service dnsmasq restart
 
 echo "[+] Службы запущены"
