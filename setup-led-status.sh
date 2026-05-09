@@ -50,7 +50,7 @@ if ! crontab -l 2>/dev/null | grep -qF "net-check.sh"; then
 fi
 
 # Первая проверка сразу
-/usr/share/xray/led-check.sh
+/usr/share/xray/net-check.sh
 
 echo "[+] LED настроены:"
 echo "    white:wps        — мигает при трафике Xray (lo)"
