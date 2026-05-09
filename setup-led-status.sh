@@ -39,6 +39,7 @@ if curl -fs --max-time 5 https://www.google.com/gen_204 >/dev/null 2>&1; then
 else
     echo "none" > /sys/class/leds/white:wan-online/trigger
 fi
+exit 0
 EOF
 chmod +x /usr/share/xray/net-check.sh
 
@@ -55,5 +56,3 @@ fi
 echo "[+] LED настроены:"
 echo "    white:wps        — мигает при трафике Xray (lo)"
 echo "    white:wan-online — горит при доступе в интернет (проверка раз в минуту)"
-
-exit 0
