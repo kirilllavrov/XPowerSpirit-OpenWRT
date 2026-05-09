@@ -1,7 +1,7 @@
 #!/bin/sh
 # OpenWrt — Настройка LED для индикации интернета и Xray
-# Проверенно проверенно только для Cudy WR3000S v1
-# проверить наличие LED можно командой: ls /sys/class/leds/
+# Проверено для Cudy WR3000S v1
+# Проверить наличие LED: ls /sys/class/leds/
 
 echo "=== Настройка LED Xray ==="
 
@@ -25,23 +25,32 @@ uci add system led
 uci set system.@led[-1].name='Xray_Status'
 uci set system.@led[-1].sysfs='white:wps'
 uci set system.@led[-1].trigger='netdev'
+uci set system.@led[-1].interval='100'
 uci set system.@led[-1].dev='lo'
 uci set system.@led[-1].mode='tx rx'
 uci commit system
 service led restart
 
-# LED 2: Интернет (проверка через gen_204, в cron)
-CRON_ENTRY="* * * * * curl -fs --max-time 5 https://www.google.com/gen_204 >/dev/null 2>&1 && echo default-on > /sys/class/leds/white:wan-online/trigger || echo none > /sys/class/leds/white:wan-online/trigger"
+# LED 2: Интернет (проверка через gen_204)
+cat > /usr/share/xray/net-check.sh << 'EOF'
+#!/bin/sh
+if curl -fs --max-time 5 https://www.google.com/gen_204 >/dev/null 2>&1; then
+    echo "default-on" > /sys/class/leds/white:wan-online/trigger
+else
+    echo "none" > /sys/class/leds/white:wan-online/trigger
+fi
+EOF
+chmod +x /usr/share/xray/net-check.sh
 
-if ! crontab -l 2>/dev/null | grep -qF "gen_204"; then
+# Добавляем в cron
+CRON_ENTRY="* * * * * /usr/share/xray/net-check.sh"
+if ! crontab -l 2>/dev/null | grep -qF "net-check.sh"; then
     (crontab -l 2>/dev/null || true; echo "$CRON_ENTRY") | crontab -
     echo "[+] Cron-задача для индикации интернета добавлена"
 fi
 
 # Первая проверка сразу
-curl -fs --max-time 5 https://www.google.com/gen_204 >/dev/null 2>&1 && \
-    echo default-on > /sys/class/leds/white:wan-online/trigger || \
-    echo none > /sys/class/leds/white:wan-online/trigger
+/usr/share/xray/led-check.sh
 
 echo "[+] LED настроены:"
 echo "    white:wps        — мигает при трафике Xray (lo)"
