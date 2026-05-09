@@ -110,11 +110,8 @@ rotate_log() {
     [ -f "$log" ] || return
     local size=$(stat -c%s "$log" 2>/dev/null || wc -c < "$log")
     if [ "$size" -gt "$max_size" ]; then
-        # Ротируем: .1 -> удаляем, текущий -> .1, новый пустой
-        [ -f "${log}.1" ] && rm -f "${log}.1"
-        mv "$log" "${log}.1"
         : > "$log"
-        echo "[*] Ротация лога: $log" >>"$LOG"
+        echo "[*] Лог очищен: $log" >>"$LOG"
     fi
 }
 # Применяем к логам Xray
