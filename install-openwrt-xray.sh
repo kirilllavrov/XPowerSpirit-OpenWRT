@@ -644,6 +644,9 @@ echo "[+] Геофайлы загружены, конфиг сгенериров
 # =============================================
 echo "11. Настройка Crontab..."
 
+uci set system.@system[0].cronloglevel='9'
+uci commit system
+
 CRON_ENTRY="30 2 * * * $UPDATER"
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
 	(
@@ -688,6 +691,7 @@ echo "[+] Hotplug для автообновления после включен�
 # =============================================
 echo "13. Запускаем службы..."
 
+service cron restart
 service firewall restart
 service sqm restart
 service https-dns-proxy restart
