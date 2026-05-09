@@ -240,11 +240,11 @@ def main():
             "domainStrategy": "IPOnDemand",
             "rules": build_rules(chosen_tag, direct_mode=False)
         }
-        print(f"[+] Выбран сервер: {chosen_tag}", file=sys.stderr)
+        print(f"  ✓ Выбран сервер: {chosen_tag}", file=sys.stderr)
 
     with open(output_path, "w") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
-    print(f"✓ Конфиг сохранён: {output_path}", file=sys.stderr)
+    print(f"  ✓ Конфиг сохранён: {output_path}", file=sys.stderr)
 
 if __name__ == "__main__":
     main()
