@@ -16,7 +16,7 @@ if [ ! -d "/sys/class/leds/white:wan-online" ]; then
 fi
 
 # Удаляем старую конфигурацию LED
-while uci -q delete system.@led[-1]; do :; done 2>/dev/null || true
+while uci -q delete system.@led[0]; do :; done 2>/dev/null || true
 
 # LED 1: Xray трафик (wps мигает при трафике через lo)
 uci add system led
