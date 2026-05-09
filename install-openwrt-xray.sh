@@ -375,7 +375,7 @@ download() {
 
 	if fetch_url "$url" "$dst"; then
 		chmod +x "$dst"
-		echo "→ $dst"
+		echo "  → $dst"
 	else
 		echo "  [X] Ошибка: не удалось скачать $dst"
 		exit 1
