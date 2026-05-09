@@ -14,7 +14,7 @@ fi
 # Извлекаем IP‑адреса серверов из config.json
 extract_server_ips() {
 	local raw
-	
+
 	# Пробуем Python-парсер
 	raw=$(python3 -c '
 import json, sys
@@ -50,10 +50,9 @@ except:
 			continue
 			;;
 		*[a-zA-Z]*)
-			# Домен — резолвим через 77.88.8.8 напрямую
+			# Домен — резолвим
 			local resolved
-			resolved=$(nslookup -timeout=2 -retry=1 "$addr" 77.88.8.8 2>&1 |
-				awk '/Name:/ {found=1; next} found && /Address:/ && $2 ~ /\./ {print $2; exit}')
+			resolved=$(resolveip -4 "$addr" 2>/dev/null)
 			if [ -n "$resolved" ]; then
 				ips="$ips,$resolved"
 				logger -t update-nft "Resolved $addr → $resolved"
