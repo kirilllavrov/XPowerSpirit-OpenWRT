@@ -15,8 +15,10 @@ if [ ! -d "/sys/class/leds/white:wan-online" ]; then
     exit 1
 fi
 
-# Удаляем старую конфигурацию LED
+# Удаляем ВСЕ старые LED-конфигурации
 while uci -q delete system.@led[0]; do :; done 2>/dev/null || true
+uci commit system
+service led restart
 
 # LED 1: Xray трафик (wps мигает при трафике через lo)
 uci add system led
@@ -24,7 +26,6 @@ uci set system.@led[-1].name='Xray_Status'
 uci set system.@led[-1].sysfs='white:wps'
 uci set system.@led[-1].trigger='netdev'
 uci set system.@led[-1].dev='lo'
-uci set system.@led[-1].interval='100'
 uci set system.@led[-1].mode='tx rx'
 uci commit system
 service led restart
@@ -36,6 +37,11 @@ if ! crontab -l 2>/dev/null | grep -qF "gen_204"; then
     (crontab -l 2>/dev/null || true; echo "$CRON_ENTRY") | crontab -
     echo "[+] Cron-задача для индикации интернета добавлена"
 fi
+
+# Первая проверка сразу
+curl -fs --max-time 5 https://www.google.com/gen_204 >/dev/null 2>&1 && \
+    echo default-on > /sys/class/leds/white:wan-online/trigger || \
+    echo none > /sys/class/leds/white:wan-online/trigger
 
 echo "[+] LED настроены:"
 echo "    white:wps        — мигает при трафике Xray (lo)"
