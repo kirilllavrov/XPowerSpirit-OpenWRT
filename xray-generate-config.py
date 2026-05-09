@@ -3,7 +3,7 @@ import json
 import sys
 
 DOMAIN_WHITELIST = [
-    "router.freenternet.top"
+    # "example.com"
 ]
 
 def load_outbounds():
