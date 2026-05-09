@@ -103,11 +103,10 @@ unzip sqm-scripts jq wget nftables https-dns-proxy
 
 ## 🚀 Быстрый старт
 
-### 1. Установка зависимостей
+### 1. Прошивка должна быть собрана со следующими пакетами:
 
 ```bash
-apk update
-apk add curl ca-certificates python3 kmod-nft-tproxy kmod-nft-socket unzip sqm-scripts jq https-dns-proxy
+apk-mbedtls base-files ca-bundle dnsmasq dropbear firewall4 fitblk fstools kmod-crypto-hw-safexcel kmod-gpio-button-hotplug kmod-leds-gpio kmod-nft-offload libc libgcc libustream-mbedtls logd mtd netifd nftables procd-ujail uboot-envtools uci uclient-fetch urandom-seed urngd wpad-basic-mbedtls kmod-mt7915e kmod-mt7981-firmware mt7981-wo-firmware luci luci-app-attendedsysupgrade curl ca-certificates python3 kmod-nft-tproxy kmod-nft-socket unzip sqm-scripts jq https-dns-proxy
 ```
 
 ### 2. Загрузка установщика
