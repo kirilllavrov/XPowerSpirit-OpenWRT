@@ -94,12 +94,7 @@ extract_sha256() {
 		cut -c1-64
 }
 
-#!/bin/sh
-# OpenWrt — обновление Xray, geoip, geosite, подписки и config.json
-
 LOG="/tmp/log/xray-update.log"
-
-# ... функции fetch_url, fetch_url_with_header, die, extract_sha256, rotate_log ...
 
 # =============================================
 #   Очистка/ротация логов
