@@ -55,3 +55,5 @@ fi
 echo "[+] LED настроены:"
 echo "    white:wps        — мигает при трафике Xray (lo)"
 echo "    white:wan-online — горит при доступе в интернет (проверка раз в минуту)"
+
+exit 0
