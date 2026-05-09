@@ -432,9 +432,9 @@ start_service() {
     logger -t xray "Time sync failed, continuing anyway"
     sleep 1
 	
-	# Ждём готовности сети (default route + DNS через 77.88.8.8)
+	# Ждём готовности сети (default route + DNS через resolveip -4 google.com)
     for i in $(seq 1 15); do
-        if ip route | grep -q default && nslookup -timeout=2 -retry=1 google.com 77.88.8.8 >/dev/null 2>&1; then
+        if ip route | grep -q default && resolveip -4 google.com >/dev/null 2>&1; then
             break
         fi
         logger -t xray "Waiting for network/DNS... ($i)"
