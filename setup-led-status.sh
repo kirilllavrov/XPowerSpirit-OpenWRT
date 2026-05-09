@@ -49,8 +49,10 @@ if ! crontab -l 2>/dev/null | grep -qF "net-check.sh"; then
     (crontab -l 2>/dev/null || true; echo "$CRON_ENTRY") | crontab -
     echo "[+] Cron-задача для индикации интернета добавлена"
 fi
+service cron restart
 
 # Первая проверка сразу
+sleep 10
 /usr/share/xray/net-check.sh
 
 echo "[+] LED настроены:"
