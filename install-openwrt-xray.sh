@@ -27,11 +27,13 @@ TMP_DIR="/tmp/xray_install"
 GEO_DIR="/usr/share/xray"
 STATE_DIR="/etc/xray/state"
 
+DWL_DOMAIN=""
+SUB_URL=""
+
 GUEST_NET="guest"
 GUEST_IP="192.168.2.1"
 DL_GUEST="5120"
 UL_GUEST="5120"
-SUB_URL=""
 
 # Парсер аргументов
 for arg in "$@"; do
@@ -40,6 +42,7 @@ for arg in "$@"; do
 	--guest-dl=*) DL_GUEST="${arg#*=}" ;;
 	--guest-ul=*) UL_GUEST="${arg#*=}" ;;
 	--sub=*) SUB_URL="${arg#*=}" ;;
+	--dwl=*) DWL_DOMAIN="${arg#*=}" ;;
 	*) echo "[!] Неизвестный аргумент: $arg" ;;
 	esac
 done
@@ -120,8 +123,8 @@ uci set system.@system[0].timezone='MSK-3'
 uci commit system
 
 ntpd -q -p 77.88.8.8 2>/dev/null ||
-ntpd -q -p 1.1.1.1 2>/dev/null ||
-echo " [!] Синхронизация времени не удалась, продолжаем..."
+	ntpd -q -p 1.1.1.1 2>/dev/null ||
+	echo " [!] Синхронизация времени не удалась, продолжаем..."
 
 echo "[+] Timezone установлен в Europe/Moscow, время синхронизировано"
 
@@ -383,6 +386,12 @@ download "$REPO/xray-generate-config.py" "$GENERATOR"
 download "$REPO/xray-sub-parser.py" "$PARSER"
 download "$REPO/update-xray.sh" "$UPDATER"
 download "$REPO/update-nft.sh" "$NFT_UPDATER"
+
+# Если задан домен для whitelist — вставляем его в генератор
+if [ -n "$DWL_DOMAIN" ]; then
+	echo "  → Добавляем домен в whitelist: $DWL_DOMAIN"
+	sed -i "s/DOMAIN_WHITELIST = \[/DOMAIN_WHITELIST = [\n    \"$DWL_DOMAIN\",/" "$GENERATOR"
+fi
 
 echo "[+] Все скрипты загружены и готовы к использованию"
 
