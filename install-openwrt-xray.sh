@@ -415,12 +415,9 @@ uci set https-dns-proxy.@https-dns-proxy[-1].listen_addr='127.0.0.1'
 uci set https-dns-proxy.@https-dns-proxy[-1].listen_port='5055'
 uci set https-dns-proxy.@https-dns-proxy[-1].resolver_url='https://dns.nextdns.io'
 uci set https-dns-proxy.@https-dns-proxy[-1].bootstrap_dns='45.90.28.0,45.90.30.0'
-uci set https-dns-proxy.@https-dns-proxy[0].http3='1'
 uci set https-dns-proxy.@https-dns-proxy[0].tcp_client_limit='50'
 uci set https-dns-proxy.@https-dns-proxy[0].force_ipv4='1'
-uci set https-dns-proxy.@https-dns-proxy[1].http3='1'
 uci set https-dns-proxy.@https-dns-proxy[1].force_ipv4='1'
-uci set https-dns-proxy.@https-dns-proxy[2].http3='1'
 uci set https-dns-proxy.@https-dns-proxy[2].force_ipv4='1'
 uci commit https-dns-proxy
 
