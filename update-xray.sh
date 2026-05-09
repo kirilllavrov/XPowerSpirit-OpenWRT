@@ -94,6 +94,34 @@ extract_sha256() {
 		cut -c1-64
 }
 
+#!/bin/sh
+# OpenWrt — обновление Xray, geoip, geosite, подписки и config.json
+
+LOG="/tmp/log/xray-update.log"
+
+# ... функции fetch_url, fetch_url_with_header, die, extract_sha256, rotate_log ...
+
+# =============================================
+#   Очистка/ротация логов
+# =============================================
+rotate_log() {
+    local log="$1"
+    local max_size="${2:-1048576}"  # по умолчанию 1MB
+    [ -f "$log" ] || return
+    local size=$(stat -c%s "$log" 2>/dev/null || wc -c < "$log")
+    if [ "$size" -gt "$max_size" ]; then
+        # Ротируем: .1 -> удаляем, текущий -> .1, новый пустой
+        [ -f "${log}.1" ] && rm -f "${log}.1"
+        mv "$log" "${log}.1"
+        : > "$log"
+        echo "[*] Ротация лога: $log" >>"$LOG"
+    fi
+}
+# Применяем к логам Xray
+rotate_log "/tmp/log/xray-access.log" 524288   # 512KB
+rotate_log "/tmp/log/xray-error.log"  262144   # 256KB
+rotate_log "$LOG" 262144
+
 # ============================
 #   HWID + подписка
 # ============================
