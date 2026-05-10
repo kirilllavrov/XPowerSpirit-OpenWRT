@@ -1,6 +1,6 @@
 #!/bin/sh
 # OpenWrt — Настройка Wi-Fi (Home + Guest) для России
-# WPA2+WPA3 + PMF + HE160
+# WPA2+WPA3 + PMF + HE160 (по желанию для 5GHz)
 
 LOG="/tmp/setup-wifi.log"
 : >"$LOG"
@@ -73,7 +73,7 @@ for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-devic
 done
 
 # 5GHz — HE160
-uci -q set wireless.radio1.htmode='HE160'
+#uci -q set wireless.radio1.htmode='HE160'
 
 # Time Advertisement
 uci -q set wireless.radio0.time_advertisement='2'
