@@ -10,7 +10,9 @@
 - [Быстрый старт](#-быстрый-старт)
 - [Детальное описание скриптов](#-детальное-описание-скриптов)
   - [install-openwrt-xray.sh](#install-openwrtxraysh)
+  - [uci-defaults.sh](#uci-defaultssh)
   - [setup-wifi-network.sh](#setup-wifi-networksh)
+  - [setup-led-status.sh](#setup-led-statussh)
   - [update-xray.sh](#update-xraysh)
   - [update-nft.sh](#update-nftsh)
   - [diagnose-xray-tproxy.sh](#diagnose-xray-tproxysh)
@@ -186,6 +188,93 @@ chmod +x setup-wifi-network.sh
 15. **Hotplug** — настраивает автообновление при подъёме WAN-интерфейса
 
 **Логирование:** Все этапы записываются в `/tmp/xray_install.log`
+
+---
+
+### uci-defaults.sh
+
+**Назначение:** Полная автоматическая настройка роутера «с нуля» (LAN, WAN, Wi-Fi, Guest Network, Xray).
+
+**Особенности:**
+
+- **Идемпотентность** — можно запускать многократно без побочных эффектов
+- **Полный цикл** — от сброса пароля root до работающего прокси
+- **Универсальность** — поддержка PPPoE и DHCP на WAN
+
+**Что делает:**
+
+1. **Базовая настройка системы**:
+   - Установка пароля root
+   - Настройка LAN IP (`192.168.1.1/24`)
+   - Настройка WAN (DHCP или PPPoE)
+2. **Ожидание интернета** — проверка доступности `8.8.8.8` до продолжения установки
+3. **Wi-Fi (Home + Guest)**:
+   - Очистка старых конфигураций wireless
+   - Настройка радио: Country RU, PMF, Time Advertisement
+   - Создание домашних сетей (WPA2+WPA3 sae-mixed)
+   - Создание гостевых сетей с изоляцией клиентов
+4. **Гостевая сеть**:
+   - Bridge `br-guest`, интерфейс `guest`
+   - DHCP с диапазоном `.100-.250`
+   - Firewall-зона с изоляцией от LAN
+   - SQM QoS (5 Mbps up/down по умолчанию)
+5. **Установка Xray** — вызов стандартного цикла установки
+
+**Пример использования:**
+
+```bash
+# Отредактировать настройки в начале скрипта
+vi /workspace/uci-defaults.sh
+
+# Запустить
+chmod +x uci-defaults.sh
+./uci-defaults.sh
+```
+
+**Логирование:** `/tmp/xray_install.log`
+
+---
+
+### setup-led-status.sh
+
+**Назначение:** Настройка LED-индикации статуса интернета и активности Xray.
+
+**Поддерживаемые устройства:** Проверено на Cudy WR3000S v1.
+
+**Функционал:**
+
+1. **LED Xray_Status (white:wps)**:
+   - Мигает при сетевом трафике через loopback (`lo`)
+   - Триггер: `netdev`, режим: `tx rx`
+   - Индикация активной проксификации
+
+2. **LED Интернет (white:wan-online)**:
+   - Горит при доступности интернета
+   - Проверка через `curl https://www.google.com/gen_204`
+   - Cron-проверка каждую минуту
+
+**Скрипт проверки:** `/usr/share/xray/net-check.sh`
+
+```bash
+#!/bin/sh
+if curl -fs --max-time 5 https://www.google.com/gen_204 >/dev/null 2>&1; then
+    echo "default-on" > /sys/class/leds/white:wan-online/trigger
+else
+    echo "none" > /sys/class/leds/white:wan-online/trigger
+fi
+```
+
+**Установка:**
+
+```bash
+chmod +x setup-led-status.sh
+./setup-led-status.sh
+```
+
+**Результат:**
+
+- `white:wps` — мигает при трафике Xray
+- `white:wan-online` — горит при наличии интернета
 
 ---
 
@@ -461,7 +550,8 @@ python3 xray-generate-config.py --output /etc/xray/config.json
 ├── xray-sub-parser.py
 ├── update-xray.sh
 ├── update-nft.sh
-└── geoip.dat             # Гео-база IP-адресов
+├── net-check.sh          # Скрипт проверки интернета для LED
+├── geoip.dat             # Гео-база IP-адресов
 └── geosite.dat           # Гео-база доменов
 
 /etc/init.d/xray          # Init-скрипт для управления службой
@@ -470,7 +560,8 @@ python3 xray-generate-config.py --output /etc/xray/config.json
 /tmp/log/
 ├── xray-access.log       # Логи доступа
 ├── xray-error.log        # Логи ошибок
-└── xray-update.log       # Логи обновлений
+├── xray-update.log       # Логи обновлений
+└── setup-wifi.log        # Логи настройки Wi-Fi
 ```
 
 ---
