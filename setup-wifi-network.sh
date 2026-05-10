@@ -73,7 +73,9 @@ for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-devic
 done
 
 # 5GHz — HE160
+# HE160 может не поддерживаться всеми устройствами, HE80 — более совместимый вариант
 #uci -q set wireless.radio1.htmode='HE160'
+uci -q set wireless.radio1.htmode='HE80' 
 
 # Time Advertisement
 uci -q set wireless.radio0.time_advertisement='2'
