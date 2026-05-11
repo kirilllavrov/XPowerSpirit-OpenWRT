@@ -254,8 +254,7 @@ def main():
 
         ss = chosen.setdefault("streamSettings", {})
         sockopt = ss.setdefault("sockopt", {})
-        # Используем mark=1 чтобы совпадать с nft/ip rule (fwmark 1)
-        sockopt["mark"] = 1
+        sockopt["mark"] = 0
         sockopt["tcpKeepAliveInterval"] = 30
         sockopt["tcpNoDelay"] = True
 
@@ -263,7 +262,7 @@ def main():
         chosen.setdefault("mux", {"enabled": False})
 
         direct_sockopt = {
-            "mark": 1,
+            "mark": 0,
             "tcpKeepAliveInterval": 30,
             "tcpNoDelay": True
         }

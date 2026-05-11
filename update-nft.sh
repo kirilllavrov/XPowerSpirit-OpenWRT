@@ -52,10 +52,15 @@ except:
 		*[a-zA-Z]*)
 			# Домен — резолвим с таймаутом 5 секунд
 			local resolved
-			resolved=$(timeout 5 resolveip -4 "$addr" 2>/dev/null)
+			resolved=$(timeout 5 resolveip -4 "$addr" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 			if [ -n "$resolved" ]; then
-				ips="$ips,$resolved"
-				logger -t update-nft "Resolved $addr → $resolved"
+				# Проверяем валидность полученного IP
+				if echo "$resolved" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+					ips="$ips,$resolved"
+					logger -t update-nft "Resolved $addr → $resolved"
+				else
+					logger -t update-nft "Invalid IP resolved for $addr: $resolved"
+				fi
 			else
 				logger -t update-nft "Failed to resolve $addr (timeout or error)"
 			fi
@@ -81,9 +86,9 @@ setup_network() {
 
 	# Policy routing
 	ip rule add fwmark 1 table 100
-	ip route add local 0.0.0.0/0 dev lo table 100
+	ip route add 0.0.0.0/0 dev lo table 100
 
-	# Bypass IPs
+	# Получаем IP прокси-серверов для bypass
 	local bypass_ips
 	bypass_ips=$(extract_server_ips)
 
@@ -91,11 +96,20 @@ setup_network() {
 	nft list table inet xray >/dev/null 2>&1 && nft delete table inet xray
 
 	local nft_file="/tmp/xray.nft"
+
+	# Начинаем создавать правила
 	cat >"$nft_file" <<NFT
 table inet xray {
     chain prerouting {
         type filter hook prerouting priority mangle; policy accept;
 
+        # 1. Пропускаем уже помеченный трафик (от Xray или уже обработанный)
+        meta mark 0x1 return;
+
+        # 2. Пропускаем трафик от самого процесса Xray (избегаем петли)
+        meta skuid xray return;
+
+        # 3. Локальные и приватные IP — bypass
         ip daddr {
             127.0.0.0/8,
             10.0.0.0/8,
@@ -104,32 +118,52 @@ table inet xray {
             169.254.0.0/16,
             224.0.0.0/3
         } return;
-
-        meta mark 0x1 return;
 NFT
 
+	# 4. Bypass IPs (прокси-серверы) — если есть
 	if [ -n "$bypass_ips" ]; then
 		# Проверяем, что все IP валидны
 		VALID_IPS=$(echo "$bypass_ips" | tr ',' '\n' | grep -Ex '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | tr '\n' ',' | sed 's/,$//')
 		if [ -n "$VALID_IPS" ]; then
-			echo "        ip daddr { $VALID_IPS } return;" >>"$nft_file"
+			cat >>"$nft_file" <<NFT
+        # 4. Прокси-серверы — bypass
+        ip daddr { $VALID_IPS } return;
+NFT
 			logger -t update-nft "Bypass IPs added: $VALID_IPS"
 		else
 			logger -t update-nft "No valid bypass IPs found, skipping bypass rule"
 		fi
 	fi
 
+	# 5. DHCP и ответы от Xray
 	cat >>"$nft_file" <<NFT
+
+        # 5. DHCP запросы — bypass
         udp dport { 67, 68 } return;
 
+        # 6. Ответы от самого Xray (TProxy ответы, DNS ответы)
+        tcp sport 12345 return;
+        udp sport 5353 return;
+
+        # 7. Весь остальной трафик с LAN → TProxy
         iifname "$LAN_IF" meta l4proto { tcp, udp } \
             tproxy ip to 127.0.0.1:12345 meta mark set 1 accept;
     }
 }
 NFT
 
+	# Применяем правила
 	if nft -f "$nft_file"; then
 		logger -t update-nft "Network rules applied successfully"
+
+		# Дополнительная проверка: убедимся, что правила действительно загружены
+		if nft list table inet xray >/dev/null 2>&1; then
+			logger -t update-nft "nftables table 'inet xray' verified"
+		else
+			logger -t update-nft "WARNING: nftables table not found after apply!"
+			rm -f "$nft_file"
+			return 1
+		fi
 	else
 		logger -t update-nft "nftables apply failed"
 		rm -f "$nft_file"
@@ -137,6 +171,14 @@ NFT
 	fi
 
 	rm -f "$nft_file"
+	return 0
 }
 
-setup_network
+# Выполняем настройку
+if setup_network; then
+	logger -t update-nft "TProxy network setup completed successfully"
+	exit 0
+else
+	logger -t update-nft "TProxy network setup failed"
+	exit 1
+fi
