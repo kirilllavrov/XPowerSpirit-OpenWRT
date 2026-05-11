@@ -124,7 +124,7 @@ def base_config():
                 "port": 5353,
                 "protocol": "dokodemo-door",
                 "settings": {
-                    "network": "udp"
+                    "network": "tcp,udp"
                 }
             }
         ]
@@ -132,23 +132,11 @@ def base_config():
 
 def build_rules(chosen_tag, direct_mode=False):
     rules = [
-        # Клиентский DNS (от dnsmasq) → dns-outbound для обработки
+        # Клиентский DNS (от dnsmasq) → модуль DNS Xray для кэширования и geosite-маршрутизации
         {
             "type": "field",
             "inboundTag": ["dns-local"],
-            "outboundTag": "dns-outbound"
-        },
-        # Внутренний DNS-модуль: .ru → direct, остальное → proxy
-        {
-            "type": "field",
-            "inboundTag": ["dns-out"],
-            "domain": ["geosite:category-ru"],
-            "outboundTag": "direct"
-        },
-        {
-            "type": "field",
-            "inboundTag": ["dns-out"],
-            "outboundTag": chosen_tag if not direct_mode else "direct"
+            "outboundTag": "dns-out"
         },
         # Блокировка рекламы
         {
@@ -203,16 +191,7 @@ def main():
     if has_hole(all_obs):
         cfg["outbounds"] = [
             {"protocol": "freedom", "tag": "direct"},
-            {"protocol": "blackhole", "tag": "block"},
-            {
-                "protocol": "dns",
-                "tag": "dns-outbound",
-                "settings": {
-                    "address": "1.0.0.1",
-                    "port": 53,
-                    "network": "udp"
-                }
-            }
+            {"protocol": "blackhole", "tag": "block"}
         ]
         cfg["routing"] = {
             "domainStrategy": "AsIs",
@@ -229,16 +208,7 @@ def main():
     if chosen is None:
         cfg["outbounds"] = [
             {"protocol": "freedom", "tag": "direct"},
-            {"protocol": "blackhole", "tag": "block"},
-            {
-                "protocol": "dns",
-                "tag": "dns-outbound",
-                "settings": {
-                    "address": "1.0.0.1",
-                    "port": 53,
-                    "network": "udp"
-                }
-            }
+            {"protocol": "blackhole", "tag": "block"}
         ]
         cfg["routing"] = {
             "domainStrategy": "AsIs",
@@ -274,16 +244,7 @@ def main():
                 "tag": "direct",
                 "streamSettings": {"sockopt": direct_sockopt}
             },
-            {"protocol": "blackhole", "tag": "block"},
-            {
-                "protocol": "dns",
-                "tag": "dns-outbound",
-                "settings": {
-                    "address": "1.1.1.1",
-                    "port": 53,
-                    "network": "udp"
-                }
-            }
+            {"protocol": "blackhole", "tag": "block"}
         ]
         cfg["routing"] = {
             "domainStrategy": "IPOnDemand",
