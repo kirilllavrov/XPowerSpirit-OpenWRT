@@ -84,15 +84,15 @@ def base_config():
                     "skipFallback": True
                 },
                 {
-                    "address": "1.1.1.1",
+                    "address": "45.90.28.0",
                     "port": 53,
                     "skipFallback": False
                 },
                 {
-                    "address": "8.8.8.8",
+                    "address": "1.1.1.1",
                     "port": 53,
                     "skipFallback": False
-                }
+                }                
             ]
         },
         "inbounds": [
