@@ -421,41 +421,21 @@ fi
 echo "[+] Все скрипты загружены и готовы к использованию"
 
 # =============================================
-# 7. Настройка DNS через DoH (dnsmasq + https-dns-proxy)
+# 7. Настройка DNS (dnsmasq → Xray)
 # =============================================
-echo "7. Настраиваем DNS (dnsmasq + https-dns-proxy)..."
+echo "7. Настраиваем DNS (dnsmasq → Xray)..."
 
-# Отключаем принудительный DNS для LAN (не ломаем Android Private DNS)
-uci set https-dns-proxy.config.force_dns='0'
-
-# Настройка dnsmasq: strict order → NextDNS, Cloudflare, Yandex DoH, Google, Yandex UDP
+# Настройка dnsmasq — все запросы направляем в Xray
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci set dhcp.@dnsmasq[0].strictorder='1'
 uci -q delete dhcp.@dnsmasq[0].server
-uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5055'
-uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5053'
-uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5056'
-uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5054'
+# Основной DNS-сервер — Xray
+uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'
+# Резервный сервер на случай, если Xray не запущен
 uci add_list dhcp.@dnsmasq[0].server='77.88.8.8'
 uci commit dhcp
 
-# Добавляем NextDNS
-uci add https-dns-proxy https-dns-proxy
-uci set https-dns-proxy.@https-dns-proxy[-1].listen_addr='127.0.0.1'
-uci set https-dns-proxy.@https-dns-proxy[-1].listen_port='5055'
-uci set https-dns-proxy.@https-dns-proxy[-1].resolver_url='https://dns.nextdns.io'
-uci set https-dns-proxy.@https-dns-proxy[-1].bootstrap_dns='45.90.28.0,45.90.30.0'
-
-# Добавляем Yandex DoH
-uci add https-dns-proxy https-dns-proxy
-uci set https-dns-proxy.@https-dns-proxy[-1].listen_addr='127.0.0.1'
-uci set https-dns-proxy.@https-dns-proxy[-1].listen_port='5056'
-uci set https-dns-proxy.@https-dns-proxy[-1].resolver_url='https://dns.yandex.ru/dns-query'
-uci set https-dns-proxy.@https-dns-proxy[-1].bootstrap_dns='77.88.8.8,77.88.8.1'
-
-uci commit https-dns-proxy
-
-echo "[+] DNS настроен"
+echo "[+] DNS настроен (dnsmasq → Xray:5353 + fallback 77.88.8.8)"
 
 # =============================================
 # 8. Создаём init.d для Xray
@@ -728,7 +708,6 @@ echo "14. Запускаем службы..."
 service cron restart
 service firewall restart
 service sqm restart
-service https-dns-proxy restart
 sleep 3
 service xray start
 sleep 3

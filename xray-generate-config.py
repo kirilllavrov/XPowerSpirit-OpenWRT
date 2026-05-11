@@ -116,12 +116,36 @@ def base_config():
                     "routeOnly": False,
                     "metadataOnly": False
                 }
+            },
+            {
+                "tag": "dns-local",
+                "listen": "127.0.0.1",
+                "port": 5353,
+                "protocol": "dokodemo-door",
+                "settings": {
+                    "address": "1.1.1.1",
+                    "port": 53,
+                    "network": "tcp,udp"
+                }
             }
         ]
     }
 
 def build_rules(chosen_tag, direct_mode=False):
     rules = [
+        # Клиентский DNS (от dnsmasq)
+        {
+            "type": "field",
+            "inboundTag": ["dns-local"],
+            "domain": ["geosite:category-ru"],
+            "outboundTag": "direct"
+        },
+        {
+            "type": "field",
+            "inboundTag": ["dns-local"],
+            "outboundTag": chosen_tag if not direct_mode else "direct"
+        },
+        # Внутренний DNS Xray (dns-out)
         {
             "type": "field",
             "inboundTag": ["dns-out"],
@@ -133,11 +157,13 @@ def build_rules(chosen_tag, direct_mode=False):
             "inboundTag": ["dns-out"],
             "outboundTag": chosen_tag if not direct_mode else "direct"
         },
+        # Блокировка рекламы
         {
             "type": "field",
             "domain": ["geosite:category-ads"],
             "outboundTag": "block"
         },
+        # Российский трафик — напрямую
         {
             "type": "field",
             "ip": ["geoip:ru", "geoip:private"],
@@ -164,6 +190,7 @@ def build_rules(chosen_tag, direct_mode=False):
             ],
             "outboundTag": chosen_tag
         })
+    # Весь остальной трафик — через прокси
     rules.append({
         "type": "field",
         "network": "tcp,udp",
