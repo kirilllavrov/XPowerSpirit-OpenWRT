@@ -72,7 +72,7 @@ def base_config():
             "error": "/tmp/log/xray-error.log"
         },
         "dns": {
-            "tag": "dns-outbound",
+            "tag": "dns-inbuilt",
             "queryStrategy": "UseIPv4",
             "disableCache": False,
             "serveStale": True,
@@ -132,22 +132,24 @@ def base_config():
 
 def build_rules(chosen_tag, direct_mode=False):
     rules = [
-        # Клиентский DNS (от dnsmasq) → dns-outbound для обработки
+        # Клиентский DNS (от dnsmasq) → направляем в outbound "dns-out"
         {
             "type": "field",
             "inboundTag": ["dns-local"],
-            "outboundTag": "dns-outbound"
+            "outboundTag": "dns-out"
         },
-        # Внутренний DNS-модуль: .ru → direct, остальное → proxy
+        # DNS-запросы от встроенного DNS модуля:
+        # .ru домены → direct
         {
             "type": "field",
-            "inboundTag": ["dns-outbound"],
+            "inboundTag": ["dns-inbuilt"],
             "domain": ["geosite:category-ru"],
             "outboundTag": "direct"
         },
+        # Остальные DNS-запросы от встроенного DNS → через прокси (или direct в direct_mode)
         {
             "type": "field",
-            "inboundTag": ["dns-outbound"],
+            "inboundTag": ["dns-inbuilt"],
             "outboundTag": chosen_tag if not direct_mode else "direct"
         },
         # Блокировка рекламы
@@ -206,11 +208,14 @@ def main():
             {"protocol": "blackhole", "tag": "block"},
             {
                 "protocol": "dns",
-                "tag": "dns-outbound",
+                "tag": "dns-out",
                 "settings": {
-                    "address": "1.1.1.1",
-                    "port": 53,
-                    "network": "udp"
+                    "rules": [
+                        {
+                            "action": "hijack",
+                            "qtype": "1,28"
+                        }
+                    ]
                 }
             }
         ]
@@ -232,11 +237,14 @@ def main():
             {"protocol": "blackhole", "tag": "block"},
             {
                 "protocol": "dns",
-                "tag": "dns-outbound",
+                "tag": "dns-out",
                 "settings": {
-                    "address": "1.1.1.1",
-                    "port": 53,
-                    "network": "udp"
+                    "rules": [
+                        {
+                            "action": "hijack",
+                            "qtype": "1,28"
+                        }
+                    ]
                 }
             }
         ]
@@ -277,11 +285,14 @@ def main():
             {"protocol": "blackhole", "tag": "block"},
             {
                 "protocol": "dns",
-                "tag": "dns-outbound",
+                "tag": "dns-out",
                 "settings": {
-                    "address": "1.1.1.1",
-                    "port": 53,
-                    "network": "udp"
+                    "rules": [
+                        {
+                            "action": "hijack",
+                            "qtype": "1,28"
+                        }
+                    ]
                 }
             }
         ]
