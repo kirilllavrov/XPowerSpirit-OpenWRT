@@ -94,7 +94,7 @@
 
 ```bash
 curl ca-certificates python3 kmod-nft-tproxy kmod-nft-socket \
-unzip sqm-scripts jq wget nftables https-dns-proxy
+unzip sqm-scripts jq wget nftables resolveip
 ```
 
 ### Опционально (для расширенной функциональности)
