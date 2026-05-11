@@ -11,10 +11,11 @@ if ! ip link show br-lan >/dev/null 2>&1; then
 	logger -t update-nft "LAN интерфейс auto-detected: $LAN_IF"
 fi
 
-# Извлекаем адреса серверов из config.json
-extract_server_addrs() {
+# Извлекаем IP‑адреса серверов из config.json
+extract_server_ips() {
 	local raw
 
+	# Пробуем Python-парсер
 	raw=$(python3 -c '
 import json, sys
 try:
@@ -24,7 +25,7 @@ try:
     for ob in cfg.get("outbounds", []):
         for vnext in ob.get("settings", {}).get("vnext", []):
             addr = vnext.get("address")
-            if isinstance(addr, str) and addr not in ("hole", "0.0.0.0", "127.0.0.1", ""):
+            if isinstance(addr, str) and "." in addr:
                 addrs.add(addr)
     for a in sorted(addrs):
         print(a)
@@ -32,68 +33,69 @@ except:
     pass
 ' "$CONF" 2>/dev/null)
 
-	[ -z "$raw" ] && {
+	# Fallback на grep
+	if [ -z "$raw" ]; then
 		raw=$(grep -o '"address"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONF" 2>/dev/null |
 			sed 's/.*"\([^"]*\)"$/\1/' |
-			grep -vE '^(hole|0\.0\.0\.0|127\.0\.0\.1|)$' |
 			sort -u)
-	}
+	fi
 
-	echo "$raw"
-}
+	[ -z "$raw" ] && return
 
-# Резолвим домены в IP (если возможно)
-resolve_to_ips() {
+	# Разделяем IP и домены, резолвим домены
+	local ips=""
 	while IFS= read -r addr; do
-		[ -z "$addr" ] && continue
 		case "$addr" in
-		*.*.*.*)
-			echo "$addr" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' && echo "$addr"
+		"hole" | "0.0.0.0" | "127.0.0.1" | "")
+			continue
 			;;
-		*)
-			timeout 3 resolveip -4 "$addr" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
+		*[a-zA-Z]*)
+			# Домен — резолвим
+			local resolved
+			resolved=$(resolveip -4 "$addr" 77.88.8.8 2>/dev/null)
+			if [ -n "$resolved" ]; then
+				ips="$ips,$resolved"
+				logger -t update-nft "Resolved $addr → $resolved"
+			else
+				logger -t update-nft "Failed to resolve $addr"
+			fi
+			;;
+		*.*.*.*)
+			# Уже IP — проверяем валидность
+			if echo "$addr" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+				ips="$ips,$addr"
+			fi
 			;;
 		esac
-	done
+	done <<EOF
+$raw
+EOF
+
+	echo "$ips" | sed 's/^,//'
 }
 
 setup_network() {
 	# Очистка старых правил
-	ip rule del fwmark 1 table 100 2>/dev/null || true
-	ip route flush table 100 2>/dev/null || true
+	while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
+	ip route flush table 100 2>/dev/null
 
 	# Policy routing
 	ip rule add fwmark 1 table 100
-	ip route add 0.0.0.0/0 dev lo table 100
+	ip route add local 0.0.0.0/0 dev lo table 100
 
-	# Получаем адреса и резолвим что можем
-	local server_addrs
-	server_addrs=$(extract_server_addrs)
-	
-	local bypass_ips=""
-	[ -n "$server_addrs" ] && bypass_ips=$(echo "$server_addrs" | resolve_to_ips | sort -u | tr '\n' ',' | sed 's/,$//')
+	# Bypass IPs
+	local bypass_ips
+	bypass_ips=$(extract_server_ips)
 
 	# nftables
 	nft list table inet xray >/dev/null 2>&1 && nft delete table inet xray
 
 	local nft_file="/tmp/xray.nft"
-
 	cat >"$nft_file" <<NFT
 table inet xray {
     chain prerouting {
         type filter hook prerouting priority mangle; policy accept;
 
-        # 1. Уже помеченный трафик — пропускаем
-        meta mark 0x1 return;
-
-        # 2. Ответы от Xray клиентам — пропускаем
-        tcp sport 12345 return;
-        udp sport 12345 return;
-
-        # 3. DNS ответы от Xray — пропускаем
-        udp sport 5353 return;
-
-        # 4. Локальные/приватные IP — напрямую
         ip daddr {
             127.0.0.0/8,
             10.0.0.0/8,
@@ -102,21 +104,24 @@ table inet xray {
             169.254.0.0/16,
             224.0.0.0/3
         } return;
+
+        meta mark 0x1 return;
 NFT
 
-	# 5. IP прокси-серверов (если зарезолвились) — напрямую
 	if [ -n "$bypass_ips" ]; then
-		echo "        ip daddr { $bypass_ips } return;" >>"$nft_file"
-		logger -t update-nft "Bypass IPs: $bypass_ips"
+		# Проверяем, что все IP валидны
+		VALID_IPS=$(echo "$bypass_ips" | tr ',' '\n' | grep -Ex '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | tr '\n' ',' | sed 's/,$//')
+		if [ -n "$VALID_IPS" ]; then
+			echo "        ip daddr { $VALID_IPS } return;" >>"$nft_file"
+			logger -t update-nft "Bypass IPs added: $VALID_IPS"
+		else
+			logger -t update-nft "No valid bypass IPs found, skipping bypass rule"
+		fi
 	fi
 
-	# 6. DHCP и TProxy
 	cat >>"$nft_file" <<NFT
-
-        # 6. DHCP — напрямую
         udp dport { 67, 68 } return;
 
-        # 7. Всё остальное с LAN → TProxy
         iifname "$LAN_IF" meta l4proto { tcp, udp } \
             tproxy ip to 127.0.0.1:12345 meta mark set 1 accept;
     }
@@ -124,14 +129,14 @@ NFT
 NFT
 
 	if nft -f "$nft_file"; then
-		logger -t update-nft "Rules applied successfully"
-		rm -f "$nft_file"
-		return 0
+		logger -t update-nft "Network rules applied successfully"
 	else
 		logger -t update-nft "nftables apply failed"
 		rm -f "$nft_file"
 		return 1
 	fi
+
+	rm -f "$nft_file"
 }
 
 setup_network
