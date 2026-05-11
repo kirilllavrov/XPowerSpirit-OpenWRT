@@ -105,7 +105,7 @@ table inet xray {
             224.0.0.0/3
         } return;
 
-        meta mark 0xff return;
+        meta mark 0x1 return;
 NFT
 
 	if [ -n "$bypass_ips" ]; then

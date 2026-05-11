@@ -72,7 +72,7 @@ def base_config():
             "error": "/tmp/log/xray-error.log"
         },
         "dns": {
-            "tag": "dns-out",
+            "tag": "dns-outbound",
             "queryStrategy": "UseIPv4",
             "disableCache": False,
             "serveStale": True,
@@ -141,13 +141,13 @@ def build_rules(chosen_tag, direct_mode=False):
         # Внутренний DNS-модуль: .ru → direct, остальное → proxy
         {
             "type": "field",
-            "inboundTag": ["dns-out"],
+            "inboundTag": ["dns-outbound"],
             "domain": ["geosite:category-ru"],
             "outboundTag": "direct"
         },
         {
             "type": "field",
-            "inboundTag": ["dns-out"],
+            "inboundTag": ["dns-outbound"],
             "outboundTag": chosen_tag if not direct_mode else "direct"
         },
         # Блокировка рекламы
@@ -254,7 +254,8 @@ def main():
 
         ss = chosen.setdefault("streamSettings", {})
         sockopt = ss.setdefault("sockopt", {})
-        sockopt["mark"] = 255
+        # Используем mark=1 чтобы совпадать с nft/ip rule (fwmark 1)
+        sockopt["mark"] = 1
         sockopt["tcpKeepAliveInterval"] = 30
         sockopt["tcpNoDelay"] = True
 
@@ -262,7 +263,7 @@ def main():
         chosen.setdefault("mux", {"enabled": False})
 
         direct_sockopt = {
-            "mark": 255,
+            "mark": 1,
             "tcpKeepAliveInterval": 30,
             "tcpNoDelay": True
         }
