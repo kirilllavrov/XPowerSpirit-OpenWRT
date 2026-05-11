@@ -59,7 +59,7 @@ for RADIO in $(uci show wireless | sed -n 's/^wireless\.\([^=]*\)=wifi-device.*/
     uci set wireless.${RADIO}.channel='auto'
     uci set wireless.${RADIO}.legacy_rates='0'
     uci set wireless.${RADIO}.cell_density='2'
-    uci set wireless.${RADIO}.ieee80211w='1'      # PMF Required
+    uci set wireless.${RADIO}.ieee80211w='1'
     uci set wireless.${RADIO}.wmm='1'
     uci set wireless.${RADIO}.disassoc_low_ack='0'
 
