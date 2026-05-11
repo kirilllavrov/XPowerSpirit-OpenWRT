@@ -72,11 +72,6 @@ def base_config():
         },
         "dns": {
             "tag": "dns-out",
-            "hosts": {
-                "cloudflare-dns.com": "1.1.1.1",
-                "dns.google": "8.8.8.8",
-                "dns.nextdns.io": "45.90.28.0"
-            },
             "queryStrategy": "UseIPv4",
             "disableCache": False,
             "serveStale": True,
@@ -89,15 +84,13 @@ def base_config():
                     "skipFallback": True
                 },
                 {
-                    "address": "https://cloudflare-dns.com/dns-query",
+                    "address": "1.1.1.1",
+                    "port": 53,
                     "skipFallback": False
                 },
                 {
-                    "address": "https://dns.google/dns-query",
-                    "skipFallback": False
-                },
-                {
-                    "address": "https://dns.nextdns.io",
+                    "address": "8.8.8.8",
+                    "port": 53,
                     "skipFallback": False
                 }
             ]
@@ -132,7 +125,13 @@ def build_rules(chosen_tag, direct_mode=False):
         {
             "type": "field",
             "inboundTag": ["dns-out"],
+            "domain": ["geosite:category-ru"],
             "outboundTag": "direct"
+        },
+        {
+            "type": "field",
+            "inboundTag": ["dns-out"],
+            "outboundTag": chosen_tag if not direct_mode else "direct"
         },
         {
             "type": "field",
