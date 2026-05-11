@@ -76,7 +76,7 @@ EOF
 
 setup_network() {
 	# Очистка старых правил
-	while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
+	ip rule del fwmark 1 table 100 2>/dev/null || true
 	ip route flush table 100 2>/dev/null
 
 	# Policy routing

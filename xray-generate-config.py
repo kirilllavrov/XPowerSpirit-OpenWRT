@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import sys
+import re
 
 DOMAIN_WHITELIST = [
     # "example.com"
@@ -86,13 +87,14 @@ def base_config():
                 {
                     "address": "45.90.28.0",
                     "port": 53,
-                    "skipFallback": False
+                    "domains": ["full:."],
+                    "skipFallback": True
                 },
                 {
                     "address": "1.1.1.1",
                     "port": 53,
                     "skipFallback": False
-                }                
+                }
             ]
         },
         "inbounds": [
@@ -123,9 +125,7 @@ def base_config():
                 "port": 5353,
                 "protocol": "dokodemo-door",
                 "settings": {
-                    "address": "1.1.1.1",
-                    "port": 53,
-                    "network": "tcp,udp"
+                    "network": "udp"
                 }
             }
         ]
@@ -133,19 +133,13 @@ def base_config():
 
 def build_rules(chosen_tag, direct_mode=False):
     rules = [
-        # Клиентский DNS (от dnsmasq)
+        # Клиентский DNS (от dnsmasq) → dns-outbound для обработки
         {
             "type": "field",
             "inboundTag": ["dns-local"],
-            "domain": ["geosite:category-ru"],
-            "outboundTag": "direct"
+            "outboundTag": "dns-outbound"
         },
-        {
-            "type": "field",
-            "inboundTag": ["dns-local"],
-            "outboundTag": chosen_tag if not direct_mode else "direct"
-        },
-        # Внутренний DNS Xray (dns-out)
+        # Внутренний DNS-модуль: .ru → direct, остальное → proxy
         {
             "type": "field",
             "inboundTag": ["dns-out"],
@@ -210,7 +204,16 @@ def main():
     if has_hole(all_obs):
         cfg["outbounds"] = [
             {"protocol": "freedom", "tag": "direct"},
-            {"protocol": "blackhole", "tag": "block"}
+            {"protocol": "blackhole", "tag": "block"},
+            {
+                "protocol": "dns",
+                "tag": "dns-outbound",
+                "settings": {
+                    "address": "1.1.1.1",
+                    "port": 53,
+                    "network": "udp"
+                }
+            }
         ]
         cfg["routing"] = {
             "domainStrategy": "AsIs",
@@ -227,7 +230,16 @@ def main():
     if chosen is None:
         cfg["outbounds"] = [
             {"protocol": "freedom", "tag": "direct"},
-            {"protocol": "blackhole", "tag": "block"}
+            {"protocol": "blackhole", "tag": "block"},
+            {
+                "protocol": "dns",
+                "tag": "dns-outbound",
+                "settings": {
+                    "address": "1.1.1.1",
+                    "port": 53,
+                    "network": "udp"
+                }
+            }
         ]
         cfg["routing"] = {
             "domainStrategy": "AsIs",
@@ -236,6 +248,8 @@ def main():
         print("[!] Нет доступных серверов (только заглушки). Создан DIRECT-конфиг.", file=sys.stderr)
     else:
         chosen_tag = chosen.get("tag") or "proxy"
+        # Санитизация тега для безопасности JSON/routing
+        chosen_tag = re.sub(r'[^\w\-]', '_', chosen_tag)[:64] or "proxy"
         if "tag" not in chosen:
             chosen["tag"] = chosen_tag
 
@@ -245,7 +259,8 @@ def main():
         sockopt["tcpKeepAliveInterval"] = 30
         sockopt["tcpNoDelay"] = True
 
-        chosen["mux"] = {"enabled": False}
+        # Не перезаписываем mux, если он уже задан в подписке
+        chosen.setdefault("mux", {"enabled": False})
 
         direct_sockopt = {
             "mark": 255,
@@ -260,7 +275,16 @@ def main():
                 "tag": "direct",
                 "streamSettings": {"sockopt": direct_sockopt}
             },
-            {"protocol": "blackhole", "tag": "block"}
+            {"protocol": "blackhole", "tag": "block"},
+            {
+                "protocol": "dns",
+                "tag": "dns-outbound",
+                "settings": {
+                    "address": "1.1.1.1",
+                    "port": 53,
+                    "network": "udp"
+                }
+            }
         ]
         cfg["routing"] = {
             "domainStrategy": "IPOnDemand",
