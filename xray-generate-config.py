@@ -208,7 +208,7 @@ def main():
                 "protocol": "dns",
                 "tag": "dns-outbound",
                 "settings": {
-                    "address": "1.0.0.1",
+                    "address": "1.1.1.1",
                     "port": 53,
                     "network": "udp"
                 }
@@ -234,7 +234,7 @@ def main():
                 "protocol": "dns",
                 "tag": "dns-outbound",
                 "settings": {
-                    "address": "1.0.0.1",
+                    "address": "1.1.1.1",
                     "port": 53,
                     "network": "udp"
                 }
@@ -279,7 +279,7 @@ def main():
                 "protocol": "dns",
                 "tag": "dns-outbound",
                 "settings": {
-                    "address": "1.0.0.1",
+                    "address": "1.1.1.1",
                     "port": 53,
                     "network": "udp"
                 }
