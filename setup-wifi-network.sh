@@ -64,22 +64,23 @@ echo "✅ Очистка завершена"
 
 # === Настройка радио ===
 echo "Настройка радио (country RU)..."
-for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-device.*/\2/p'); do
-	uci set wireless.${RADIO}.country='RU'
-	uci set wireless.${RADIO}.channel='auto'
-	uci set wireless.${RADIO}.legacy_rates='0'
-	uci set wireless.${RADIO}.cell_density='2'
-	uci set wireless.${RADIO}.ieee80211w='1'
+for RADIO in $(uci show wireless | sed -n 's/^wireless\.\([^=]*\)=wifi-device.*/\1/p'); do
+  uci set wireless.${RADIO}.country='RU'
+  uci set wireless.${RADIO}.country_ie='1'
+  uci set wireless.${RADIO}.channel='auto'
+  uci set wireless.${RADIO}.legacy_rates='0'
+  uci set wireless.${RADIO}.cell_density='2'
+  uci set wireless.${RADIO}.ieee80211w='1'
+  uci set wireless.${RADIO}.wmm='1'
+# Time Advertisement
+  #uci set wireless.${RADIO}.time_advertisement='2'
+  #uci set wireless.${RADIO}.time_zone='MSK-3'
 done
 
 # 5GHz — HE160
 # HE160 может не поддерживаться всеми устройствами, HE80 — более совместимый вариант
 #uci -q set wireless.radio1.htmode='HE160'
 uci -q set wireless.radio1.htmode='HE80' 
-
-# Time Advertisement
-uci -q set wireless.radio0.time_advertisement='2'
-uci -q set wireless.radio1.time_advertisement='2'
 
 uci commit wireless
 
