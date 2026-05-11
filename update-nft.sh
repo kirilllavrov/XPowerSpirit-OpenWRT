@@ -50,14 +50,14 @@ except:
 			continue
 			;;
 		*[a-zA-Z]*)
-			# Домен — резолвим
+			# Домен — резолвим с таймаутом 5 секунд
 			local resolved
-			resolved=$(resolveip -4 "$addr" 2>/dev/null)
+			resolved=$(timeout 5 resolveip -4 "$addr" 2>/dev/null)
 			if [ -n "$resolved" ]; then
 				ips="$ips,$resolved"
 				logger -t update-nft "Resolved $addr → $resolved"
 			else
-				logger -t update-nft "Failed to resolve $addr"
+				logger -t update-nft "Failed to resolve $addr (timeout or error)"
 			fi
 			;;
 		*.*.*.*)
@@ -75,9 +75,9 @@ EOF
 }
 
 setup_network() {
-	# Очистка старых правил
+	# Очистка старых правил (безопасная)
 	ip rule del fwmark 1 table 100 2>/dev/null || true
-	ip route flush table 100 2>/dev/null
+	ip route flush table 100 2>/dev/null || true
 
 	# Policy routing
 	ip rule add fwmark 1 table 100
