@@ -14,7 +14,8 @@ def normalize_tag(tag: str) -> str:
     tag = urlparse.unquote(tag)
     tag = tag.replace(" ", "_")
     tag = tag.replace("(", "").replace(")", "")
-    tag = re.sub(r"[^0-9A-Za-zА-Яа-яЁё_\-🇦-🇿🇦-🇿]", "", tag)
+    # Только буквы, цифры, дефис, подчёркивание (без эмодзи во избежание re.error)
+    tag = re.sub(r"[^0-9A-Za-zА-Яа-яЁё_\-]", "", tag)
     return tag or "proxy"
 
 
@@ -32,23 +33,27 @@ def try_download(data: str) -> str:
 
 
 # -----------------------------
-# УМНОЕ BASE64
+# УМНОЕ BASE64 (с поддержкой URL-safe)
 # -----------------------------
 def try_base64_decode(data: str) -> str:
     data = data.strip()
-
+    
     # Если уже содержит vless:// — не трогаем
     if "vless://" in data:
         return data
-
-    # Пробуем декодировать
-    try:
-        decoded = base64.b64decode(data, validate=True).decode("utf-8", errors="ignore")
-        if "vless://" in decoded:
-            return decoded
-    except Exception:
-        pass
-
+    
+    # Конвертируем URL-safe → стандартный Base64
+    b64 = data.replace('-', '+').replace('_', '/')
+    
+    # Пробуем с padding и без
+    for s in (b64, b64 + '=' * (-len(b64) % 4)):
+        try:
+            decoded = base64.b64decode(s).decode("utf-8", errors="ignore")
+            if "vless://" in decoded:
+                return decoded
+        except Exception:
+            continue
+    
     return data
 
 
