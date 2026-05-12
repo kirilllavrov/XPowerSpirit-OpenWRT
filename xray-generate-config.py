@@ -70,44 +70,35 @@ def base_config():
             "access": "/tmp/log/xray-access.log",
             "error": "/tmp/log/xray-error.log"
         },
-        # === FakeDNS для клиентских запросов (0 утечек) ===
-        "fakedns": {
-            "ipPool": "198.18.0.0/16",
-            "poolSize": 65535
-        },
         "dns": {
             "tag": "dns-inbuilt",
             "queryStrategy": "UseIPv4",
             "disableCache": False,
             "serveStale": True,
             "disableFallback": False,
-            # КРИТИЧНО: резолвим DoH-сервер напрямую, чтобы не попасть в FakeDNS (198.18.x.x)
-            # Иначе Xray попытается открыть HTTPS на фейковом IP и получит ошибку.
+            # Предварительный маппинг DoH-доменов → IP
+            # Чтобы Xray мог подключиться к DoH-серверам при холодном старте
             "hosts": {
                 "common.dot.dns.yandex.net": "77.88.8.8",
-                "dot.dns.yandex.net": "77.88.8.8",
-                "dns.yandex.ru": "77.88.8.8"
+                "cloudflare-dns.com": "1.1.1.1",
+                "dns.nextdns.io": "45.90.28.0"
             },
             "servers": [
-                # ← ПЕРВЫМ: клиентские запросы → FakeDNS
-                "fakedns",
-                # Запросы самого Xray для .ru — Яндекс DoH (порт 443, direct)
+                # .ru домены → Яндекс DoH (direct, быстро)
                 {
                     "address": "https://common.dot.dns.yandex.net/dns-query",
                     "domains": ["geosite:category-ru"],
                     "skipFallback": True,
                     "expectIPs": ["geoip:ru"]
                 },
-                # Глобальный фоллбэк — NextDNS через UDP/53 (минимум оверхеда)
+                # Зарубежные домены → Cloudflare DoH (через прокси, анонимно)
                 {
-                    "address": "45.90.28.0",
-                    "port": 53,
+                    "address": "https://cloudflare-dns.com/dns-query",
                     "skipFallback": False
                 },
-                # Резерв — если всё упало
+                # Резерв → NextDNS DoH
                 {
-                    "address": "1.1.1.1",
-                    "port": 53,
+                    "address": "https://dns.nextdns.io/dns-query",
                     "skipFallback": False
                 }
             ]
@@ -129,7 +120,7 @@ def base_config():
                 },
                 "sniffing": {
                     "enabled": True,
-                    "destOverride": ["http", "tls", "quic", "fakedns"],  # ← +fakedns
+                    "destOverride": ["http", "tls", "quic"],
                     "routeOnly": False,
                     "metadataOnly": False
                 }
@@ -148,39 +139,32 @@ def base_config():
 
 def build_rules(chosen_tag, direct_mode=False):
     rules = [
-        # Клиентский DNS (от dnsmasq) → dns-out (где hijack + FakeDNS)
+        # Клиентский DNS (от dnsmasq) → dns-out (hijack → dns-inbuilt)
         {
             "type": "field",
             "inboundTag": ["dns-local"],
             "outboundTag": "dns-out"
         },
-        # ← КРИТИЧНО: сам запрос к Яндекс DoH должен идти напрямую
-        # (на случай, если домен резолвится не через hosts)
+        # DoH-серверы → direct (чтобы Xray мог к ним подключиться)
         {
             "type": "field",
             "inboundTag": ["dns-inbuilt"],
             "domain": [
-                "dot.dns.yandex.net",
-                "dns.yandex.ru",
-                "common.dot.dns.yandex.net"
+                "common.dot.dns.yandex.net",
+                "cloudflare-dns.com",
+                "dns.nextdns.io"
             ],
             "outboundTag": "direct"
         },
-        # КРИТИЧНО: IP Яндекса тоже должны идти в direct, 
-        # иначе Xray отправит запрос к самому себе в прокси (по IP).
-        {
-            "type": "field",
-            "ip": ["77.88.8.8", "77.88.8.1"],
-            "outboundTag": "direct"
-        },
-        # DNS-запросы от встроенного DNS модуля: .ru → direct
+        # DNS .ru → direct (Яндекс DoH, легальные сайты, быстро)
         {
             "type": "field",
             "inboundTag": ["dns-inbuilt"],
             "domain": ["geosite:category-ru"],
             "outboundTag": "direct"
         },
-        # Остальные DNS-запросы от встроенного DNS → proxy/direct
+        # DNS зарубежные → через прокси (полная анонимность от ТСПУ)
+        # В direct_mode → direct (когда прокси нет)
         {
             "type": "field",
             "inboundTag": ["dns-inbuilt"],
@@ -249,7 +233,7 @@ def main():
             }
         ]
         cfg["routing"] = {
-            "domainStrategy": "IPIfNonMatch",  # ← оптимально для FakeDNS+sniffing
+            "domainStrategy": "IPIfNonMatch",
             "rules": build_rules("direct", direct_mode=True)
         }
         print("[!] Найден сервер 'hole'. Включён DIRECT-конфиг.", file=sys.stderr)
@@ -310,7 +294,7 @@ def main():
             }
         ]
         cfg["routing"] = {
-            "domainStrategy": "IPIfNonMatch",  # ← было IPOnDemand
+            "domainStrategy": "IPIfNonMatch",
             "rules": build_rules(chosen_tag, direct_mode=False)
         }
         print(f"  ✓ Выбран сервер: {chosen_tag}", file=sys.stderr)
