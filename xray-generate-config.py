@@ -81,6 +81,13 @@ def base_config():
             "disableCache": False,
             "serveStale": True,
             "disableFallback": False,
+            # КРИТИЧНО: резолвим DoH-сервер напрямую, чтобы не попасть в FakeDNS (198.18.x.x)
+            # Иначе Xray попытается открыть HTTPS на фейковом IP и получит ошибку.
+            "hosts": {
+                "common.dot.dns.yandex.net": "77.88.8.8",
+                "dot.dns.yandex.net": "77.88.8.8",
+                "dns.yandex.ru": "77.88.8.8"
+            },
             "servers": [
                 # ← ПЕРВЫМ: клиентские запросы → FakeDNS
                 "fakedns",
@@ -148,6 +155,7 @@ def build_rules(chosen_tag, direct_mode=False):
             "outboundTag": "dns-out"
         },
         # ← КРИТИЧНО: сам запрос к Яндекс DoH должен идти напрямую
+        # (на случай, если домен резолвится не через hosts)
         {
             "type": "field",
             "inboundTag": ["dns-inbuilt"],
@@ -156,6 +164,13 @@ def build_rules(chosen_tag, direct_mode=False):
                 "dns.yandex.ru",
                 "common.dot.dns.yandex.net"
             ],
+            "outboundTag": "direct"
+        },
+        # КРИТИЧНО: IP Яндекса тоже должны идти в direct, 
+        # иначе Xray отправит запрос к самому себе в прокси (по IP).
+        {
+            "type": "field",
+            "ip": ["77.88.8.8", "77.88.8.1"],
             "outboundTag": "direct"
         },
         # DNS-запросы от встроенного DNS модуля: .ru → direct
