@@ -1,22 +1,20 @@
 #!/bin/sh
 # OpenWrt — обновление nftables правил для Xray TProxy
-
 CONF="/etc/xray/config.json"
 LAN_IF="br-lan"
 
 # Автоопределение LAN интерфейса, если br-lan отсутствует
 if ! ip link show br-lan >/dev/null 2>&1; then
-	LAN_IF=$(uci -q get network.lan.device 2>/dev/null)
-	[ -z "$LAN_IF" ] && LAN_IF="br-lan"
-	logger -t update-nft "LAN интерфейс auto-detected: $LAN_IF"
+    LAN_IF=$(uci -q get network.lan.device 2>/dev/null)
+    [ -z "$LAN_IF" ] && LAN_IF="br-lan"
+    logger -t update-nft "LAN интерфейс auto-detected: $LAN_IF"
 fi
 
 # Извлекаем IP‑адреса серверов из config.json
 extract_server_ips() {
-	local raw
-
-	# Пробуем Python-парсер
-	raw=$(python3 -c '
+    local raw
+    # Пробуем Python-парсер
+    raw=$(python3 -c '
 import json, sys
 try:
     with open(sys.argv[1]) as f:
@@ -32,70 +30,65 @@ try:
 except:
     pass
 ' "$CONF" 2>/dev/null)
-
-	# Fallback на grep
-	if [ -z "$raw" ]; then
-		raw=$(grep -o '"address"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONF" 2>/dev/null |
-			sed 's/.*"\([^"]*\)"$/\1/' |
-			sort -u)
-	fi
-
-	[ -z "$raw" ] && return
-
-	# Разделяем IP и домены, резолвим домены
-	local ips=""
-	while IFS= read -r addr; do
-		case "$addr" in
-		"hole" | "0.0.0.0" | "127.0.0.1" | "")
-			continue
-			;;
-		*[a-zA-Z]*)
-			# Домен — резолвим
-			local resolved
-			resolved=$(resolveip -4 "$addr" 77.88.8.8 2>/dev/null)
-			if [ -n "$resolved" ]; then
-				ips="$ips,$resolved"
-				logger -t update-nft "Resolved $addr → $resolved"
-			else
-				logger -t update-nft "Failed to resolve $addr"
-			fi
-			;;
-		*.*.*.*)
-			# Уже IP — проверяем валидность
-			if echo "$addr" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
-				ips="$ips,$addr"
-			fi
-			;;
-		esac
-	done <<EOF
+    # Fallback на grep
+    if [ -z "$raw" ]; then
+        raw=$(grep -o '"address"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONF" 2>/dev/null |
+            sed 's/.*"\([^"]*\)"$/\1/' |
+            sort -u)
+    fi
+    [ -z "$raw" ] && return
+    # Разделяем IP и домены, резолвим домены
+    local ips=""
+    while IFS= read -r addr; do
+        case "$addr" in
+            "hole" | "0.0.0.0" | "127.0.0.1" | "")
+                continue
+                ;;
+            *[a-zA-Z]*)
+                # Домен — резолвим
+                local resolved
+                resolved=$(resolveip -4 "$addr" 77.88.8.8 2>/dev/null)
+                if [ -n "$resolved" ]; then
+                    ips="$ips,$resolved"
+                    logger -t update-nft "Resolved $addr → $resolved"
+                else
+                    logger -t update-nft "Failed to resolve $addr"
+                fi
+                ;;
+            *.*.*.*)
+                # Уже IP — проверяем валидность
+                if echo "$addr" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+                    ips="$ips,$addr"
+                fi
+                ;;
+        esac
+    done <<EOF
 $raw
 EOF
-
-	echo "$ips" | sed 's/^,//'
+    echo "$ips" | sed 's/^,//'
 }
 
 setup_network() {
-	# Очистка старых правил
-	while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
-	ip route flush table 100 2>/dev/null
+    # Очистка старых правил
+    while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
+    ip route flush table 100 2>/dev/null
+    # Policy routing
+    ip rule add fwmark 1 table 100
+    ip route add local 0.0.0.0/0 dev lo table 100
 
-	# Policy routing
-	ip rule add fwmark 1 table 100
-	ip route add local 0.0.0.0/0 dev lo table 100
+    # Bypass IPs
+    local bypass_ips
+    bypass_ips=$(extract_server_ips)
 
-	# Bypass IPs
-	local bypass_ips
-	bypass_ips=$(extract_server_ips)
+    # nftables
+    nft list table inet xray >/dev/null 2>&1 && nft delete table inet xray
+    local nft_file="/tmp/xray.nft"
 
-	# nftables
-	nft list table inet xray >/dev/null 2>&1 && nft delete table inet xray
-
-	local nft_file="/tmp/xray.nft"
-	cat >"$nft_file" <<NFT
+    cat >"$nft_file" <<NFT
 table inet xray {
     chain prerouting {
         type filter hook prerouting priority mangle; policy accept;
-
+        # Bypass локальных и служебных подсетей
         ip daddr {
             127.0.0.0/8,
             10.0.0.0/8,
@@ -104,39 +97,43 @@ table inet xray {
             169.254.0.0/16,
             224.0.0.0/3
         } return;
-
+        # Bypass FakeDNS-пула (198.18.0.0/16) — чтобы фейковые IP не попали в TProxy
+        ip daddr 198.18.0.0/16 return;
+        # Bypass DNS-резолверов (чтобы запросы к ним не перехватывались)
+        ip daddr { 77.88.8.8, 77.88.8.1, 45.90.28.0, 1.1.1.1 } return;
+        # Bypass по mark (уже обработанный трафик)
         meta mark 0x1 return;
 NFT
 
-	if [ -n "$bypass_ips" ]; then
-		# Проверяем, что все IP валидны
-		VALID_IPS=$(echo "$bypass_ips" | tr ',' '\n' | grep -Ex '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | tr '\n' ',' | sed 's/,$//')
-		if [ -n "$VALID_IPS" ]; then
-			echo "        ip daddr { $VALID_IPS } return;" >>"$nft_file"
-			logger -t update-nft "Bypass IPs added: $VALID_IPS"
-		else
-			logger -t update-nft "No valid bypass IPs found, skipping bypass rule"
-		fi
-	fi
+    if [ -n "$bypass_ips" ]; then
+        # Проверяем, что все IP валидны
+        VALID_IPS=$(echo "$bypass_ips" | tr ',' '\n' | grep -Ex '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | tr '\n' ',' | sed 's/,$//')
+        if [ -n "$VALID_IPS" ]; then
+            echo "        ip daddr { $VALID_IPS } return;" >>"$nft_file"
+            logger -t update-nft "Bypass IPs added: $VALID_IPS"
+        else
+            logger -t update-nft "No valid bypass IPs found, skipping bypass rule"
+        fi
+    fi
 
-	cat >>"$nft_file" <<NFT
+    cat >>"$nft_file" <<NFT
+        # DHCP не трогаем
         udp dport { 67, 68 } return;
-
+        # TProxy для остального трафика с LAN
         iifname "$LAN_IF" meta l4proto { tcp, udp } \
             tproxy ip to 127.0.0.1:12345 meta mark set 1 accept;
     }
 }
 NFT
 
-	if nft -f "$nft_file"; then
-		logger -t update-nft "Network rules applied successfully"
-	else
-		logger -t update-nft "nftables apply failed"
-		rm -f "$nft_file"
-		return 1
-	fi
-
-	rm -f "$nft_file"
+    if nft -f "$nft_file"; then
+        logger -t update-nft "Network rules applied successfully"
+    else
+        logger -t update-nft "nftables apply failed"
+        rm -f "$nft_file"
+        return 1
+    fi
+    rm -f "$nft_file"
 }
 
 setup_network
