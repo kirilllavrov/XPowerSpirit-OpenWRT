@@ -234,7 +234,7 @@ def main():
             }
         ]
         cfg["routing"] = {
-            "domainStrategy": "IPIfNonMatch",
+            "domainStrategy": "IPOnDemand",
             "rules": build_rules("direct", direct_mode=True)
         }
         print("[!] Найден сервер 'hole'. Включён DIRECT-конфиг.", file=sys.stderr)
@@ -257,7 +257,7 @@ def main():
             }
         ]
         cfg["routing"] = {
-            "domainStrategy": "IPIfNonMatch",
+            "domainStrategy": "IPOnDemand",
             "rules": build_rules("direct", direct_mode=True)
         }
         print("[!] Нет доступных серверов (только заглушки). Создан DIRECT-конфиг.", file=sys.stderr)
@@ -295,7 +295,7 @@ def main():
             }
         ]
         cfg["routing"] = {
-            "domainStrategy": "IPIfNonMatch",
+            "domainStrategy": "IPOnDemand",
             "rules": build_rules(chosen_tag, direct_mode=False)
         }
         print(f"  ✓ Выбран сервер: {chosen_tag}", file=sys.stderr)
