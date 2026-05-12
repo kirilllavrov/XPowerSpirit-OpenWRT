@@ -75,12 +75,13 @@ def base_config():
             "queryStrategy": "UseIPv4",
             "disableCache": False,
             "serveStale": True,
+            "serveExpiredTTL": 3600,
             "disableFallback": False,
             # Предварительный маппинг DoH-доменов → IP
             # Чтобы Xray мог подключиться к DoH-серверам при холодном старте
             "hosts": {
-                "common.dot.dns.yandex.net": "77.88.8.8",
-                "cloudflare-dns.com": "1.1.1.1",
+                "common.dot.dns.yandex.net": ["77.88.8.1","77.88.8.8"],
+                "cloudflare-dns.com": ["1.0.0.1","1.1.1.1"],
                 "dns.nextdns.io": "45.90.28.0"
             },
             "servers": [
