@@ -61,7 +61,6 @@ def choose_best_server(servers):
             addr = extract_address(ob)
             if addr in DOMAIN_WHITELIST:
                 return ob
-        return servers[0]
     return servers[0]
 
 def base_config():
@@ -71,6 +70,11 @@ def base_config():
             "access": "/tmp/log/xray-access.log",
             "error": "/tmp/log/xray-error.log"
         },
+        # === FakeDNS для клиентских запросов (0 утечек) ===
+        "fakedns": {
+            "ipPool": "198.18.0.0/16",
+            "poolSize": 65535
+        },
         "dns": {
             "tag": "dns-inbuilt",
             "queryStrategy": "UseIPv4",
@@ -78,17 +82,22 @@ def base_config():
             "serveStale": True,
             "disableFallback": False,
             "servers": [
+                # ← ПЕРВЫМ: клиентские запросы → FakeDNS
+                "fakedns",
+                # Запросы самого Xray для .ru — Яндекс DoH (порт 443, direct)
                 {
-                    "address": "77.88.8.8",
-                    "port": 53,
+                    "address": "https://common.dot.dns.yandex.net/dns-query",
                     "domains": ["geosite:category-ru"],
-                    "skipFallback": True
+                    "skipFallback": True,
+                    "expectIPs": ["geoip:ru"]
                 },
+                # Глобальный фоллбэк — NextDNS через UDP/53 (минимум оверхеда)
                 {
                     "address": "45.90.28.0",
                     "port": 53,
                     "skipFallback": False
                 },
+                # Резерв — если всё упало
                 {
                     "address": "1.1.1.1",
                     "port": 53,
@@ -113,7 +122,7 @@ def base_config():
                 },
                 "sniffing": {
                     "enabled": True,
-                    "destOverride": ["http", "tls", "quic"],
+                    "destOverride": ["http", "tls", "quic", "fakedns"],  # ← +fakedns
                     "routeOnly": False,
                     "metadataOnly": False
                 }
@@ -132,21 +141,31 @@ def base_config():
 
 def build_rules(chosen_tag, direct_mode=False):
     rules = [
-        # Клиентский DNS (от dnsmasq) → направляем в outbound "dns-out"
+        # Клиентский DNS (от dnsmasq) → dns-out (где hijack + FakeDNS)
         {
             "type": "field",
             "inboundTag": ["dns-local"],
             "outboundTag": "dns-out"
         },
-        # DNS-запросы от встроенного DNS модуля:
-        # .ru домены → direct
+        # ← КРИТИЧНО: сам запрос к Яндекс DoH должен идти напрямую
+        {
+            "type": "field",
+            "inboundTag": ["dns-inbuilt"],
+            "domain": [
+                "dot.dns.yandex.net",
+                "dns.yandex.ru",
+                "common.dot.dns.yandex.net"
+            ],
+            "outboundTag": "direct"
+        },
+        # DNS-запросы от встроенного DNS модуля: .ru → direct
         {
             "type": "field",
             "inboundTag": ["dns-inbuilt"],
             "domain": ["geosite:category-ru"],
             "outboundTag": "direct"
         },
-        # Остальные DNS-запросы от встроенного DNS → через прокси (или direct в direct_mode)
+        # Остальные DNS-запросы от встроенного DNS → proxy/direct
         {
             "type": "field",
             "inboundTag": ["dns-inbuilt"],
@@ -210,17 +229,12 @@ def main():
                 "protocol": "dns",
                 "tag": "dns-out",
                 "settings": {
-                    "rules": [
-                        {
-                            "action": "hijack",
-                            "qtype": "1,28"
-                        }
-                    ]
+                    "rules": [{"action": "hijack", "qtype": "1,28"}]
                 }
             }
         ]
         cfg["routing"] = {
-            "domainStrategy": "AsIs",
+            "domainStrategy": "IPIfNonMatch",  # ← оптимально для FakeDNS+sniffing
             "rules": build_rules("direct", direct_mode=True)
         }
         print("[!] Найден сервер 'hole'. Включён DIRECT-конфиг.", file=sys.stderr)
@@ -230,7 +244,6 @@ def main():
         return
 
     chosen = choose_best_server(all_obs)
-
     if chosen is None:
         cfg["outbounds"] = [
             {"protocol": "freedom", "tag": "direct"},
@@ -239,34 +252,25 @@ def main():
                 "protocol": "dns",
                 "tag": "dns-out",
                 "settings": {
-                    "rules": [
-                        {
-                            "action": "hijack",
-                            "qtype": "1,28"
-                        }
-                    ]
+                    "rules": [{"action": "hijack", "qtype": "1,28"}]
                 }
             }
         ]
         cfg["routing"] = {
-            "domainStrategy": "AsIs",
+            "domainStrategy": "IPIfNonMatch",
             "rules": build_rules("direct", direct_mode=True)
         }
         print("[!] Нет доступных серверов (только заглушки). Создан DIRECT-конфиг.", file=sys.stderr)
     else:
         chosen_tag = chosen.get("tag") or "proxy"
-        # Санитизация тега для безопасности JSON/routing
         chosen_tag = re.sub(r'[^\w\-]', '_', chosen_tag)[:64] or "proxy"
         if "tag" not in chosen:
             chosen["tag"] = chosen_tag
-
         ss = chosen.setdefault("streamSettings", {})
         sockopt = ss.setdefault("sockopt", {})
         sockopt["mark"] = 0
         sockopt["tcpKeepAliveInterval"] = 30
         sockopt["tcpNoDelay"] = True
-
-        # Не перезаписываем mux, если он уже задан в подписке
         chosen.setdefault("mux", {"enabled": False})
 
         direct_sockopt = {
@@ -274,7 +278,6 @@ def main():
             "tcpKeepAliveInterval": 30,
             "tcpNoDelay": True
         }
-
         cfg["outbounds"] = [
             chosen,
             {
@@ -287,17 +290,12 @@ def main():
                 "protocol": "dns",
                 "tag": "dns-out",
                 "settings": {
-                    "rules": [
-                        {
-                            "action": "hijack",
-                            "qtype": "1,28"
-                        }
-                    ]
+                    "rules": [{"action": "hijack", "qtype": "1,28"}]
                 }
             }
         ]
         cfg["routing"] = {
-            "domainStrategy": "IPOnDemand",
+            "domainStrategy": "IPIfNonMatch",  # ← было IPOnDemand
             "rules": build_rules(chosen_tag, direct_mode=False)
         }
         print(f"  ✓ Выбран сервер: {chosen_tag}", file=sys.stderr)
