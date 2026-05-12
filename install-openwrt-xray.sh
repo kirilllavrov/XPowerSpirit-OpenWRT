@@ -428,9 +428,17 @@ echo "7. Настраиваем DNS (dnsmasq → Xray)..."
 # Настройка dnsmasq — все запросы направляем в Xray
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci set dhcp.@dnsmasq[0].strictorder='1'
+
+# Настройка кэша
+uci set dhcp.@dnsmasq[0].cachesize='2000'
+uci set dhcp.@dnsmasq[0].min_cache_ttl='300'
+uci set dhcp.@dnsmasq[0].max_cache_ttl='3600'
+
 uci -q delete dhcp.@dnsmasq[0].server
+
 # Основной DNS-сервер — Xray
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'
+
 # Резервный сервер на случай, если Xray не запущен
 uci add_list dhcp.@dnsmasq[0].server='77.88.8.8'
 uci commit dhcp
@@ -455,7 +463,7 @@ ASSET_DIR="/usr/share/xray"
 start_service() {
     # Разовая синхронизация времени
     ntpd -q -p 77.88.8.8 2>/dev/null || \
-    ntpd -q -p 1.1.1.1 2>/dev/null || \
+    ntpd -q -p 1.0.0.1 2>/dev/null || \
     logger -t xray "Time sync failed, continuing anyway"
     sleep 1
 	
