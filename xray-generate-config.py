@@ -77,6 +77,7 @@ def base_config():
             "serveStale": True,
             "serveExpiredTTL": 3600,
             "disableFallback": False,
+            "enableParallelQuery": True,
             # Предварительный маппинг DoH-доменов → IP
             # Чтобы Xray мог подключиться к DoH-серверам при холодном старте
             "hosts": {
@@ -89,10 +90,9 @@ def base_config():
                 {
                     "address": "https://common.dot.dns.yandex.net/dns-query",
                     "domains": ["geosite:category-ru"],
-                    "skipFallback": True,
-                    "expectIPs": ["geoip:ru"]
+                    "skipFallback": True
                 },
-                # Зарубежные домены → Cloudflare DoH (через прокси, анонимно)
+                # Зарубежные домены → Cloudflare DoH (через прокси)
                 {
                     "address": "https://cloudflare-dns.com/dns-query",
                     "skipFallback": False
