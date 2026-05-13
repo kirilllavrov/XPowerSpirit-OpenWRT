@@ -5,6 +5,16 @@ import json
 import urllib.parse as urlparse
 import urllib.request
 import re
+import syslog
+
+
+# -----------------------------
+# ЛОГИРОВАНИЕ ОШИБОК
+# -----------------------------
+def log_error(msg: str) -> None:
+    """Отправляет сообщение об ошибке в syslog и в stderr"""
+    syslog.syslog(syslog.LOG_ERR, f"xray-parser: {msg}")
+    print(msg, file=sys.stderr)
 
 
 # -----------------------------
@@ -22,39 +32,54 @@ def normalize_tag(tag: str) -> str:
 # -----------------------------
 # ЗАГРУЗКА URL
 # -----------------------------
-def try_download(data: str) -> str:
-    if data.startswith("http://") or data.startswith("https://"):
-        try:
-            with urllib.request.urlopen(data, timeout=10) as r:
-                return r.read().decode("utf-8", errors="ignore")
-        except Exception:
-            return data
-    return data
+def try_download(data: str) -> tuple[str, bool]:
+    """
+    Загружает данные по URL, если передан HTTP/HTTPS URL.
+    Возвращает (содержимое, успех).
+    """
+    if not (data.startswith("http://") or data.startswith("https://")):
+        return data, True
+
+    try:
+        with urllib.request.urlopen(data, timeout=10) as r:
+            content = r.read()
+
+            # Проверяем, что это не HTML ошибка
+            content_lower = content.lower()
+            if b"<html" in content_lower or b"<!doctype" in content_lower:
+                log_error(f"Subscription returned HTML, not VLESS: {data}")
+                return "", False
+
+            return content.decode("utf-8", errors="replace"), True
+    except Exception as e:
+        log_error(f"Failed to download subscription: {e}")
+        return "", False
 
 
 # -----------------------------
 # УМНОЕ BASE64 (с поддержкой URL-safe)
 # -----------------------------
-def try_base64_decode(data: str) -> str:
+def try_base64_decode(data: str) -> tuple[str, bool]:
+    """Декодирует Base64, если это возможно. Возвращает (результат, успех)."""
     data = data.strip()
-    
+
     # Если уже содержит vless:// — не трогаем
     if "vless://" in data:
-        return data
-    
+        return data, True
+
     # Конвертируем URL-safe → стандартный Base64
     b64 = data.replace('-', '+').replace('_', '/')
-    
+
     # Пробуем с padding и без
     for s in (b64, b64 + '=' * (-len(b64) % 4)):
         try:
-            decoded = base64.b64decode(s).decode("utf-8", errors="ignore")
+            decoded = base64.b64decode(s).decode("utf-8", errors="replace")
             if "vless://" in decoded:
-                return decoded
+                return decoded, True
         except Exception:
             continue
-    
-    return data
+
+    return data, False
 
 
 # -----------------------------
@@ -155,20 +180,30 @@ def parse_vless_uri(uri: str, idx: int):
     if security_mode == "tls":
         stream["security"] = "tls"
         tls = {}
-        if sni: tls["serverName"] = sni
-        if alpn: tls["alpn"] = alpn
-        if fp: tls["fingerprint"] = fp
-        if allow_insecure: tls["allowInsecure"] = True
-        if tls: stream["tlsSettings"] = tls
+        if sni:
+            tls["serverName"] = sni
+        if alpn:
+            tls["alpn"] = alpn
+        if fp:
+            tls["fingerprint"] = fp
+        if allow_insecure:
+            tls["allowInsecure"] = True
+        if tls:
+            stream["tlsSettings"] = tls
 
     elif security_mode == "reality":
         stream["security"] = "reality"
         reality = {}
-        if sni: reality["serverName"] = sni
-        if pbk: reality["publicKey"] = pbk
-        if sid: reality["shortId"] = sid
-        if spx: reality["spiderX"] = spx
-        if fp: reality["fingerprint"] = fp
+        if sni:
+            reality["serverName"] = sni
+        if pbk:
+            reality["publicKey"] = pbk
+        if sid:
+            reality["shortId"] = sid
+        if spx:
+            reality["spiderX"] = spx
+        if fp:
+            reality["fingerprint"] = fp
         stream["realitySettings"] = reality
 
     # NETWORK-SPECIFIC
@@ -217,11 +252,29 @@ def parse_vless_uri(uri: str, idx: int):
 def main():
     raw = sys.stdin.read().strip()
     if not raw:
+        log_error("Empty input")
         print("[]")
-        return
+        sys.exit(1)
 
-    data = try_download(raw)
-    data = try_base64_decode(data)
+    # Загружаем по URL, если нужно
+    data, success = try_download(raw)
+    if not success or not data:
+        log_error("Failed to download subscription")
+        print("[]")
+        sys.exit(1)
+
+    # Пробуем декодировать Base64
+    data, decoded = try_base64_decode(data)
+    if not decoded:
+        log_error("Failed to decode Base64 (no vless:// found after decoding)")
+        print("[]")
+        sys.exit(1)
+
+    # Проверяем, что в данных есть vless://
+    if "vless://" not in data:
+        log_error("No vless:// URIs found in subscription")
+        print("[]")
+        sys.exit(1)
 
     lines = [l.strip() for l in data.splitlines() if l.strip()]
 
@@ -234,6 +287,11 @@ def main():
             if ob:
                 outbounds.append(ob)
                 idx += 1
+
+    if not outbounds:
+        log_error("No valid vless:// URIs parsed")
+        print("[]")
+        sys.exit(1)
 
     print(json.dumps(outbounds, indent=2, ensure_ascii=False))
 
