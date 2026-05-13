@@ -121,9 +121,9 @@ def base_config():
                 },
                 "sniffing": {
                     "enabled": True,
-                    "destOverride": ["http", "tls", "quic"],
-                    "routeOnly": False,
-                    "metadataOnly": False
+                    "destOverride": ["http", "tls"],
+                    "routeOnly": True,
+                    "metadataOnly": True
                 }
             },
             {
