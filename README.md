@@ -176,7 +176,7 @@ chmod +x setup-wifi-network.sh
    - `xray-sub-parser.py`
    - `update-xray.sh`
    - `update-nft.sh`
-7. **Настройка DNS** — перенаправляет dnsmasq на `127.0.0.1:5053` и `127.0.0.1:5054`
+7. **Настройка DNS** — перенаправляет dnsmasq на `127.0.0.1:5353`
 8. **Init-скрипт** — создаёт `/etc/init.d/xray` с автозапуском
 9. **Маршрутизация** — добавляет таблицу `xray` (ID 100) в `/etc/iproute2/rt_tables`
 10. **Sysctl** — включает `route_localnet` и `ip_forward`
@@ -230,7 +230,6 @@ chmod +x setup-led-status.sh
 
 - **Безопасность:** WPA2+WPA3 mixed mode (`sae-mixed`) с обязательным PMF
 - **Изоляция клиентов** — в гостевой сети клиенты не видят друг друга
-- **Time Advertisement** — трансляция времени для клиентов
 - **Country RU** — оптимизировано для России
 
 **Параметры:**
@@ -328,7 +327,7 @@ chmod +x setup-led-status.sh
 | 4 | nftables | Таблица `inet xray`, исключение DNS (порт 53), hook prerouting priority mangle |
 | 5 | Интеграция fw4 | Jump в цепочку `prerouting` из `inet fw4 mangle_prerouting` |
 | 6 | Маршрутизация | `ip rule` с fwmark 0x1, таблица `xray` с `local default` |
-| 7 | dnsmasq | Перенаправление на `127.0.0.1#5053` и `127.0.0.1#5054` |
+| 7 | dnsmasq | Перенаправление на `127.0.0.1#5353` |
 | 8 | Логи Xray | Последние 3 ошибки из `/tmp/log/xray-error.log` |
 | 9 | Доступность сервера | HTTPS/ICMP проверка сервера из конфига |
 | 10 | DNS-тесты | Ответы от `127.0.0.1` и `77.88.8.8` |
