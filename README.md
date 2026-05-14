@@ -10,7 +10,6 @@
 - [Быстрый старт](#-быстрый-старт)
 - [Детальное описание скриптов](#-детальное-описание-скриптов)
   - [install-openwrt-xray.sh](#install-openwrtxraysh)
-  - [uci-defaults.sh](#uci-defaultssh)
   - [setup-wifi-network.sh](#setup-wifi-networksh)
   - [setup-led-status.sh](#setup-led-statussh)
   - [update-xray.sh](#update-xraysh)
@@ -191,50 +190,6 @@ chmod +x setup-wifi-network.sh
 
 ---
 
-### uci-defaults.sh
-
-**Назначение:** Полная автоматическая настройка роутера «с нуля» (LAN, WAN, Wi-Fi, Guest Network, Xray).
-
-**Особенности:**
-
-- **Идемпотентность** — можно запускать многократно без побочных эффектов
-- **Полный цикл** — от сброса пароля root до работающего прокси
-- **Универсальность** — поддержка PPPoE и DHCP на WAN
-
-**Что делает:**
-
-1. **Базовая настройка системы**:
-   - Установка пароля root
-   - Настройка LAN IP (`192.168.1.1/24`)
-   - Настройка WAN (DHCP или PPPoE)
-2. **Ожидание интернета** — проверка доступности `8.8.8.8` до продолжения установки
-3. **Wi-Fi (Home + Guest)**:
-   - Очистка старых конфигураций wireless
-   - Настройка радио: Country RU, PMF, Time Advertisement
-   - Создание домашних сетей (WPA2+WPA3 sae-mixed)
-   - Создание гостевых сетей с изоляцией клиентов
-4. **Гостевая сеть**:
-   - Bridge `br-guest`, интерфейс `guest`
-   - DHCP с диапазоном `.100-.250`
-   - Firewall-зона с изоляцией от LAN
-   - SQM QoS (5 Mbps up/down по умолчанию)
-5. **Установка Xray** — вызов стандартного цикла установки
-
-**Пример использования:**
-
-```bash
-# Отредактировать настройки в начале скрипта
-vi /workspace/uci-defaults.sh
-
-# Запустить
-chmod +x uci-defaults.sh
-./uci-defaults.sh
-```
-
-**Логирование:** `/tmp/xray_install.log`
-
----
-
 ### setup-led-status.sh
 
 **Назначение:** Настройка LED-индикации статуса интернета и активности Xray.
@@ -245,24 +200,13 @@ chmod +x uci-defaults.sh
 
 1. **LED Xray_Status (white:wps)**:
    - Мигает при сетевом трафике через loopback (`lo`)
-   - Триггер: `netdev`, режим: `tx rx`
+   - Триггер: `netdev`, режим: `tx rx`, интервал: 100 мс
    - Индикация активной проксификации
 
 2. **LED Интернет (white:wan-online)**:
    - Горит при доступности интернета
-   - Проверка через `curl https://www.google.com/gen_204`
-   - Cron-проверка каждую минуту
-
-**Скрипт проверки:** `/usr/share/xray/net-check.sh`
-
-```bash
-#!/bin/sh
-if curl -fs --max-time 5 https://www.google.com/gen_204 >/dev/null 2>&1; then
-    echo "default-on" > /sys/class/leds/white:wan-online/trigger
-else
-    echo "none" > /sys/class/leds/white:wan-online/trigger
-fi
-```
+   - Проверка через `curl https://www.google.com/gen_204` каждые 1 минуту
+   - Скрипт проверки: `/usr/share/xray/net-check.sh`
 
 **Установка:**
 
@@ -347,23 +291,26 @@ chmod +x setup-led-status.sh
 
 **Алгоритм:**
 
-1. **Очистка** — удаляет старые правила и таблицу маршрутов 100
+1. **Очистка** — удаляет старую таблицу `inet xray`, правила fwmark и таблицу маршрутов 100
 2. **Policy Routing**:
 
    ```bash
+   ip rule del fwmark 1 table 100  # очистка старых правил
+   ip route flush table 100
    ip rule add fwmark 1 table 100
    ip route add local 0.0.0.0/0 dev lo table 100
    ```
 
-3. **Извлечение IP серверов** — парсит `config.json` для исключения их из TProxy
+3. **Извлечение IP серверов** — парсит `config.json` через Python или grep для исключения их из TProxy
 4. **Создание таблицы `inet xray`**:
    - Исключения: localhost, RFC1918, link-local, multicast, резервные адреса
    - Исключение IP серверов подписки
+   - Исключение DNS (порт 53)
    - Исключение DHCP (порты 67-68)
-   - Исключение Mark 0xff (трафик самого Xray)
-   - TProxy для TCP/UDP с LAN-интерфейса на `127.0.0.1:12345`
+   - Исключение Mark 0x1 (трафик самого Xray)
+   - TProxy для TCP/UDP с LAN-интерфейса на `127.0.0.1:12345` с `meta mark set 1`
 
-**Автоопределение LAN:** Если `br-lan` отсутствует, автоматически определяет первый non-WAN интерфейс.
+**Автоопределение LAN:** Если `br-lan` отсутствует, автоматически определяет интерфейс из `network.lan.device`.
 
 ---
 
@@ -376,15 +323,15 @@ chmod +x setup-led-status.sh
 | # | Компонент | Что проверяется |
 |---|-----------|-----------------|
 | 1 | Процесс Xray | Запущен ли `xray` (`pgrep -a xray`) |
-| 2 | Порты | Слушается ли порт 12345 (через `netstat -tulnp`) |
-| 3 | Конфигурация | Наличие `tproxy` и `mark: 255` в `config.json` |
-| 4 | nftables | Таблица `ip xray`, исключение DNS (порт 53), hook prerouting priority mangle |
-| 5 | Интеграция fw4 | Jump в цепочку `xray_tproxy` из `inet fw4 mangle_prerouting` |
+| 2 | Порты | Слушается ли порт 12345 (через `ss -tuln`) |
+| 3 | Конфигурация | Наличие `tproxy` в inbound и `mark: 0` в outbound sockopt |
+| 4 | nftables | Таблица `inet xray`, исключение DNS (порт 53), hook prerouting priority mangle |
+| 5 | Интеграция fw4 | Jump в цепочку `prerouting` из `inet fw4 mangle_prerouting` |
 | 6 | Маршрутизация | `ip rule` с fwmark 0x1, таблица `xray` с `local default` |
-| 7 | dnsmasq | Перенаправление на `127.0.0.1#1053` |
+| 7 | dnsmasq | Перенаправление на `127.0.0.1#5053` и `127.0.0.1#5054` |
 | 8 | Логи Xray | Последние 3 ошибки из `/tmp/log/xray-error.log` |
 | 9 | Доступность сервера | HTTPS/ICMP проверка сервера из конфига |
-| 10 | DNS-тесты | Ответы от `127.0.0.1` и `1.1.1.1` |
+| 10 | DNS-тесты | Ответы от `127.0.0.1` и `77.88.8.8` |
 
 **Авто-рекомендации:** Скрипт выдаёт конкретные команды для исправления найденных проблем:
 
@@ -397,7 +344,7 @@ chmod +x setup-led-status.sh
 [FAIL] DNS (порт 53) НЕ исключён! ГЛАВНАЯ ПРИЧИНА: 'сайты не грузятся'
 🔧 РЕКОМЕНДАЦИИ:
 [FIX DNS] Выполни:
-nft delete table ip xray; /etc/init.d/xray-tproxy-rules restart
+/usr/share/xray/update-nft.sh
 ```
 
 **Запуск:**
@@ -517,7 +464,7 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
    - Остальной TCP/UDP → `proxy`
 
 5. **Stream settings:**
-   - `mark: 255` — исключение трафика Xray из TProxy
+   - `mark: 0` — исключение трафика Xray из TProxy (на уровне outbound)
    - `tcpKeepAliveInterval: 30`
    - `tcpNoDelay: true`
    - Mux отключён
