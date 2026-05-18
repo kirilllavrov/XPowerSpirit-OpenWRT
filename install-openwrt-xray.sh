@@ -35,6 +35,11 @@ GUEST_IP="192.168.2.1"
 DL_GUEST="5120"
 UL_GUEST="5120"
 
+# PPPoE переменные
+PPPOE_ENABLED=0
+PPPOE_USER=""
+PPPOE_PASS=""
+
 # Парсер аргументов
 for arg in "$@"; do
 	case $arg in
@@ -43,9 +48,20 @@ for arg in "$@"; do
 	--guest-ul=*) UL_GUEST="${arg#*=}" ;;
 	--sub=*) SUB_URL="${arg#*=}" ;;
 	--dwl=*) DWL_DOMAIN="${arg#*=}" ;;
+	--pppoe=1) PPPOE_ENABLED=1 ;;
+	--pppoe-user=*) PPPOE_USER="${arg#*=}" ;;
+	--pppoe-pass=*) PPPOE_PASS="${arg#*=}" ;;
 	*) echo "[!] Неизвестный аргумент: $arg" ;;
 	esac
 done
+
+# Валидация PPPoE параметров
+if [ $PPPOE_ENABLED -eq 1 ]; then
+	if [ -z "$PPPOE_USER" ] || [ -z "$PPPOE_PASS" ]; then
+		echo "[!] Ошибка: --pppoe=1 требует --pppoe-user и --pppoe-pass"
+		exit 1
+	fi
+fi
 
 # Создаём необходимые директории
 mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR"
@@ -165,6 +181,28 @@ for i in $(seq 1 10); do
 done
 
 echo "[+] IPv6 отключён"
+
+# =============================================
+# 3.5. Настройка PPPoE (если включён)
+# =============================================
+if [ $PPPOE_ENABLED -eq 1 ]; then
+	echo "3.5. Настройка PPPoE соединения..."
+	
+	# Настройка PPPoE на интерфейсе wan
+	uci set network.wan.proto='pppoe'
+	uci set network.wan.device='wan'
+	uci set network.wan.username="$PPPOE_USER"
+	uci set network.wan.password="$PPPOE_PASS"
+	uci set network.wan.keepalive='4 5'
+	uci set network.wan.mtu='1492'
+	uci set network.wan.ipv6='0'
+	uci set network.wan.peerdns='1'
+	uci set network.wan.defaultroute='1'
+	
+	uci commit network
+	
+	echo "[+] PPPoE настроен (логин: $PPPOE_USER, пароль: $PPPOE_PASS)"
+fi
 
 # =============================================
 # 4. Настраиваем гостевую сеть и лимиты скорости
