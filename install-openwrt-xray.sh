@@ -1,5 +1,5 @@
 #!/bin/sh
-# OpenWrt 25.12.x — Xray TProxy (IPv4-only) 
+# OpenWrt 25.12.x — Xray TProxy (IPv4-only)
 
 # Логируем установку
 LOG_FILE="/tmp/xray_install.log"
@@ -421,32 +421,29 @@ fi
 echo "[+] Все скрипты загружены и готовы к использованию"
 
 # =============================================
-# 7. Настройка DNS через DoH (dnsmasq + https-dns-proxy)
+# 7. Настройка DNS (dnsmasq → Xray)
 # =============================================
-echo "7. Настраиваем DNS (dnsmasq + https-dns-proxy)..."
+echo "7. Настраиваем DNS (dnsmasq → Xray)..."
 
+# Настройка dnsmasq — все запросы направляем в Xray
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci set dhcp.@dnsmasq[0].strictorder='1'
+
+# Настройка кэша
+uci set dhcp.@dnsmasq[0].cachesize='1000'
+uci set dhcp.@dnsmasq[0].min_cache_ttl='300'
+uci set dhcp.@dnsmasq[0].max_cache_ttl='1800'
+
 uci -q delete dhcp.@dnsmasq[0].server
-uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5053'
-uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5054'
-uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5055'
+
+# Основной DNS-сервер — Xray
+uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'
+
+# Резервный сервер на случай, если Xray не запущен
 uci add_list dhcp.@dnsmasq[0].server='77.88.8.8'
 uci commit dhcp
 
-# Добавляем к дефолту NextDNS и его bootstrap, а также включаем HTTP/3 и force IPv4 для всех резолверов
-uci add https-dns-proxy https-dns-proxy
-uci set https-dns-proxy.@https-dns-proxy[-1].listen_addr='127.0.0.1'
-uci set https-dns-proxy.@https-dns-proxy[-1].listen_port='5055'
-uci set https-dns-proxy.@https-dns-proxy[-1].resolver_url='https://dns.nextdns.io'
-uci set https-dns-proxy.@https-dns-proxy[-1].bootstrap_dns='45.90.28.0,45.90.30.0'
-uci set https-dns-proxy.@https-dns-proxy[0].tcp_client_limit='50'
-uci set https-dns-proxy.@https-dns-proxy[0].force_ipv4='1'
-uci set https-dns-proxy.@https-dns-proxy[1].force_ipv4='1'
-uci set https-dns-proxy.@https-dns-proxy[2].force_ipv4='1'
-uci commit https-dns-proxy
-
-echo "[+] DNS настроен"
+echo "[+] DNS настроен (dnsmasq → Xray:5353 + fallback 77.88.8.8)"
 
 # =============================================
 # 8. Создаём init.d для Xray
@@ -466,13 +463,13 @@ ASSET_DIR="/usr/share/xray"
 start_service() {
     # Разовая синхронизация времени
     ntpd -q -p 77.88.8.8 2>/dev/null || \
-    ntpd -q -p 1.1.1.1 2>/dev/null || \
+    ntpd -q -p 1.0.0.1 2>/dev/null || \
     logger -t xray "Time sync failed, continuing anyway"
     sleep 1
 	
 	# Ждём готовности сети (default route + DNS через resolveip -4 google.com)
     for i in $(seq 1 15); do
-        if ip route | grep -q default && resolveip -4 google.com >/dev/null 2>&1; then
+        if ip route | grep -q default && resolveip -4 google.com 77.88.8.8 >/dev/null 2>&1; then
             break
         fi
         logger -t xray "Waiting for network/DNS... ($i)"
@@ -623,11 +620,11 @@ update_geo() {
 
 # Вызовы
 update_geo \
-	"https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat" \
+	"https://raw.githubusercontent.com/kirilllavrov/geoip-builder/release/geoip.dat" \
 	"$GEO_DIR/geoip.dat"
 
 update_geo \
-	"https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat" \
+	"https://raw.githubusercontent.com/kirilllavrov/geosite-builder/release/geosite.dat" \
 	"$GEO_DIR/geosite.dat"
 
 # Генерируем HWID и сохраняем в файл
@@ -719,7 +716,6 @@ echo "14. Запускаем службы..."
 service cron restart
 service firewall restart
 service sqm restart
-service https-dns-proxy restart
 sleep 3
 service xray start
 sleep 3
