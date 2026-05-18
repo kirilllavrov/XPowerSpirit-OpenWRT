@@ -43,6 +43,15 @@ validate_len "$GUEST_SSID" 1 32
 validate_len "$HOME_PASS" 8 63
 validate_len "$GUEST_PASS" 8 63
 
+# === Проверка существования гостевой сети ===
+GUEST_EXISTS=0
+if uci -q get network.guest >/dev/null 2>&1; then
+	GUEST_EXISTS=1
+	echo "[+] Обнаружена гостевая сеть (network.guest), будет настроен Guest Wi-Fi"
+else
+	echo "[-] Гостевая сеть не найдена (network.guest отсутствует), Guest Wi-Fi не будет настроен"
+fi
+
 # === Очистка ===
 echo "Очистка существующих Wi-Fi интерфейсов..."
 while uci -q delete wireless.@wifi-iface[0]; do :; done
@@ -81,12 +90,9 @@ for RADIO in $(uci show wireless | sed -n 's/^wireless\.\([^=]*\)=wifi-device.*/
 	uci set wireless.${RADIO}.band="$CURRENT_BAND"
 
 	if [ "$CURRENT_BAND" = "2g" ]; then
-		uci set wireless.${RADIO}.htmode='HT20' # 2.4GHz — HT20 (стабильнее HT40)
+		uci set wireless.${RADIO}.htmode='HT20'
 	else
-		# 5GHz — HE80 (Wi-Fi 6) или VHT80 (Wi-Fi 5)
-		# Можно поменять на HE160, если устройство поддерживает и окружение чистое
 		uci -q set wireless.${RADIO}.htmode='HE80'
-		# uci -q set wireless.${RADIO}.htmode='HE160'   # ← раскомментировать при необходимости
 	fi
 
 done
@@ -109,21 +115,25 @@ for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-devic
 done
 uci commit wireless
 
-# === Guest Wi-Fi ===
-echo "Настройка Guest Wi-Fi..."
-for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-device.*/\2/p'); do
-	uci set wireless.guest_${RADIO}="wifi-iface"
-	uci set wireless.guest_${RADIO}.device="$RADIO"
-	uci set wireless.guest_${RADIO}.mode="ap"
-	uci set wireless.guest_${RADIO}.network="guest"
-	uci set wireless.guest_${RADIO}.ssid="$GUEST_SSID"
-	uci set wireless.guest_${RADIO}.encryption="sae-mixed"
-	uci set wireless.guest_${RADIO}.key="$GUEST_PASS"
-	uci set wireless.guest_${RADIO}.isolate="1"
-	uci set wireless.guest_${RADIO}.bridge_isolate="1"
-	uci set wireless.guest_${RADIO}.disabled="0"
-done
-uci commit wireless
+# === Guest Wi-Fi (только если существует гостевая сеть) ===
+if [ $GUEST_EXISTS -eq 1 ]; then
+	echo "Настройка Guest Wi-Fi..."
+	for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-device.*/\2/p'); do
+		uci set wireless.guest_${RADIO}="wifi-iface"
+		uci set wireless.guest_${RADIO}.device="$RADIO"
+		uci set wireless.guest_${RADIO}.mode="ap"
+		uci set wireless.guest_${RADIO}.network="guest"
+		uci set wireless.guest_${RADIO}.ssid="$GUEST_SSID"
+		uci set wireless.guest_${RADIO}.encryption="sae-mixed"
+		uci set wireless.guest_${RADIO}.key="$GUEST_PASS"
+		uci set wireless.guest_${RADIO}.isolate="1"
+		uci set wireless.guest_${RADIO}.bridge_isolate="1"
+		uci set wireless.guest_${RADIO}.disabled="0"
+	done
+	uci commit wireless
+else
+	echo "Пропускаем настройку Guest Wi-Fi (нет сети guest в /etc/config/network)"
+fi
 
 echo "  → Применяем изменения..."
 wifi reload
@@ -131,5 +141,9 @@ sleep 3
 
 echo "=== Wi-Fi успешно настроен ==="
 echo "Home  : $HOME_SSID"
-echo "Guest : $GUEST_SSID"
+if [ $GUEST_EXISTS -eq 1 ]; then
+	echo "Guest : $GUEST_SSID"
+else
+	echo "Guest : не настроен"
+fi
 echo "Режим : WPA2 + WPA3 (sae-mixed) | PMF Required"
