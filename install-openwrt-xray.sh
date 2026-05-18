@@ -1,5 +1,5 @@
 #!/bin/sh
-# OpenWrt 25.12.x — Xray TProxy
+# OpenWrt 25.12.x — Xray TProxy (IPv4-only) 
 
 # Логируем установку
 LOG_FILE="/tmp/xray_install.log"
@@ -29,25 +29,11 @@ STATE_DIR="/etc/xray/state"
 
 DWL_DOMAIN=""
 SUB_URL=""
-SETUP_GUEST=0
-
-
-LAN_IF="br-lan"
-WAN_IF="wan"
 
 GUEST_NET="guest"
 GUEST_IP="192.168.2.1"
 DL_GUEST="5120"
 UL_GUEST="5120"
-
-# PPPoE переменные
-SETUP_PPPOE=0
-PPPOE_DEVICE="wan"
-PPPOE_USERNAME=""
-PPPOE_PASSWORD=""
-PPPOE_KEEPALIVE="4 5"
-PPPOE_MTU="1492"
-PPPOE_IPV6="0"
 
 # Парсер аргументов
 for arg in "$@"; do
@@ -57,15 +43,6 @@ for arg in "$@"; do
 	--guest-ul=*) UL_GUEST="${arg#*=}" ;;
 	--sub=*) SUB_URL="${arg#*=}" ;;
 	--dwl=*) DWL_DOMAIN="${arg#*=}" ;;
-	--guest=1) SETUP_GUEST=1 ;;
-	--guest=0) SETUP_GUEST=0 ;;
-	--pppoe=1) SETUP_PPPOE=1 ;;
-	--pppoe-dev=*) PPPOE_DEVICE="${arg#*=}" ;;
-	--pppoe-user=*) PPPOE_USERNAME="${arg#*=}" ;;
-	--pppoe-pass=*) PPPOE_PASSWORD="${arg#*=}" ;;
-	--pppoe-keepalive=*) PPPOE_KEEPALIVE="${arg#*=}" ;;
-	--pppoe-mtu=*) PPPOE_MTU="${arg#*=}" ;;
-	--pppoe-ipv6=*) PPPOE_IPV6="${arg#*=}" ;;
 	*) echo "[!] Неизвестный аргумент: $arg" ;;
 	esac
 done
@@ -73,13 +50,14 @@ done
 # Создаём необходимые директории
 mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR"
 
-# Создаём директорию для nftables
+# Создаём директорию для https-dns-proxy, иначе ругается
 mkdir -p /usr/share/nftables.d/ruleset-post
 
 # =============================================
-# Функции загрузки
+# Единые функции загрузки (curl)
 # =============================================
 
+# Базовая загрузка файла
 fetch_url() {
 	local url="$1"
 	local dst="$2"
@@ -107,6 +85,7 @@ fetch_url() {
 	return 1
 }
 
+# Загрузка с кастомным заголовком (для подписки)
 fetch_url_with_header() {
 	local url="$1"
 	local dst="$2"
@@ -136,62 +115,23 @@ fetch_url_with_header() {
 }
 
 # =============================================
-# 0. Настройка PPPoE (опционально)
+# 1. Устанавливаем Timezone и синхронизируем время
 # =============================================
-if [ "$SETUP_PPPOE" -eq 1 ]; then
-	echo "0. Настройка PPPoE..."
-	
-	if [ -z "$PPPOE_USERNAME" ] || [ -z "$PPPOE_PASSWORD" ]; then
-		echo "  [X] Ошибка: для PPPoE нужно указать --pppoe-user и --pppoe-pass"
-		exit 1
-	fi
-	
-	# Установка пакетов PPPoE
-	echo "  → Устанавливаем пакеты для PPPoE..."
-	opkg update >/dev/null 2>&1
-	opkg install ppp kmod-pppoe ppp-mod-pppoe >/dev/null 2>&1
-	
-	# Настройка WAN интерфейса для PPPoE
-	uci set network.wan.proto='pppoe'
-	uci set network.wan.device="$PPPOE_DEVICE"
-	uci set network.wan.username="$PPPOE_USERNAME"
-	uci set network.wan.password="$PPPOE_PASSWORD"
-	uci set network.wan.keepalive="$PPPOE_KEEPALIVE"
-	uci set network.wan.mtu="$PPPOE_MTU"
-	uci set network.wan.defaultroute='1'
-	uci set network.wan.peerdns='1'
-	uci set network.wan.ipv6="$PPPOE_IPV6"
-	
-	uci commit network
-	
-	echo "  → Применяем настройки PPPoE..."
-	service network restart
-	sleep 5
-	
-	if ip link show pppoe-wan >/dev/null 2>&1; then
-		echo "  ✓ PPPoE подключён"
-	else
-		echo "  [X] PPPoE не подключился, проверьте логи: logread | grep pppd"
-		exit 1
-	fi
-else
-	echo "0. Пропускаем настройку PPPoE (используйте --pppoe=1 для включения)"
-fi
-
-# =============================================
-# 1. Timezone
-# =============================================
-echo "1. Устанавливаем Timezone..."
+echo "1. Устанавливаем Timezone и синхронизируем время..."
 uci set system.@system[0].zonename='Europe/Moscow'
 uci set system.@system[0].timezone='MSK-3'
 uci commit system
 
-ntpd -q -p 77.88.8.8 2>/dev/null || ntpd -q -p 1.1.1.1 2>/dev/null
+ntpd -q -p 77.88.8.8 2>/dev/null ||
+	ntpd -q -p 1.1.1.1 2>/dev/null ||
+	echo " [!] Синхронизация времени не удалась, продолжаем..."
+
+echo "[+] Timezone установлен в Europe/Moscow, время синхронизировано"
 
 # =============================================
-# 2. Подписка
+# 2. Просим подписку
 # =============================================
-echo "2. Сохраняем подписку..."
+echo "2. Просим подписку..."
 if [ -z "$SUB_URL" ]; then
 	echo "Ошибка: пустой URL (задайте через --sub=URL)"
 	exit 1
@@ -202,88 +142,127 @@ chmod 600 "$SUB_FILE"
 echo "[+] Подписка сохранена: $SUB_URL"
 
 # =============================================
-# 3. Отключаем IPv6 (экономия памяти на 256MB RAM)
+# 3. Отключаем IPv6
 # =============================================
-if [ "$PPPOE_IPV6" = "0" ]; then
-	echo "3. Отключаем IPv6 для экономии памяти..."
-	
-	uci set network.lan.ipv6='0'
-	uci set network.wan.ipv6='0'
-	uci set dhcp.lan.dhcpv6='disabled'
-	uci set dhcp.lan.ra='disabled'
-	uci -q delete network.wan6
-	uci commit network
-	uci commit dhcp
-	
-	/etc/init.d/odhcpd stop 2>/dev/null || true
-	/etc/init.d/odhcpd disable 2>/dev/null || true
-	
-	service network restart
-	sleep 3
-	echo "[+] IPv6 отключён"
-fi
+echo "3. Отключаем IPv6..."
+
+uci set network.lan.ipv6='0'
+uci set network.wan.ipv6='0'
+uci set dhcp.lan.dhcpv6='disabled'
+uci set dhcp.lan.ra='disabled'
+uci -q delete network.wan6
+uci commit network
+uci commit dhcp
+
+/etc/init.d/odhcpd stop 2>/dev/null || true
+/etc/init.d/odhcpd disable 2>/dev/null || true
+
+service network restart
+sleep 3
+for i in $(seq 1 10); do
+	ip link show br-lan >/dev/null 2>&1 && break
+	sleep 1
+done
+
+echo "[+] IPv6 отключён"
 
 # =============================================
-# 4. Гостевая сеть (опционально)
+# 4. Настраиваем гостевую сеть и лимиты скорости
 # =============================================
-if [ "$SETUP_GUEST" -eq 1 ]; then
-	echo "4. Настройка Guest Network"
+echo "4. Настройка Guest Network и SQM:"
 
-	# Guest Bridge
-	uci -q delete network.${GUEST_NET}_dev
-	uci set network.${GUEST_NET}_dev="device"
-	uci set network.${GUEST_NET}_dev.type="bridge"
-	uci set network.${GUEST_NET}_dev.name="br-${GUEST_NET}"
-	uci set network.${GUEST_NET}_dev.bridge_empty="1"
+# 4.1. Guest Bridge + Interface
+uci -q delete network.${GUEST_NET}_dev
+uci set network.${GUEST_NET}_dev="device"
+uci set network.${GUEST_NET}_dev.type="bridge"
+uci set network.${GUEST_NET}_dev.name="br-${GUEST_NET}"
+uci set network.${GUEST_NET}_dev.bridge_empty="1"
+uci set network.${GUEST_NET}_dev.mtu="1500"
 
-	uci -q delete network.$GUEST_NET
-	uci set network.$GUEST_NET="interface"
-	uci set network.$GUEST_NET.proto="static"
-	uci set network.$GUEST_NET.device="br-${GUEST_NET}"
-	uci set network.$GUEST_NET.ipaddr="$GUEST_IP"
-	uci set network.$GUEST_NET.netmask="255.255.255.0"
-	uci commit network
+uci -q delete network.$GUEST_NET
+uci set network.$GUEST_NET="interface"
+uci set network.$GUEST_NET.proto="static"
+uci set network.$GUEST_NET.device="br-${GUEST_NET}"
+uci set network.$GUEST_NET.ipaddr="$GUEST_IP"
+uci set network.$GUEST_NET.netmask="255.255.255.0"
+uci set network.$GUEST_NET.force_link="1"
+uci commit network
+echo "  → Guest Bridge + Interface настроены: br-${GUEST_NET} (${GUEST_IP}/24)"
 
-	# DHCP Guest
-	uci -q delete dhcp.$GUEST_NET
-	uci set dhcp.$GUEST_NET="dhcp"
-	uci set dhcp.$GUEST_NET.interface="$GUEST_NET"
-	uci set dhcp.$GUEST_NET.start="100"
-	uci set dhcp.$GUEST_NET.limit="150"
-	uci set dhcp.$GUEST_NET.leasetime="12h"
-	uci commit dhcp
+# 4.2. DHCP Guest
+uci -q delete dhcp.$GUEST_NET
+uci set dhcp.$GUEST_NET="dhcp"
+uci set dhcp.$GUEST_NET.interface="$GUEST_NET"
+uci set dhcp.$GUEST_NET.start="100"
+uci set dhcp.$GUEST_NET.limit="150"
+uci set dhcp.$GUEST_NET.leasetime="12h"
+uci set dhcp.$GUEST_NET.force="1"
+uci set dhcp.$GUEST_NET.ignore="0"
+uci commit dhcp
+echo "  → DHCP для Guest настроен: $GUEST_NET"
 
-	# Firewall Guest Zone
-	uci -q delete firewall.$GUEST_NET
-	uci set firewall.$GUEST_NET="zone"
-	uci set firewall.$GUEST_NET.name="$GUEST_NET"
-	uci set firewall.$GUEST_NET.network="$GUEST_NET"
-	uci set firewall.$GUEST_NET.input="REJECT"
-	uci set firewall.$GUEST_NET.output="ACCEPT"
-	uci set firewall.$GUEST_NET.forward="REJECT"
-	uci set firewall.$GUEST_NET.masq="1"
+# 4.3. Firewall Guest Zone + Rules
+uci -q delete firewall.$GUEST_NET
+uci set firewall.$GUEST_NET="zone"
+uci set firewall.$GUEST_NET.name="$GUEST_NET"
+uci set firewall.$GUEST_NET.network="$GUEST_NET"
+uci set firewall.$GUEST_NET.input="REJECT"
+uci set firewall.$GUEST_NET.output="ACCEPT"
+uci set firewall.$GUEST_NET.forward="REJECT"
+uci set firewall.$GUEST_NET.masq="1"
+uci set firewall.$GUEST_NET.mtu_fix="1"
+echo "  → Firewall зона для Guest создана: $GUEST_NET"
 
-	# Firewall правила
-	uci -q delete firewall.${GUEST_NET}_dns
-	uci set firewall.${GUEST_NET}_dns="rule"
-	uci set firewall.${GUEST_NET}_dns.name="Allow-DNS-Guest"
-	uci set firewall.${GUEST_NET}_dns.src="$GUEST_NET"
-	uci set firewall.${GUEST_NET}_dns.dest_port="53"
-	uci set firewall.${GUEST_NET}_dns.proto="tcp udp"
-	uci set firewall.${GUEST_NET}_dns.target="ACCEPT"
+# 4.4 Firewall DNS
+uci -q delete firewall.${GUEST_NET}_dns
+uci set firewall.${GUEST_NET}_dns="rule"
+uci set firewall.${GUEST_NET}_dns.name="Allow-DNS-Guest"
+uci set firewall.${GUEST_NET}_dns.src="$GUEST_NET"
+uci set firewall.${GUEST_NET}_dns.dest_port="53"
+uci set firewall.${GUEST_NET}_dns.proto="tcp udp"
+uci set firewall.${GUEST_NET}_dns.target="ACCEPT"
+echo "  → Firewall правило для DNS создано: $GUEST_NET"
 
-	uci -q delete firewall.${GUEST_NET}_wan
-	uci set firewall.${GUEST_NET}_wan="forwarding"
-	uci set firewall.${GUEST_NET}_wan.src="$GUEST_NET"
-	uci set firewall.${GUEST_NET}_wan.dest="wan"
-	uci commit firewall
+# 4.5 Firewall DHCP
+uci -q delete firewall.${GUEST_NET}_dhcp
+uci set firewall.${GUEST_NET}_dhcp="rule"
+uci set firewall.${GUEST_NET}_dhcp.name="Allow-DHCP-Guest"
+uci set firewall.${GUEST_NET}_dhcp.src="$GUEST_NET"
+uci set firewall.${GUEST_NET}_dhcp.dest_port="67-68"
+uci set firewall.${GUEST_NET}_dhcp.proto="udp"
+uci set firewall.${GUEST_NET}_dhcp.target="ACCEPT"
+echo "  → Firewall правило для DHCP создано: $GUEST_NET"
 
-	service network restart
-	sleep 3
-	service firewall restart
+# 4.6 Forward to WAN
+uci -q delete firewall.${GUEST_NET}_wan
+uci set firewall.${GUEST_NET}_wan="forwarding"
+uci set firewall.${GUEST_NET}_wan.src="$GUEST_NET"
+uci set firewall.${GUEST_NET}_wan.dest="wan"
+uci commit firewall
+echo "  → Firewall правило для доступа Guest в WAN создано: $GUEST_NET → wan"
 
-	echo "[+] Guest Network настроена: ${GUEST_IP}/24"
-fi
+# 4.7 Настраиваем SQM только для Guest
+uci -q delete sqm.$GUEST_NET
+uci set sqm.$GUEST_NET="queue"
+uci set sqm.$GUEST_NET.interface="br-${GUEST_NET}"
+uci set sqm.$GUEST_NET.download="$DL_GUEST"
+uci set sqm.$GUEST_NET.upload="$UL_GUEST"
+uci set sqm.$GUEST_NET.qdisc="cake"
+uci set sqm.$GUEST_NET.script="piece_of_cake.qos"
+uci set sqm.$GUEST_NET.enabled="1"
+uci commit sqm
+echo "  → SQM настроен для Guest: ${DL_GUEST}kbps down / ${UL_GUEST}kbps up"
+
+echo "Применяем сетевые изменения..."
+service network restart
+sleep 5
+for i in $(seq 1 10); do
+	ip link show br-guest >/dev/null 2>&1 && break
+	sleep 1
+done
+service firewall restart
+
+echo "[+] Настройка Guest Network и SQM завершена"
 
 # =============================================
 # 5. Установка Xray из GitHub
@@ -411,17 +390,19 @@ else
 fi
 
 # =============================================
-# 6. Загрузка скриптов
+# 6. Загружаем скрипты из репозитория
 # =============================================
-echo "6. Загружаем скрипты..."
+echo "6. Загружаем скрипты из репозитория..."
 
 download() {
 	local url="$1"
 	local dst="$2"
+
 	if fetch_url "$url" "$dst"; then
 		chmod +x "$dst"
+		echo "  → $dst"
 	else
-		echo "  [X] Ошибка: $dst"
+		echo "  [X] Ошибка: не удалось скачать $dst"
 		exit 1
 	fi
 }
@@ -431,28 +412,46 @@ download "$REPO/xray-sub-parser.py" "$PARSER"
 download "$REPO/update-xray.sh" "$UPDATER"
 download "$REPO/update-nft.sh" "$NFT_UPDATER"
 
+# Если задан домен для whitelist — вставляем его в генератор
 if [ -n "$DWL_DOMAIN" ]; then
+	echo "  → Добавляем домен в whitelist: $DWL_DOMAIN"
 	sed -i "s/DOMAIN_WHITELIST = \[/DOMAIN_WHITELIST = [\n    \"$DWL_DOMAIN\",/" "$GENERATOR"
 fi
 
+echo "[+] Все скрипты загружены и готовы к использованию"
+
 # =============================================
-# 7. DNS (dnsmasq → Xray)
+# 7. Настройка DNS через DoH (dnsmasq + https-dns-proxy)
 # =============================================
-echo "7. Настраиваем DNS..."
+echo "7. Настраиваем DNS (dnsmasq + https-dns-proxy)..."
 
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci set dhcp.@dnsmasq[0].strictorder='1'
-uci set dhcp.@dnsmasq[0].cachesize='1000'
-
 uci -q delete dhcp.@dnsmasq[0].server
-uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'
+uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5053'
+uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5054'
+uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5055'
 uci add_list dhcp.@dnsmasq[0].server='77.88.8.8'
 uci commit dhcp
 
+# Добавляем к дефолту NextDNS и его bootstrap, а также включаем HTTP/3 и force IPv4 для всех резолверов
+uci add https-dns-proxy https-dns-proxy
+uci set https-dns-proxy.@https-dns-proxy[-1].listen_addr='127.0.0.1'
+uci set https-dns-proxy.@https-dns-proxy[-1].listen_port='5055'
+uci set https-dns-proxy.@https-dns-proxy[-1].resolver_url='https://dns.nextdns.io'
+uci set https-dns-proxy.@https-dns-proxy[-1].bootstrap_dns='45.90.28.0,45.90.30.0'
+uci set https-dns-proxy.@https-dns-proxy[0].tcp_client_limit='50'
+uci set https-dns-proxy.@https-dns-proxy[0].force_ipv4='1'
+uci set https-dns-proxy.@https-dns-proxy[1].force_ipv4='1'
+uci set https-dns-proxy.@https-dns-proxy[2].force_ipv4='1'
+uci commit https-dns-proxy
+
+echo "[+] DNS настроен"
+
 # =============================================
-# 8. init.d для Xray
+# 8. Создаём init.d для Xray
 # =============================================
-echo "8. Создаём init.d..."
+echo "8. Создаём init.d для Xray..."
 
 cat >/etc/init.d/xray <<'XRAYEOF'
 #!/bin/sh /etc/rc.common
@@ -465,59 +464,80 @@ CONF="/etc/xray/config.json"
 ASSET_DIR="/usr/share/xray"
 
 start_service() {
-    ntpd -q -p 77.88.8.8 2>/dev/null || true
+    # Разовая синхронизация времени
+    ntpd -q -p 77.88.8.8 2>/dev/null || \
+    ntpd -q -p 1.1.1.1 2>/dev/null || \
+    logger -t xray "Time sync failed, continuing anyway"
     sleep 1
 	
+	# Ждём готовности сети (default route + DNS через resolveip -4 google.com)
     for i in $(seq 1 15); do
-        if ip route | grep -q default; then
+        if ip route | grep -q default && resolveip -4 google.com >/dev/null 2>&1; then
             break
         fi
+        logger -t xray "Waiting for network/DNS... ($i)"
         sleep 2
     done
 
+    # Проверка geodata
     if [ ! -s "$ASSET_DIR/geoip.dat" ] || [ ! -s "$ASSET_DIR/geosite.dat" ]; then
-        logger -t xray "Geo assets missing"
+        logger -t xray "Geo assets missing — run update-xray.sh"
         return 1
     fi
 
+    # Проверка валидности config.json
     if ! xray run -test -config "$CONF" >/dev/null 2>&1; then
-        logger -t xray "Invalid config"
+        logger -t xray "Invalid config.json"
         return 1
     fi
 
+    # Настройка сети с помощью update-nft.sh
     /usr/share/xray/update-nft.sh || return 1
 
+    # Запуск Xray через procd
     procd_open_instance "xray"
     procd_set_param command /usr/bin/xray run -config "$CONF"
     procd_set_param env XRAY_LOCATION_ASSET="$ASSET_DIR"
     procd_set_param stdout 1
     procd_set_param stderr 1
     procd_set_param respawn 3600 5 5
+    procd_set_param limits core="unlimited"
+    procd_set_param limits nofile="1000000 1000000"
+    procd_set_param file "$CONF"
     procd_close_instance
 
+    # Если Xray не стартовал → отключить TProxy
     sleep 1
     if ! pidof xray >/dev/null; then
+        logger -t xray "Xray failed to start — disabling TProxy"
         nft delete table inet xray 2>/dev/null
         while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
         ip route flush table 100 2>/dev/null
         return 1
     fi
 
-    logger -t xray "Xray started"
+    logger -t xray "Xray started successfully"
 }
 
 stop_service() {
     nft delete table inet xray 2>/dev/null
     while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
     ip route flush table 100 2>/dev/null
+    logger -t xray "Stopped, network cleaned"
+}
+
+service_triggers() {
+    procd_add_reload_trigger "xray"
 }
 XRAYEOF
 
 chmod +x /etc/init.d/xray
 /etc/init.d/xray enable
 
+echo "[+] init.d для Xray создан и включён"
+
 # =============================================
-# 9. Routing
+# 9. Настраиваем routing
 # =============================================
 echo "9. Настраиваем routing..."
 
@@ -525,80 +545,161 @@ if ! grep -q "^100[[:space:]]\+xray$" /etc/iproute2/rt_tables; then
 	echo "100 xray" >>/etc/iproute2/rt_tables
 fi
 
-# =============================================
-# 10. Sysctl
-# =============================================
-echo "10. Настраиваем sysctl..."
+echo "[+] Routing настроен"
 
+# =============================================
+# 10. Настраиваем sysctl
+# =============================================
+echo "10. Настраиваем sysctl:"
+
+# Применяем немедленно
 sysctl -w net.ipv4.conf.all.route_localnet=1
 sysctl -w net.ipv4.ip_forward=1
 
+# Создаём постоянный конфиг (всегда перезаписываем)
 cat >"/etc/sysctl.d/99-xray.conf" <<EOF
 net.ipv4.conf.all.route_localnet=1
 net.ipv4.ip_forward=1
 EOF
+sysctl -p /etc/sysctl.d/99-xray.conf >/dev/null 2>&1
+
+echo "[+] Sysctl настроен"
 
 # =============================================
 # 11. Geo + HWID + config.json
 # =============================================
-echo "11. Скачиваем геофайлы и генерируем конфиг..."
+echo "11. Скачиваем геофайлы, делаем HWID, генерируем config.json..."
 
 update_geo() {
 	local URL="$1"
 	local DEST="$2"
-	local TMP="/tmp/$(basename "$DEST").tmp"
-	
-	fetch_url "$URL" "$TMP" || return 1
+
+	local BASE="$(basename "$DEST")"
+	local TMP="/tmp/$BASE.tmp"
+	local TMP_SHA="/tmp/$BASE.sha256"
+	local SHA_FILE="${STATE_DIR}/${BASE}.sha256sum"
+
+	echo "  → Скачиваем $BASE"
+
+	# Скачиваем SHA256
+	fetch_url "${URL}.sha256sum" "$TMP_SHA" || {
+		echo "  [X] Не удалось получить SHA256 для $BASE" >>"$LOG_FILE"
+		exit 1
+	}
+	REMOTE_SHA="$(cut -d' ' -f1 "$TMP_SHA")"
+
+	if [ -z "$REMOTE_SHA" ]; then
+		echo "  [X] Не удалось получить SHA256 для $BASE" >>"$LOG_FILE"
+		exit 1
+	fi
+
+	# Скачиваем сам файл во временное место
+	fetch_url "$URL" "$TMP" || {
+		echo "  [X] Не удалось скачать $BASE" >>"$LOG_FILE"
+		exit 1
+	}
+
+	# Считаем локальный SHA256
+	LOCAL_SHA="$(sha256sum "$TMP" | awk '{print $1}')"
+
+	# Проверяем совпадение
+	if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
+		echo "  [X] SHA не совпадает для $BASE" >>"$LOG_FILE"
+		echo "ожидаемый: $REMOTE_SHA" >>"$LOG_FILE"
+		echo "фактический:   $LOCAL_SHA" >>"$LOG_FILE"
+		rm -f "$TMP" "$TMP_SHA"
+		exit 1
+	fi
+
+	# Атомарная замена
 	mv "$TMP" "$DEST"
-	echo "  ✓ $(basename "$DEST")"
+
+	# Сохраняем SHA в state (для будущих обновлений)
+	echo "$REMOTE_SHA" >"$SHA_FILE"
+
+	echo "  ✓ $BASE скачан и проверен" >>"$LOG_FILE"
+	echo "  ✓ $BASE скачан и проверен"
 }
 
+# Вызовы
 update_geo \
-	"https://raw.githubusercontent.com/kirilllavrov/geoip-builder/release/geoip.dat" \
+	"https://cdn.jsdelivr.net/gh/kirilllavrov/geoip-builder@release/geoip.dat" \
 	"$GEO_DIR/geoip.dat"
 
 update_geo \
-	"https://raw.githubusercontent.com/kirilllavrov/geosite-builder/release/geosite.dat" \
+	"https://cdn.jsdelivr.net/gh/kirilllavrov/geosite-builder@release/geosite.dat" \
 	"$GEO_DIR/geosite.dat"
 
+# Генерируем HWID и сохраняем в файл
+echo "  → Генерируем HWID..."
 HWID="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
 echo "$HWID" >"$HWID_FILE"
 chmod 600 "$HWID_FILE"
+echo "  ✓ HWID сохранён: $HWID"
 
-echo "  → Генерируем config.json..."
+# Генерация config.json
+echo "  → Генерируем config.json из подписки..."
 if fetch_url_with_header "$SUB_URL" "/tmp/sub_raw.txt" "x-hwid: $HWID"; then
-	python3 "$PARSER" <"/tmp/sub_raw.txt" >"/tmp/parsed_outbounds.json"
-	python3 "$GENERATOR" --output "$CONFIG_JSON" <"/tmp/parsed_outbounds.json"
+	python3 "$PARSER" <"/tmp/sub_raw.txt" >"/tmp/parsed_outbounds.json" || {
+		echo "  [X] Ошибка парсера подписки"
+		rm -f "/tmp/sub_raw.txt"
+		exit 1
+	}
+	python3 "$GENERATOR" --output "$CONFIG_JSON" <"/tmp/parsed_outbounds.json" || {
+		echo "  [X] Ошибка генератора конфига"
+		rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
+		exit 1
+	}
 	rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
 else
-	echo "  [X] Ошибка загрузки подписки"
+	echo "  [X] Не удалось скачать подписку"
 	exit 1
 fi
 
+if [ ! -s "$CONFIG_JSON" ]; then
+	echo "  [X] Ошибка: не удалось создать config.json" >>"$LOG_FILE"
+	exit 1
+fi
+echo "  ✓ config.json создан"
+echo ""
+echo "[+] Геофайлы загружены, конфиг сгенерирован"
+
 # =============================================
-# 12. Cron
+# 12. Cron: автообновление в 2.30 ночи
 # =============================================
-echo "12. Настройка cron..."
+echo "12. Настройка Crontab..."
+
+uci set system.@system[0].cronloglevel='9'
+uci commit system
 
 CRON_ENTRY="30 2 * * * $UPDATER"
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
-	(crontab -l 2>/dev/null || true; echo "$CRON_ENTRY") | crontab -
+	(
+		crontab -l 2>/dev/null || true
+		echo "$CRON_ENTRY"
+	) | crontab -
+	echo "[+] Cron-задача для обновления Xray добавлена: $CRON_ENTRY"
+else
+	echo "[-] Cron-задача уже существует, пропускаем"
 fi
 
 # =============================================
-# 13. Hotplug
+# 13. Настройка hotplug (автообновление после включения WAN)
 # =============================================
+echo "13. Настройка hotplug..."
+
 cat >/etc/hotplug.d/iface/99-xray-autoupdate <<'EOF'
 #!/bin/sh
 [ "$ACTION" = "ifup" ] || exit 0
 [ "$INTERFACE" = "wan" ] || exit 0
 
+# Если Xray не запущен — запускаем и даём время подняться
 if ! pidof xray >/dev/null; then
     /etc/init.d/xray start
     sleep 5
 fi
 
-for i in 1 2 3 4 5; do
+for i in 1 2 3 4 5 6 7; do
     sleep 5
     if curl -fs --max-time 3 https://www.google.com/gen_204 >/dev/null; then
         /usr/share/xray/update-xray.sh &
@@ -608,39 +709,43 @@ done
 EOF
 
 chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
+echo "[+] Hotplug для автообновления после включения WAN настроен"
 
 # =============================================
-# 14. Запуск
+# 14. Запуск и рестарт служб
 # =============================================
 echo "14. Запускаем службы..."
 
 service cron restart
 service firewall restart
-sleep 2
+service sqm restart
+service https-dns-proxy restart
+sleep 3
 service xray start
 sleep 3
 service dnsmasq restart
 
-# =============================================
-# 15. Проверка
-# =============================================
-echo "15. Проверка установки..."
+echo "[+] Службы запущены"
 
+sleep 3
+
+# =============================================
+# 15. Проверяем что у нас Xray запущен и config.json валидный
+# =============================================
+echo "15. Проверяем config.json для Xray на валидность..."
 if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
-	echo "  ✓ config.json валиден"
+	echo "  ✓ "$CONFIG_JSON" прошел проверку"
 else
-	echo "  [X] config.json невалиден"
+	echo "  [X] "$CONFIG_JSON" НЕ прошел проверку!"
+	exit 1
 fi
 
-if pgrep xray >/dev/null; then
+echo "  → Проверяем, запущен ли Xray:"
+if pgrep -a xray >/dev/null; then
 	echo "  ✓ Xray запущен"
 else
-	echo "  [X] Xray не запущен"
+	echo "  [X] Xray НЕ запущен"
 fi
 
 echo ""
 echo "=== Установка завершена ==="
-echo "LAN IP: 192.168.1.1"
-echo "Xray: порт 12345 (TProxy)"
-[ "$SETUP_GUEST" -eq 1 ] && echo "Guest Network: $GUEST_IP/24"
-[ "$SETUP_PPPOE" -eq 1 ] && echo "PPPoE: $PPPOE_USERNAME@$PPPOE_DEVICE"
