@@ -29,6 +29,7 @@ STATE_DIR="/etc/xray/state"
 
 DWL_DOMAIN=""
 SUB_URL=""
+SETUP_GUEST=0
 
 GUEST_NET="guest"
 GUEST_IP="192.168.2.1"
@@ -43,6 +44,8 @@ for arg in "$@"; do
 	--guest-ul=*) UL_GUEST="${arg#*=}" ;;
 	--sub=*) SUB_URL="${arg#*=}" ;;
 	--dwl=*) DWL_DOMAIN="${arg#*=}" ;;
+	--guest=1) SETUP_GUEST=1 ;;
+	--guest=0) SETUP_GUEST=0 ;;
 	*) echo "[!] Неизвестный аргумент: $arg" ;;
 	esac
 done
@@ -167,102 +170,106 @@ done
 echo "[+] IPv6 отключён"
 
 # =============================================
-# 4. Настраиваем гостевую сеть и лимиты скорости
+# 4. Настраиваем гостевую сеть и лимиты скорости (опционально)
 # =============================================
-echo "4. Настройка Guest Network и SQM:"
+if [ "$SETUP_GUEST" -eq 1 ]; then
+	echo "4. Настройка Guest Network и SQM:"
 
-# 4.1. Guest Bridge + Interface
-uci -q delete network.${GUEST_NET}_dev
-uci set network.${GUEST_NET}_dev="device"
-uci set network.${GUEST_NET}_dev.type="bridge"
-uci set network.${GUEST_NET}_dev.name="br-${GUEST_NET}"
-uci set network.${GUEST_NET}_dev.bridge_empty="1"
-uci set network.${GUEST_NET}_dev.mtu="1500"
+	# 4.1. Guest Bridge + Interface
+	uci -q delete network.${GUEST_NET}_dev
+	uci set network.${GUEST_NET}_dev="device"
+	uci set network.${GUEST_NET}_dev.type="bridge"
+	uci set network.${GUEST_NET}_dev.name="br-${GUEST_NET}"
+	uci set network.${GUEST_NET}_dev.bridge_empty="1"
+	uci set network.${GUEST_NET}_dev.mtu="1500"
 
-uci -q delete network.$GUEST_NET
-uci set network.$GUEST_NET="interface"
-uci set network.$GUEST_NET.proto="static"
-uci set network.$GUEST_NET.device="br-${GUEST_NET}"
-uci set network.$GUEST_NET.ipaddr="$GUEST_IP"
-uci set network.$GUEST_NET.netmask="255.255.255.0"
-uci set network.$GUEST_NET.force_link="1"
-uci commit network
-echo "  → Guest Bridge + Interface настроены: br-${GUEST_NET} (${GUEST_IP}/24)"
+	uci -q delete network.$GUEST_NET
+	uci set network.$GUEST_NET="interface"
+	uci set network.$GUEST_NET.proto="static"
+	uci set network.$GUEST_NET.device="br-${GUEST_NET}"
+	uci set network.$GUEST_NET.ipaddr="$GUEST_IP"
+	uci set network.$GUEST_NET.netmask="255.255.255.0"
+	uci set network.$GUEST_NET.force_link="1"
+	uci commit network
+	echo "  → Guest Bridge + Interface настроены: br-${GUEST_NET} (${GUEST_IP}/24)"
 
-# 4.2. DHCP Guest
-uci -q delete dhcp.$GUEST_NET
-uci set dhcp.$GUEST_NET="dhcp"
-uci set dhcp.$GUEST_NET.interface="$GUEST_NET"
-uci set dhcp.$GUEST_NET.start="100"
-uci set dhcp.$GUEST_NET.limit="150"
-uci set dhcp.$GUEST_NET.leasetime="12h"
-uci set dhcp.$GUEST_NET.force="1"
-uci set dhcp.$GUEST_NET.ignore="0"
-uci commit dhcp
-echo "  → DHCP для Guest настроен: $GUEST_NET"
+	# 4.2. DHCP Guest
+	uci -q delete dhcp.$GUEST_NET
+	uci set dhcp.$GUEST_NET="dhcp"
+	uci set dhcp.$GUEST_NET.interface="$GUEST_NET"
+	uci set dhcp.$GUEST_NET.start="100"
+	uci set dhcp.$GUEST_NET.limit="150"
+	uci set dhcp.$GUEST_NET.leasetime="12h"
+	uci set dhcp.$GUEST_NET.force="1"
+	uci set dhcp.$GUEST_NET.ignore="0"
+	uci commit dhcp
+	echo "  → DHCP для Guest настроен: $GUEST_NET"
 
-# 4.3. Firewall Guest Zone + Rules
-uci -q delete firewall.$GUEST_NET
-uci set firewall.$GUEST_NET="zone"
-uci set firewall.$GUEST_NET.name="$GUEST_NET"
-uci set firewall.$GUEST_NET.network="$GUEST_NET"
-uci set firewall.$GUEST_NET.input="REJECT"
-uci set firewall.$GUEST_NET.output="ACCEPT"
-uci set firewall.$GUEST_NET.forward="REJECT"
-uci set firewall.$GUEST_NET.masq="1"
-uci set firewall.$GUEST_NET.mtu_fix="1"
-echo "  → Firewall зона для Guest создана: $GUEST_NET"
+	# 4.3. Firewall Guest Zone + Rules
+	uci -q delete firewall.$GUEST_NET
+	uci set firewall.$GUEST_NET="zone"
+	uci set firewall.$GUEST_NET.name="$GUEST_NET"
+	uci set firewall.$GUEST_NET.network="$GUEST_NET"
+	uci set firewall.$GUEST_NET.input="REJECT"
+	uci set firewall.$GUEST_NET.output="ACCEPT"
+	uci set firewall.$GUEST_NET.forward="REJECT"
+	uci set firewall.$GUEST_NET.masq="1"
+	uci set firewall.$GUEST_NET.mtu_fix="1"
+	echo "  → Firewall зона для Guest создана: $GUEST_NET"
 
-# 4.4 Firewall DNS
-uci -q delete firewall.${GUEST_NET}_dns
-uci set firewall.${GUEST_NET}_dns="rule"
-uci set firewall.${GUEST_NET}_dns.name="Allow-DNS-Guest"
-uci set firewall.${GUEST_NET}_dns.src="$GUEST_NET"
-uci set firewall.${GUEST_NET}_dns.dest_port="53"
-uci set firewall.${GUEST_NET}_dns.proto="tcp udp"
-uci set firewall.${GUEST_NET}_dns.target="ACCEPT"
-echo "  → Firewall правило для DNS создано: $GUEST_NET"
+	# 4.4 Firewall DNS
+	uci -q delete firewall.${GUEST_NET}_dns
+	uci set firewall.${GUEST_NET}_dns="rule"
+	uci set firewall.${GUEST_NET}_dns.name="Allow-DNS-Guest"
+	uci set firewall.${GUEST_NET}_dns.src="$GUEST_NET"
+	uci set firewall.${GUEST_NET}_dns.dest_port="53"
+	uci set firewall.${GUEST_NET}_dns.proto="tcp udp"
+	uci set firewall.${GUEST_NET}_dns.target="ACCEPT"
+	echo "  → Firewall правило для DNS создано: $GUEST_NET"
 
-# 4.5 Firewall DHCP
-uci -q delete firewall.${GUEST_NET}_dhcp
-uci set firewall.${GUEST_NET}_dhcp="rule"
-uci set firewall.${GUEST_NET}_dhcp.name="Allow-DHCP-Guest"
-uci set firewall.${GUEST_NET}_dhcp.src="$GUEST_NET"
-uci set firewall.${GUEST_NET}_dhcp.dest_port="67-68"
-uci set firewall.${GUEST_NET}_dhcp.proto="udp"
-uci set firewall.${GUEST_NET}_dhcp.target="ACCEPT"
-echo "  → Firewall правило для DHCP создано: $GUEST_NET"
+	# 4.5 Firewall DHCP
+	uci -q delete firewall.${GUEST_NET}_dhcp
+	uci set firewall.${GUEST_NET}_dhcp="rule"
+	uci set firewall.${GUEST_NET}_dhcp.name="Allow-DHCP-Guest"
+	uci set firewall.${GUEST_NET}_dhcp.src="$GUEST_NET"
+	uci set firewall.${GUEST_NET}_dhcp.dest_port="67-68"
+	uci set firewall.${GUEST_NET}_dhcp.proto="udp"
+	uci set firewall.${GUEST_NET}_dhcp.target="ACCEPT"
+	echo "  → Firewall правило для DHCP создано: $GUEST_NET"
 
-# 4.6 Forward to WAN
-uci -q delete firewall.${GUEST_NET}_wan
-uci set firewall.${GUEST_NET}_wan="forwarding"
-uci set firewall.${GUEST_NET}_wan.src="$GUEST_NET"
-uci set firewall.${GUEST_NET}_wan.dest="wan"
-uci commit firewall
-echo "  → Firewall правило для доступа Guest в WAN создано: $GUEST_NET → wan"
+	# 4.6 Forward to WAN
+	uci -q delete firewall.${GUEST_NET}_wan
+	uci set firewall.${GUEST_NET}_wan="forwarding"
+	uci set firewall.${GUEST_NET}_wan.src="$GUEST_NET"
+	uci set firewall.${GUEST_NET}_wan.dest="wan"
+	uci commit firewall
+	echo "  → Firewall правило для доступа Guest в WAN создано: $GUEST_NET → wan"
 
-# 4.7 Настраиваем SQM только для Guest
-uci -q delete sqm.$GUEST_NET
-uci set sqm.$GUEST_NET="queue"
-uci set sqm.$GUEST_NET.interface="br-${GUEST_NET}"
-uci set sqm.$GUEST_NET.download="$DL_GUEST"
-uci set sqm.$GUEST_NET.upload="$UL_GUEST"
-uci set sqm.$GUEST_NET.qdisc="cake"
-uci set sqm.$GUEST_NET.script="piece_of_cake.qos"
-uci set sqm.$GUEST_NET.enabled="1"
-uci commit sqm
-echo "  → SQM настроен для Guest: ${DL_GUEST}kbps down / ${UL_GUEST}kbps up"
+	# 4.7 Настраиваем SQM только для Guest
+	uci -q delete sqm.$GUEST_NET
+	uci set sqm.$GUEST_NET="queue"
+	uci set sqm.$GUEST_NET.interface="br-${GUEST_NET}"
+	uci set sqm.$GUEST_NET.download="$DL_GUEST"
+	uci set sqm.$GUEST_NET.upload="$UL_GUEST"
+	uci set sqm.$GUEST_NET.qdisc="cake"
+	uci set sqm.$GUEST_NET.script="piece_of_cake.qos"
+	uci set sqm.$GUEST_NET.enabled="1"
+	uci commit sqm
+	echo "  → SQM настроен для Guest: ${DL_GUEST}kbps down / ${UL_GUEST}kbps up"
 
-echo "Применяем сетевые изменения..."
-service network restart
-sleep 5
-for i in $(seq 1 10); do
-	ip link show br-guest >/dev/null 2>&1 && break
-	sleep 1
-done
-service firewall restart
+	echo "Применяем сетевые изменения..."
+	service network restart
+	sleep 5
+	for i in $(seq 1 10); do
+		ip link show br-guest >/dev/null 2>&1 && break
+		sleep 1
+	done
+	service firewall restart
 
-echo "[+] Настройка Guest Network и SQM завершена"
+	echo "[+] Настройка Guest Network и SQM завершена"
+else
+	echo "4. Пропускаем настройку Guest Network (--guest=0 или не указан)"
+fi
 
 # =============================================
 # 5. Установка Xray из GitHub
@@ -715,7 +722,12 @@ echo "14. Запускаем службы..."
 
 service cron restart
 service firewall restart
-service sqm restart
+
+# Перезапускаем SQM только если настраивали гостевую сеть
+if [ "$SETUP_GUEST" -eq 1 ]; then
+	service sqm restart
+fi
+
 sleep 3
 service xray start
 sleep 3
@@ -730,9 +742,9 @@ sleep 3
 # =============================================
 echo "15. Проверяем config.json для Xray на валидность..."
 if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
-	echo "  ✓ "$CONFIG_JSON" прошел проверку"
+	echo "  ✓ $CONFIG_JSON прошел проверку"
 else
-	echo "  [X] "$CONFIG_JSON" НЕ прошел проверку!"
+	echo "  [X] $CONFIG_JSON НЕ прошел проверку!"
 	exit 1
 fi
 
