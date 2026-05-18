@@ -1,13 +1,12 @@
 #!/bin/sh
-# OpenWrt 25.12.x — Xray TProxy для Cudy WR3000S v1
-# Адаптировано для MediaTek MT7981BA (Filogic 820)
+# OpenWrt 25.12.x — Xray TProxy
 
 # Логируем установку
 LOG_FILE="/tmp/xray_install.log"
 exec 1> >(tee -a "$LOG_FILE")
 exec 2>&1
 
-echo "=== Установка Xray TProxy для Cudy WR3000S v1 ==="
+echo "=== Установка Xray TProxy ==="
 echo "  "
 [ "$(id -u)" != "0" ] && {
 	echo "Запускать нужно от root"
@@ -32,9 +31,9 @@ DWL_DOMAIN=""
 SUB_URL=""
 SETUP_GUEST=0
 
-# Для Cudy WR3000S - LAN интерфейс br-lan (стандарт)
+
 LAN_IF="br-lan"
-WAN_IF="wan"  # WAN порт отдельный, не в бридже
+WAN_IF="wan"
 
 GUEST_NET="guest"
 GUEST_IP="192.168.2.1"
@@ -43,12 +42,12 @@ UL_GUEST="5120"
 
 # PPPoE переменные
 SETUP_PPPOE=0
-PPPOE_DEVICE="wan"  # На Cudy WR3000S WAN порт отдельный
+PPPOE_DEVICE="wan"
 PPPOE_USERNAME=""
 PPPOE_PASSWORD=""
 PPPOE_KEEPALIVE="4 5"
 PPPOE_MTU="1492"
-PPPOE_IPV6="0"  # По умолчанию отключаем IPv6 для экономии памяти
+PPPOE_IPV6="0"
 
 # Парсер аргументов
 for arg in "$@"; do
@@ -140,7 +139,7 @@ fetch_url_with_header() {
 # 0. Настройка PPPoE (опционально)
 # =============================================
 if [ "$SETUP_PPPOE" -eq 1 ]; then
-	echo "0. Настройка PPPoE для Cudy WR3000S..."
+	echo "0. Настройка PPPoE..."
 	
 	if [ -z "$PPPOE_USERNAME" ] || [ -z "$PPPOE_PASSWORD" ]; then
 		echo "  [X] Ошибка: для PPPoE нужно указать --pppoe-user и --pppoe-pass"
@@ -640,7 +639,7 @@ else
 fi
 
 echo ""
-echo "=== Установка завершена для Cudy WR3000S v1 ==="
+echo "=== Установка завершена ==="
 echo "LAN IP: 192.168.1.1"
 echo "Xray: порт 12345 (TProxy)"
 [ "$SETUP_GUEST" -eq 1 ] && echo "Guest Network: $GUEST_IP/24"
