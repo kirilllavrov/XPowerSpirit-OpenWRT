@@ -432,7 +432,7 @@ uci set dhcp.@dnsmasq[0].strictorder='1'
 # Настройка кэша
 uci set dhcp.@dnsmasq[0].cachesize='2000'
 uci set dhcp.@dnsmasq[0].min_cache_ttl='300'
-uci set dhcp.@dnsmasq[0].max_cache_ttl='3600'
+uci set dhcp.@dnsmasq[0].max_cache_ttl='1800'
 
 uci -q delete dhcp.@dnsmasq[0].server
 

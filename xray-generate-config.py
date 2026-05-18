@@ -75,7 +75,7 @@ def base_config():
             "queryStrategy": "UseIPv4",
             "disableCache": False,
             "serveStale": True,
-            "serveExpiredTTL": 3600,
+            "serveExpiredTTL": 1800,
             "disableFallback": False,
             "enableParallelQuery": True,
             # Предварительный маппинг DoH-доменов → IP
@@ -146,14 +146,16 @@ def build_rules(chosen_tag, direct_mode=False):
             "inboundTag": ["dns-local"],
             "outboundTag": "dns-out"
         },
-        # DoH-серверы → direct (чтобы Xray мог к ним подключиться)
+        # Ловим DNS через DoH, которые прошли мимо dnsmasq (например, от браузера) и направляем в direct
         {
             "type": "field",
-            "inboundTag": ["dns-inbuilt"],
             "domain": [
-                "common.dot.dns.yandex.net",
-                "cloudflare-dns.com",
-                "dns.nextdns.io"
+                        "common.dot.dns.yandex.net",
+                        "cloudflare-dns.com",
+                        "dns.google",
+                        "dns.quad9.net",
+                        "doh.opendns.com",
+                        "dns.nextdns.io"
             ],
             "outboundTag": "direct"
         },
@@ -164,20 +166,13 @@ def build_rules(chosen_tag, direct_mode=False):
             "domain": ["geosite:category-ru"],
             "outboundTag": "direct"
         },
-        # DNS зарубежные → через прокси (полная анонимность от ТСПУ)
-        # В direct_mode → direct (когда прокси нет)
-        {
-            "type": "field",
-            "inboundTag": ["dns-inbuilt"],
-            "outboundTag": chosen_tag if not direct_mode else "direct"
-        },
         # Блокировка рекламы
         {
             "type": "field",
             "domain": ["geosite:category-ads"],
             "outboundTag": "block"
         },
-        # Российский трафик — напрямую
+        # Локальные, браузерные и российские домены — напрямую
         {
             "type": "field",
             "ip": ["geoip:ru", "geoip:private"],
@@ -195,6 +190,7 @@ def build_rules(chosen_tag, direct_mode=False):
             "outboundTag": "direct"
         },
     ]
+    # Стриминг и игры — через прокси (для обхода geo-блокировок)
     if not direct_mode:
         rules.append({
             "type": "field",
