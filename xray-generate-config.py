@@ -66,7 +66,7 @@ def choose_best_server(servers):
 def base_config():
     return {
         "log": {
-            "loglevel": "none",
+            "loglevel": "debug",
             "access": "/tmp/log/xray-access.log",
             "error": "/tmp/log/xray-error.log"
         },
@@ -86,20 +86,18 @@ def base_config():
                 "dns.nextdns.io": "45.90.28.0"
             },
             "servers": [
-                # .ru домены → Яндекс DoH (direct, быстро)
+                # .ru домены через Яндекс DoH
                 {
-                    "address": "https://common.dot.dns.yandex.net/dns-query",
+                    "address": "https+local://common.dot.dns.yandex.net/dns-query",
                     "domains": ["geosite:category-ru"],
                     "skipFallback": True
                 },
-                # Зарубежные домены → Cloudflare DoH (через прокси)
                 {
-                    "address": "https://cloudflare-dns.com/dns-query",
+                    "address": "https+local://cloudflare-dns.com/dns-query",
                     "skipFallback": False
                 },
-                # Резерв → NextDNS DoH
                 {
-                    "address": "https://dns.nextdns.io/dns-query",
+                    "address": "https+local://dns.nextdns.io",
                     "skipFallback": False
                 }
             ]
@@ -156,13 +154,6 @@ def build_rules(chosen_tag, direct_mode=False):
                         "doh.opendns.com",
                         "dns.nextdns.io"
             ],
-            "outboundTag": "direct"
-        },
-        # DNS .ru → direct (Яндекс DoH, легальные сайты, быстро)
-        {
-            "type": "field",
-            "inboundTag": ["dns-inbuilt"],
-            "domain": ["geosite:category-ru"],
             "outboundTag": "direct"
         },
         # Блокировка рекламы
