@@ -26,9 +26,11 @@ HWID_FILE="$CONFIG_DIR/hwid"
 TMP_DIR="/tmp/xray_install"
 GEO_DIR="/usr/share/xray"
 STATE_DIR="/etc/xray/state"
+SUB_USER_AGENT="OpenWrt-Xray/1.0"
 
 DWL_DOMAIN=""
 SUB_URL=""
+REMARKS_FILTER=""
 
 # Гостевая сеть
 GUEST_ENABLED=0
@@ -45,6 +47,8 @@ PPPOE_PASS=""
 # Парсер аргументов
 for arg in "$@"; do
 	case $arg in
+	--sub-ua=*) SUB_USER_AGENT="${arg#*=}" ;;
+	--remarks=*) REMARKS_FILTER="${arg#*=}" ;;
 	--guest=1) GUEST_ENABLED=1 ;;
 	--guest-ip=*) GUEST_IP="${arg#*=}" ;;
 	--guest-dl=*) DL_GUEST="${arg#*=}" ;;
@@ -75,64 +79,44 @@ fi
 mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR"
 
 # =============================================
-# Единые функции загрузки (curl)
+#   ЕДИНАЯ ФУНКЦИЯ ЗАГРУЗКИ
 # =============================================
 
-# Базовая загрузка файла
-fetch_url() {
-	local url="$1"
-	local dst="$2"
-	local max_retries=3
-	local retry=1
+# Универсальная загрузка файла (с поддержкой кастомных заголовков)
+# Использование:
+#   download_file "URL" "DEST" ["HEADER1" "HEADER2" ...]
+download_file() {
+    local url="$1"
+    local dst="$2"
+    shift 2
+    local max_retries=3
+    local retry=1
+    local curl_cmd="curl -s -L --max-time 15"
+    
+    # Добавляем заголовки, если они переданы
+    for header in "$@"; do
+        curl_cmd="$curl_cmd -H \"$header\""
+    done
+    
+    while [ $retry -le $max_retries ]; do
+        eval $curl_cmd -o "$dst" "$url"
+        local rc=$?
 
-	while [ $retry -le $max_retries ]; do
-		curl -s -L --user-agent "OpenWrt-Xray/1.0" --max-time 15 -o "$dst" "$url"
-		local rc=$?
+        if [ $rc -eq 0 ] && [ -s "$dst" ]; then
+            if head -n 1 "$dst" 2>/dev/null | grep -qi "<html\|<!DOCTYPE"; then
+                rm -f "$dst"
+            else
+                return 0
+            fi
+        fi
 
-		if [ $rc -eq 0 ] && [ -s "$dst" ]; then
-			if head -n 1 "$dst" 2>/dev/null | grep -qi "<html\|<!DOCTYPE"; then
-				rm -f "$dst"
-			else
-				return 0
-			fi
-		fi
+        if [ $retry -lt $max_retries ]; then
+            sleep 2
+        fi
+        retry=$((retry + 1))
+    done
 
-		if [ $retry -lt $max_retries ]; then
-			sleep 2
-		fi
-		retry=$((retry + 1))
-	done
-
-	return 1
-}
-
-# Загрузка с кастомным заголовком (для подписки)
-fetch_url_with_header() {
-	local url="$1"
-	local dst="$2"
-	local header="$3"
-	local max_retries=2
-	local retry=1
-
-	while [ $retry -le $max_retries ]; do
-		curl -s -L --user-agent "OpenWrt-Xray/1.0" -H "$header" --max-time 20 -o "$dst" "$url"
-		local rc=$?
-
-		if [ $rc -eq 0 ] && [ -s "$dst" ]; then
-			if head -n 1 "$dst" 2>/dev/null | grep -qi "<html\|<!DOCTYPE"; then
-				rm -f "$dst"
-			else
-				return 0
-			fi
-		fi
-
-		if [ $retry -lt $max_retries ]; then
-			sleep 2
-		fi
-		retry=$((retry + 1))
-	done
-
-	return 1
+    return 1
 }
 
 # =============================================
@@ -156,6 +140,19 @@ echo "2. Просим подписку..."
 echo "$SUB_URL" >"$SUB_FILE"
 chmod 600 "$SUB_FILE"
 echo "[+] Подписка сохранена: $SUB_URL"
+
+# =============================================
+# 2.5. Сохраняем User-Agent и remarks фильтр
+# =============================================
+echo "$SUB_USER_AGENT" > "$CONFIG_DIR/sub_user_agent"
+echo "[+] User-Agent сохранён: $SUB_USER_AGENT"
+
+if [ -n "$REMARKS_FILTER" ]; then
+    echo "$REMARKS_FILTER" > "$CONFIG_DIR/sub_remarks"
+    echo "[+] Фильтр remarks сохранён: $REMARKS_FILTER"
+else
+    rm -f "$CONFIG_DIR/sub_remarks"
+fi
 
 # =============================================
 # 3. Отключаем IPv6
@@ -365,7 +362,7 @@ else
 	echo "  → URL: ${ZIP_URL}.dgst"
 
 	echo "  → Скачиваем .dgst для Xray..."
-	fetch_url "${ZIP_URL}.dgst" "$DGST_FILE" || {
+	download_file "${ZIP_URL}.dgst" "$DGST_FILE" || {
 		echo "  [X] Ошибка: не удалось скачать .dgst для Xray"
 		exit 1
 	}
@@ -395,7 +392,7 @@ else
 		echo "  ✓ Найден локальный ZIP с тем же SHA, повторное скачивание не требуется"
 	else
 		echo "  → Скачиваем Xray ZIP (${LATEST_VERSION})..."
-		fetch_url "$ZIP_URL" "$ZIP_DEST" || {
+		download_file "$ZIP_URL" "$ZIP_DEST" || {
 			echo "  [X] Ошибка: не удалось скачать Xray ZIP"
 			exit 1
 		}
@@ -430,11 +427,11 @@ fi
 # =============================================
 echo "6. Загружаем скрипты из репозитория..."
 
-download() {
+download_script() {
 	local url="$1"
 	local dst="$2"
 
-	if fetch_url "$url" "$dst"; then
+	if download_file "$url" "$dst"; then
 		chmod +x "$dst"
 		echo "  → $dst"
 	else
@@ -443,10 +440,10 @@ download() {
 	fi
 }
 
-download "$REPO/xray-generate-config.py" "$GENERATOR"
-download "$REPO/xray-sub-parser.py" "$PARSER"
-download "$REPO/update-xray.sh" "$UPDATER"
-download "$REPO/update-nft.sh" "$NFT_UPDATER"
+download_script "$REPO/xray-generate-config.py" "$GENERATOR"
+download_script "$REPO/xray-sub-parser.py" "$PARSER"
+download_script "$REPO/update-xray.sh" "$UPDATER"
+download_script "$REPO/update-nft.sh" "$NFT_UPDATER"
 
 if [ -n "$DWL_DOMAIN" ]; then
 	echo "  → Добавляем домен в whitelist: $DWL_DOMAIN"
@@ -582,7 +579,7 @@ sysctl -p /etc/sysctl.d/99-xray.conf >/dev/null 2>&1
 echo "[+] Sysctl настроен"
 
 # =============================================
-# 11. Geo + HWID + config.json
+# 11. Geo + HWID + config.json (с поддержкой двух форматов)
 # =============================================
 echo "11. Скачиваем геофайлы, делаем HWID, генерируем config.json..."
 
@@ -597,7 +594,7 @@ update_geo() {
 
 	echo "  → Скачиваем $BASE"
 
-	fetch_url "${URL}.sha256sum" "$TMP_SHA" || {
+	download_file "${URL}.sha256sum" "$TMP_SHA" || {
 		echo "  [X] Не удалось получить SHA256 для $BASE" >>"$LOG_FILE"
 		exit 1
 	}
@@ -608,7 +605,7 @@ update_geo() {
 		exit 1
 	fi
 
-	fetch_url "$URL" "$TMP" || {
+	download_file "$URL" "$TMP" || {
 		echo "  [X] Не удалось скачать $BASE" >>"$LOG_FILE"
 		exit 1
 	}
@@ -643,29 +640,66 @@ echo "$HWID" >"$HWID_FILE"
 chmod 600 "$HWID_FILE"
 echo "  ✓ HWID сохранён: $HWID"
 
-echo "  → Генерируем config.json из подписки..."
-if fetch_url_with_header "$SUB_URL" "/tmp/sub_raw.txt" "x-hwid: $HWID"; then
-	python3 "$PARSER" <"/tmp/sub_raw.txt" >"/tmp/parsed_outbounds.json" || {
-		echo "  [X] Ошибка парсера подписки"
-		rm -f "/tmp/sub_raw.txt"
-		exit 1
-	}
-	python3 "$GENERATOR" --output "$CONFIG_JSON" <"/tmp/parsed_outbounds.json" || {
-		echo "  [X] Ошибка генератора конфига"
-		rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
-		exit 1
-	}
-	rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
+echo "  → Генерируем config.json из подписки (User-Agent: $SUB_USER_AGENT)..."
+
+# Скачиваем подписку с заголовками
+if download_file "$SUB_URL" "/tmp/sub_raw.txt" "User-Agent: $SUB_USER_AGENT" "x-hwid: $HWID"; then
+    
+    # Проверяем, что скачалось не HTML
+    if head -n 1 "/tmp/sub_raw.txt" 2>/dev/null | grep -qi "<html\|<!DOCTYPE"; then
+        echo "  [X] Подписка вернула HTML, а не данные"
+        rm -f "/tmp/sub_raw.txt"
+        exit 1
+    fi
+    
+    # Определяем формат по User-Agent
+    case "$SUB_USER_AGENT" in
+        *happ*|*Happ*|*HAPP*|*singbox*|*Singbox*|*sfa*|*sfi*|*sfm*|*sft*|*karing*)
+            # JSON формат (Happ, Sing-box, Karing)
+            echo "  → Используем JSON формат (прямая генерация)"
+            if [ -n "$REMARKS_FILTER" ]; then
+                echo "  → Фильтр remarks: $REMARKS_FILTER"
+                python3 "$GENERATOR" --format json --remarks "$REMARKS_FILTER" --output "$CONFIG_JSON" < "/tmp/sub_raw.txt" 2>>"$LOG_FILE"
+            else
+                python3 "$GENERATOR" --format json --output "$CONFIG_JSON" < "/tmp/sub_raw.txt" 2>>"$LOG_FILE"
+            fi
+            if [ $? -eq 0 ]; then
+                echo "  ✓ config.json создан (JSON формат)"
+            else
+                echo "  [X] Ошибка генератора конфига (JSON)"
+                rm -f "/tmp/sub_raw.txt"
+                exit 1
+            fi
+            ;;
+        *)
+            # Base64 формат (VLESS URI)
+            echo "  → Используем Base64 формат (VLESS URI -> парсер)"
+            if python3 "$PARSER" < "/tmp/sub_raw.txt" > "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE"; then
+                if python3 "$GENERATOR" --format vless --output "$CONFIG_JSON" < "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE"; then
+                    echo "  ✓ config.json создан (VLESS формат)"
+                else
+                    echo "  [X] Ошибка генератора конфига (VLESS)"
+                    rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
+                    exit 1
+                fi
+            else
+                echo "  [X] Ошибка парсера подписки (VLESS)"
+                rm -f "/tmp/sub_raw.txt"
+                exit 1
+            fi
+            rm -f "/tmp/parsed_outbounds.json"
+            ;;
+    esac
+    rm -f "/tmp/sub_raw.txt"
 else
-	echo "  [X] Не удалось скачать подписку"
-	exit 1
+    echo "  [X] Не удалось скачать подписку"
+    exit 1
 fi
 
 if [ ! -s "$CONFIG_JSON" ]; then
-	echo "  [X] Ошибка: не удалось создать config.json" >>"$LOG_FILE"
-	exit 1
+    echo "  [X] Ошибка: не удалось создать config.json" >>"$LOG_FILE"
+    exit 1
 fi
-echo "  ✓ config.json создан"
 echo ""
 echo "[+] Геофайлы загружены, конфиг сгенерирован"
 

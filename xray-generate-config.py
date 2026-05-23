@@ -1,13 +1,155 @@
 #!/usr/bin/env python3
+"""
+Xray Config Generator for OpenWrt TProxy
+Поддерживает два входных формата:
+  --format vless - из xray-sub-parser.py (VLESS URI -> outbounds)
+  --format json  - из JSON-подписки (Happ/Sing-box) с фильтрацией по remarks
+"""
+
 import json
 import sys
 import re
+import argparse
+
+# ============================================
+#   КОНФИГУРАЦИЯ
+# ============================================
 
 DOMAIN_WHITELIST = [
     # "example.com"
 ]
 
-def load_outbounds():
+
+# ============================================
+#   ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ============================================
+
+def log_error(msg: str) -> None:
+    """Выводит сообщение об ошибке в stderr"""
+    print(msg, file=sys.stderr)
+
+
+def normalize_tag(tag: str) -> str:
+    """Нормализует тег для использования в Xray"""
+    if not tag:
+        return "proxy"
+    tag = tag.replace(" ", "_")
+    tag = tag.replace("(", "").replace(")", "")
+    # Только буквы, цифры, дефис, подчёркивание
+    tag = re.sub(r"[^0-9A-Za-zА-Яа-яЁё_\-]", "", tag)
+    return tag or "proxy"
+
+
+def normalize_outbound(ob: dict) -> dict:
+    """
+    Дополняет outbound из подписки недостающими полями.
+    Добавляет sockopt (mark, tcpNoDelay, tcpKeepAliveInterval) и отключает mux.
+    """
+    # Убеждаемся, что streamSettings существует
+    if "streamSettings" not in ob:
+        ob["streamSettings"] = {}
+    
+    # Добавляем sockopt с правильными параметрами
+    if "sockopt" not in ob["streamSettings"]:
+        ob["streamSettings"]["sockopt"] = {}
+    
+    ob["streamSettings"]["sockopt"]["mark"] = 0
+    ob["streamSettings"]["sockopt"]["tcpNoDelay"] = True
+    ob["streamSettings"]["sockopt"]["tcpKeepAliveInterval"] = 30
+    
+    # Отключаем mux (не нужен для TProxy)
+    if "mux" not in ob:
+        ob["mux"] = {}
+    ob["mux"]["enabled"] = False
+    
+    return ob
+
+
+# ============================================
+#   ФУНКЦИИ ДЛЯ JSON ФОРМАТА (Happ/Sing-box)
+# ============================================
+
+def load_json_subscription() -> list:
+    """Загружает JSON-подписку из stdin (формат Happ/Sing-box)"""
+    try:
+        data = json.load(sys.stdin)
+        if isinstance(data, list):
+            return data
+        return [data]
+    except Exception as e:
+        log_error(f"Failed to parse JSON subscription: {e}")
+        return []
+
+
+def extract_outbounds_from_subscription(sub_data: list, remarks_filter: str = '') -> list:
+    """
+    Извлекает все outbounds из JSON-подписки.
+    Пропускает служебные outbounds (freedom, blackhole, dns).
+    Нормализует теги и добавляет недостающие поля.
+    Если указан remarks_filter, выбирает только профиль с этим remarks.
+    """
+    all_outbounds = []
+    seen_tags = set()
+    found_profile = False
+    
+    for config in sub_data:
+        config_remarks = config.get("remarks", "")
+        
+        # Фильтрация по remarks
+        if remarks_filter:
+            if remarks_filter.lower() not in config_remarks.lower():
+                print(f"  → Пропускаем профиль: {config_remarks}", file=sys.stderr)
+                continue
+        
+        found_profile = True
+        print(f"  → Используем профиль: {config_remarks}", file=sys.stderr)
+        
+        if "outbounds" not in config:
+            continue
+        
+        for ob in config["outbounds"]:
+            # Пропускаем служебные outbounds
+            protocol = ob.get("protocol", "")
+            if protocol in ["freedom", "blackhole", "dns"]:
+                continue
+            
+            # Нормализуем тег
+            if "tag" not in ob or not ob["tag"]:
+                ob["tag"] = "proxy"
+            
+            # Дедупликация тегов
+            original_tag = ob["tag"]
+            tag = normalize_tag(original_tag)
+            counter = 2
+            while tag in seen_tags:
+                tag = f"{original_tag}-{counter}"
+                tag = normalize_tag(tag)
+                counter += 1
+            ob["tag"] = tag
+            seen_tags.add(tag)
+            
+            # Добавляем недостающие поля (sockopt, mux)
+            ob = normalize_outbound(ob)
+            
+            all_outbounds.append(ob)
+            print(f"  → Outbound: {tag} ({protocol})", file=sys.stderr)
+    
+    if remarks_filter and not found_profile:
+        print(f"  [X] Профиль с remarks '{remarks_filter}' не найден!", file=sys.stderr)
+        print(f"  → Доступные профили:", file=sys.stderr)
+        for config in sub_data:
+            config_remarks = config.get("remarks", "")
+            print(f"      - {config_remarks}", file=sys.stderr)
+    
+    return all_outbounds
+
+
+# ============================================
+#   ФУНКЦИИ ДЛЯ VLESS ФОРМАТА (через парсер)
+# ============================================
+
+def load_vless_outbounds() -> list:
+    """Загружает outbounds из stdin (формат от xray-sub-parser.py)"""
     try:
         data = json.load(sys.stdin)
         if isinstance(data, dict):
@@ -18,17 +160,20 @@ def load_outbounds():
         return []
     return []
 
+
 def extract_address(ob):
     try:
         return ob["settings"]["vnext"][0]["address"]
     except Exception:
         return None
 
+
 def extract_id(ob):
     try:
         return ob["settings"]["vnext"][0]["users"][0]["id"]
     except Exception:
         return None
+
 
 def is_placeholder(ob):
     addr = extract_address(ob)
@@ -44,11 +189,13 @@ def is_placeholder(ob):
         or str(port) == "1"
     )
 
+
 def has_hole(servers):
     for ob in servers:
         if extract_address(ob) == "hole":
             return True
     return False
+
 
 def choose_best_server(servers):
     if not servers:
@@ -63,7 +210,28 @@ def choose_best_server(servers):
                 return ob
     return servers[0]
 
-def base_config():
+
+def normalize_vless_outbound(ob: dict, chosen_tag: str) -> dict:
+    """Нормализует outbound из VLESS формата"""
+    if "tag" not in ob:
+        ob["tag"] = chosen_tag
+    
+    ss = ob.setdefault("streamSettings", {})
+    sockopt = ss.setdefault("sockopt", {})
+    sockopt["mark"] = 0
+    sockopt["tcpKeepAliveInterval"] = 30
+    sockopt["tcpNoDelay"] = True
+    ob.setdefault("mux", {"enabled": False})
+    
+    return ob
+
+
+# ============================================
+#   БАЗОВАЯ КОНФИГУРАЦИЯ
+# ============================================
+
+def base_config() -> dict:
+    """Возвращает базовую конфигурацию Xray с TProxy и DNS"""
     return {
         "log": {
             "loglevel": "none",
@@ -78,15 +246,12 @@ def base_config():
             "serveExpiredTTL": 1800,
             "disableFallback": False,
             "enableParallelQuery": True,
-            # Предварительный маппинг DoH-доменов → IP
-            # Чтобы Xray мог подключиться к DoH-серверам при холодном старте
             "hosts": {
-                "common.dot.dns.yandex.net": ["77.88.8.1","77.88.8.8"],
-                "cloudflare-dns.com": ["1.0.0.1","1.1.1.1"],
+                "common.dot.dns.yandex.net": ["77.88.8.1", "77.88.8.8"],
+                "cloudflare-dns.com": ["1.0.0.1", "1.1.1.1"],
                 "dns.nextdns.io": "45.90.28.0"
             },
             "servers": [
-                # .ru домены через Яндекс DoH
                 {
                     "address": "https+local://common.dot.dns.yandex.net/dns-query",
                     "domains": ["geosite:category-ru"],
@@ -135,7 +300,29 @@ def base_config():
         ]
     }
 
-def build_rules(chosen_tag, direct_mode=False):
+
+def build_dns_outbound() -> dict:
+    """Создаёт outbound 'dns-out' с hijack во встроенный DNS"""
+    return {
+        "protocol": "dns",
+        "tag": "dns-out",
+        "settings": {
+            "rules": [
+                {
+                    "action": "hijack",
+                    "qtype": "1,28"
+                }
+            ]
+        }
+    }
+
+
+def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
+    """
+    Строит правила маршрутизации.
+    Если несколько прокси, использует балансировщик.
+    Если один прокси, использует прямой outboundTag.
+    """
     rules = [
         # Клиентский DNS (от dnsmasq) → dns-out (hijack → dns-inbuilt)
         {
@@ -143,16 +330,16 @@ def build_rules(chosen_tag, direct_mode=False):
             "inboundTag": ["dns-local"],
             "outboundTag": "dns-out"
         },
-        # Ловим DNS через DoH, которые прошли мимо dnsmasq (например, от браузера) и направляем в direct
+        # Ловим DNS через DoH, которые прошли мимо dnsmasq (от браузера)
         {
             "type": "field",
             "domain": [
-                        "common.dot.dns.yandex.net",
-                        "cloudflare-dns.com",
-                        "dns.google",
-                        "dns.quad9.net",
-                        "doh.opendns.com",
-                        "dns.nextdns.io"
+                "common.dot.dns.yandex.net",
+                "cloudflare-dns.com",
+                "dns.google",
+                "dns.quad9.net",
+                "doh.opendns.com",
+                "dns.nextdns.io"
             ],
             "outboundTag": "direct"
         },
@@ -162,12 +349,13 @@ def build_rules(chosen_tag, direct_mode=False):
             "domain": ["geosite:category-ads"],
             "outboundTag": "block"
         },
-        # Локальные, браузерные и российские домены — напрямую
+        # Локальные и российские IP — напрямую
         {
             "type": "field",
             "ip": ["geoip:ru", "geoip:private"],
             "outboundTag": "direct"
         },
+        # Локальные и российские домены — напрямую
         {
             "type": "field",
             "domain": [
@@ -180,115 +368,198 @@ def build_rules(chosen_tag, direct_mode=False):
             "outboundTag": "direct"
         },
     ]
-    # Стриминг и игры — через прокси (для обхода geo-блокировок)
-    if not direct_mode:
+    
+    if not direct_mode and proxy_outbounds:
+        target = "balancer" if len(proxy_outbounds) > 1 else proxy_outbounds[0]["tag"]
+        
+        # Стриминг и игры — через прокси
         rules.append({
             "type": "field",
-            "domain": [
-                "geosite:category-streaming",
-                "geosite:category-games"
-            ],
-            "outboundTag": chosen_tag
+            "domain": ["geosite:category-streaming", "geosite:category-games"],
+            "balancerTag" if len(proxy_outbounds) > 1 else "outboundTag": target
         })
-    # Весь остальной трафик — через прокси
-    rules.append({
-        "type": "field",
-        "network": "tcp,udp",
-        "outboundTag": chosen_tag
-    })
+        
+        # Весь остальной трафик
+        rules.append({
+            "type": "field",
+            "network": "tcp,udp",
+            "balancerTag" if len(proxy_outbounds) > 1 else "outboundTag": target
+        })
+    else:
+        rules.append({
+            "type": "field",
+            "network": "tcp,udp",
+            "outboundTag": "direct"
+        })
+    
     return rules
 
+
+def build_balancer(proxy_outbounds: list) -> dict:
+    """Создаёт конфигурацию балансировщика для нескольких прокси"""
+    selector = [ob["tag"] for ob in proxy_outbounds]
+    return {
+        "tag": "balancer",
+        "selector": selector,
+        "strategy": {
+            "type": "leastLoad"
+        },
+        "fallbackTag": "direct"
+    }
+
+
+def build_observatory(proxy_outbounds: list) -> dict:
+    """Создаёт конфигурацию observatory для мониторинга прокси"""
+    subject_selector = [ob["tag"] for ob in proxy_outbounds]
+    return {
+        "subjectSelector": subject_selector,
+        "probeURL": "https://www.google.com/generate_204",
+        "probeInterval": "120s",
+        "enableConcurrency": True
+    }
+
+
+# ============================================
+#   ОСНОВНАЯ ФУНКЦИЯ
+# ============================================
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Xray config generator for OpenWrt TProxy')
+    parser.add_argument('--output', required=True, help='Output config file')
+    parser.add_argument('--format', choices=['json', 'vless'], default='vless',
+                        help='Input format: json (Happ/Sing-box subscription) or vless (parsed outbounds)')
+    parser.add_argument('--remarks', default='', 
+                        help='Filter outbounds by remarks (substring, case-insensitive). Only for JSON format')
+    return parser.parse_args()
+
+
 def main():
-    if len(sys.argv) != 3 or sys.argv[1] != "--output":
-        print("Usage: xray-generate-config.py --output <file>")
-        sys.exit(1)
-    output_path = sys.argv[2]
-    all_obs = load_outbounds()
-    cfg = base_config()
-
-    # Если в подписке есть сервер с адресом "hole" — сразу уходим в DIRECT
-    if has_hole(all_obs):
-        cfg["outbounds"] = [
-            {"protocol": "freedom", "tag": "direct"},
-            {"protocol": "blackhole", "tag": "block"},
-            {
-                "protocol": "dns",
-                "tag": "dns-out",
-                "settings": {
-                    "rules": [{"action": "hijack", "qtype": "1,28"}]
+    args = parse_args()
+    
+    if args.format == 'json':
+        # ========================================
+        # JSON формат (Happ/Sing-box подписка)
+        # ========================================
+        print("  → Обработка JSON подписки", file=sys.stderr)
+        
+        subscription = load_json_subscription()
+        if not subscription:
+            log_error("Empty or invalid JSON subscription")
+            sys.exit(1)
+        
+        proxy_outbounds = extract_outbounds_from_subscription(subscription, args.remarks)
+        
+        if not proxy_outbounds:
+            log_error("No valid outbounds found in JSON subscription")
+            sys.exit(1)
+        
+        cfg = base_config()
+        
+        # Кастомные outbounds
+        direct_outbound = {
+            "protocol": "freedom",
+            "tag": "direct",
+            "streamSettings": {
+                "sockopt": {
+                    "mark": 0,
+                    "tcpKeepAliveInterval": 30,
+                    "tcpNoDelay": True
                 }
             }
-        ]
-        cfg["routing"] = {
-            "domainStrategy": "IPOnDemand",
-            "rules": build_rules("direct", direct_mode=True)
         }
-        print("[!] Найден сервер 'hole'. Включён DIRECT-конфиг.", file=sys.stderr)
-        with open(output_path, "w") as f:
-            json.dump(cfg, f, indent=2, ensure_ascii=False)
-        print(f"✓ Конфиг сохранён: {output_path}", file=sys.stderr)
-        return
-
-    chosen = choose_best_server(all_obs)
-    if chosen is None:
-        cfg["outbounds"] = [
-            {"protocol": "freedom", "tag": "direct"},
-            {"protocol": "blackhole", "tag": "block"},
-            {
-                "protocol": "dns",
-                "tag": "dns-out",
-                "settings": {
-                    "rules": [{"action": "hijack", "qtype": "1,28"}]
-                }
-            }
-        ]
-        cfg["routing"] = {
-            "domainStrategy": "IPOnDemand",
-            "rules": build_rules("direct", direct_mode=True)
-        }
-        print("[!] Нет доступных серверов (только заглушки). Создан DIRECT-конфиг.", file=sys.stderr)
+        
+        block_outbound = {"protocol": "blackhole", "tag": "block"}
+        dns_outbound = build_dns_outbound()
+        
+        cfg["outbounds"] = proxy_outbounds + [direct_outbound, block_outbound, dns_outbound]
+        cfg["observatory"] = build_observatory(proxy_outbounds)
+        
+        routing = {"domainStrategy": "IPOnDemand", "rules": build_rules(proxy_outbounds)}
+        
+        if len(proxy_outbounds) > 1:
+            routing["balancers"] = [build_balancer(proxy_outbounds)]
+        
+        cfg["routing"] = routing
+        
+        print(f"  ✓ Сгенерировано {len(proxy_outbounds)} прокси", file=sys.stderr)
+        if len(proxy_outbounds) > 1:
+            print(f"  ✓ Балансировщик: {len(proxy_outbounds)} серверов", file=sys.stderr)
+        
     else:
-        chosen_tag = chosen.get("tag") or "proxy"
-        chosen_tag = re.sub(r'[^\w\-]', '_', chosen_tag)[:64] or "proxy"
-        if "tag" not in chosen:
-            chosen["tag"] = chosen_tag
-        ss = chosen.setdefault("streamSettings", {})
-        sockopt = ss.setdefault("sockopt", {})
-        sockopt["mark"] = 0
-        sockopt["tcpKeepAliveInterval"] = 30
-        sockopt["tcpNoDelay"] = True
-        chosen.setdefault("mux", {"enabled": False})
-
-        direct_sockopt = {
-            "mark": 0,
-            "tcpKeepAliveInterval": 30,
-            "tcpNoDelay": True
-        }
-        cfg["outbounds"] = [
-            chosen,
-            {
-                "protocol": "freedom",
-                "tag": "direct",
-                "streamSettings": {"sockopt": direct_sockopt}
-            },
-            {"protocol": "blackhole", "tag": "block"},
-            {
-                "protocol": "dns",
-                "tag": "dns-out",
-                "settings": {
-                    "rules": [{"action": "hijack", "qtype": "1,28"}]
-                }
+        # ========================================
+        # VLESS формат (через xray-sub-parser.py)
+        # ========================================
+        print("  → Обработка VLESS формата", file=sys.stderr)
+        
+        all_obs = load_vless_outbounds()
+        cfg = base_config()
+        
+        if has_hole(all_obs):
+            # DIRECT режим (hole найден)
+            cfg["outbounds"] = [
+                {"protocol": "freedom", "tag": "direct"},
+                {"protocol": "blackhole", "tag": "block"},
+                build_dns_outbound()
+            ]
+            cfg["routing"] = {
+                "domainStrategy": "IPOnDemand",
+                "rules": build_rules([], direct_mode=True)
             }
-        ]
-        cfg["routing"] = {
-            "domainStrategy": "IPOnDemand",
-            "rules": build_rules(chosen_tag, direct_mode=False)
-        }
-        print(f"  ✓ Выбран сервер: {chosen_tag}", file=sys.stderr)
-
-    with open(output_path, "w") as f:
+            print("[!] Найден сервер 'hole'. Включён DIRECT-конфиг.", file=sys.stderr)
+        else:
+            chosen = choose_best_server(all_obs)
+            
+            if chosen is None:
+                # Нет доступных серверов
+                cfg["outbounds"] = [
+                    {"protocol": "freedom", "tag": "direct"},
+                    {"protocol": "blackhole", "tag": "block"},
+                    build_dns_outbound()
+                ]
+                cfg["routing"] = {
+                    "domainStrategy": "IPOnDemand",
+                    "rules": build_rules([], direct_mode=True)
+                }
+                print("[!] Нет доступных серверов (только заглушки). Создан DIRECT-конфиг.", file=sys.stderr)
+            else:
+                # Выбран один сервер
+                chosen_tag = chosen.get("tag") or "proxy"
+                chosen_tag = re.sub(r'[^\w\-]', '_', chosen_tag)[:64] or "proxy"
+                if "tag" not in chosen:
+                    chosen["tag"] = chosen_tag
+                
+                chosen = normalize_vless_outbound(chosen, chosen_tag)
+                
+                direct_outbound = {
+                    "protocol": "freedom",
+                    "tag": "direct",
+                    "streamSettings": {
+                        "sockopt": {
+                            "mark": 0,
+                            "tcpKeepAliveInterval": 30,
+                            "tcpNoDelay": True
+                        }
+                    }
+                }
+                
+                cfg["outbounds"] = [
+                    chosen,
+                    direct_outbound,
+                    {"protocol": "blackhole", "tag": "block"},
+                    build_dns_outbound()
+                ]
+                cfg["routing"] = {
+                    "domainStrategy": "IPOnDemand",
+                    "rules": build_rules([chosen])
+                }
+                print(f"  ✓ Выбран сервер: {chosen_tag}", file=sys.stderr)
+    
+    # Сохраняем результат
+    with open(args.output, "w") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
-    print(f"  ✓ Конфиг сохранён: {output_path}", file=sys.stderr)
+    
+    print(f"  ✓ Конфиг сохранён: {args.output}", file=sys.stderr)
+
 
 if __name__ == "__main__":
     main()
