@@ -279,29 +279,24 @@ if curl -s -L -H "User-Agent: $SUB_USER_AGENT" -H "x-hwid: $HWID" "$SUB_URL" -o 
                 echo "  → Используем JSON формат (прямая генерация)" >>"$LOG"
                 if [ -n "$REMARKS_FILTER" ]; then
                     echo "  → Фильтр remarks: $REMARKS_FILTER" >>"$LOG"
-                    if python3 "$GENERATOR" --format json --remarks "$REMARKS_FILTER" --output "$TMP_DIR/config.json" < "$TMP_DIR/sub.txt" 2>>"$LOG"; then
-                        if xray run -test -config "$TMP_DIR/config.json" >>"$LOG" 2>&1; then
-                            mv "$TMP_DIR/config.json" "$CONFIG_JSON"
-                            echo "[+] Новый config.json установлен (JSON формат)" >>"$LOG"
-                        else
-                            echo "[X] Новый config.json невалиден" >>"$LOG"
-                            xray run -test -config "$TMP_DIR/config.json" 2>>"$LOG"
-                        fi
+                fi
+                
+                # Собираем команду генератора
+                GENERATOR_CMD="python3 $GENERATOR --format json --output $TMP_DIR/config.json"
+                if [ -n "$REMARKS_FILTER" ]; then
+                    GENERATOR_CMD="$GENERATOR_CMD --remarks \"$REMARKS_FILTER\""
+                fi
+                
+                if eval $GENERATOR_CMD < "$TMP_DIR/sub.txt" 2>>"$LOG"; then
+                    if xray run -test -config "$TMP_DIR/config.json" >>"$LOG" 2>&1; then
+                        mv "$TMP_DIR/config.json" "$CONFIG_JSON"
+                        echo "[+] Новый config.json установлен (JSON формат)" >>"$LOG"
                     else
-                        echo "[X] Ошибка генератора конфига (JSON)" >>"$LOG"
+                        echo "[X] Новый config.json невалиден" >>"$LOG"
+                        xray run -test -config "$TMP_DIR/config.json" 2>>"$LOG"
                     fi
                 else
-                    if python3 "$GENERATOR" --format json --output "$TMP_DIR/config.json" < "$TMP_DIR/sub.txt" 2>>"$LOG"; then
-                        if xray run -test -config "$TMP_DIR/config.json" >>"$LOG" 2>&1; then
-                            mv "$TMP_DIR/config.json" "$CONFIG_JSON"
-                            echo "[+] Новый config.json установлен (JSON формат)" >>"$LOG"
-                        else
-                            echo "[X] Новый config.json невалиден" >>"$LOG"
-                            xray run -test -config "$TMP_DIR/config.json" 2>>"$LOG"
-                        fi
-                    else
-                        echo "[X] Ошибка генератора конфига (JSON)" >>"$LOG"
-                    fi
+                    echo "[X] Ошибка генератора конфига (JSON)" >>"$LOG"
                 fi
                 ;;
             *)
