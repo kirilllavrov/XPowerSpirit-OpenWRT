@@ -171,10 +171,10 @@ uci commit dhcp
 /etc/init.d/odhcpd disable 2>/dev/null || true
 
 service network restart
-sleep 3
+sleep 5
 for i in $(seq 1 10); do
 	ip link show br-lan >/dev/null 2>&1 && break
-	sleep 1
+	sleep 2
 done
 
 echo "[+] IPv6 отключён"

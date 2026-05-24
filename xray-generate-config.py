@@ -234,7 +234,7 @@ def base_config() -> dict:
     """Возвращает базовую конфигурацию Xray с TProxy и DNS"""
     return {
         "log": {
-            "loglevel": "none",
+            "loglevel": "debug",
             "access": "/tmp/log/xray-access.log",
             "error": "/tmp/log/xray-error.log"
         },
@@ -402,7 +402,7 @@ def build_balancer(proxy_outbounds: list) -> dict:
         "tag": "balancer",
         "selector": selector,
         "strategy": {
-            "type": "leastLoad"
+            "type": "leastPing"
         },
         "fallbackTag": "direct"
     }
@@ -414,7 +414,7 @@ def build_observatory(proxy_outbounds: list) -> dict:
     return {
         "subjectSelector": subject_selector,
         "probeURL": "https://www.google.com/generate_204",
-        "probeInterval": "120s",
+        "probeInterval": "300s",
         "enableConcurrency": True
     }
 
