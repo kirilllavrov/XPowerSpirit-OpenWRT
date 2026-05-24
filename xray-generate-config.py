@@ -4,6 +4,10 @@ Xray Config Generator for OpenWrt TProxy
 Поддерживает два входных формата:
   --format vless - из xray-sub-parser.py (VLESS URI -> outbounds)
   --format json  - из JSON-подписки (Happ/Sing-box) с фильтрацией по remarks
+
+Специальная обработка "hole":
+  Если в подписке обнаружен outbound с address="hole", генерируется DIRECT-конфиг
+  (весь трафик идёт напрямую, прокси отключены). Это сигнал об окончании срока подписки.
 """
 
 import json
@@ -79,6 +83,24 @@ def load_json_subscription() -> list:
     except Exception as e:
         log_error(f"Failed to parse JSON subscription: {e}")
         return []
+
+
+def has_hole_in_subscription(sub_data: list) -> bool:
+    """
+    Проверяет, есть ли в подписке outbound с адресом 'hole'.
+    Это сигнал об окончании срока подписки.
+    """
+    for config in sub_data:
+        if "outbounds" not in config:
+            continue
+        for ob in config["outbounds"]:
+            try:
+                addr = ob.get("settings", {}).get("vnext", [{}])[0].get("address", "")
+                if addr == "hole":
+                    return True
+            except Exception:
+                pass
+    return False
 
 
 def extract_outbounds_from_subscription(sub_data: list, remarks_filter: str = '') -> list:
@@ -301,6 +323,76 @@ def base_config() -> dict:
     }
 
 
+def build_direct_config() -> dict:
+    """Создаёт DIRECT-конфиг (без прокси) для режима 'hole'"""
+    cfg = base_config()
+    cfg["outbounds"] = [
+        {"protocol": "freedom", "tag": "direct"},
+        {"protocol": "blackhole", "tag": "block"},
+        {
+            "protocol": "dns",
+            "tag": "dns-out",
+            "settings": {
+                "rules": [
+                    {
+                        "action": "hijack",
+                        "qtype": "1,28"
+                    }
+                ]
+            }
+        }
+    ]
+    cfg["routing"] = {
+        "domainStrategy": "IPOnDemand",
+        "rules": [
+            {
+                "type": "field",
+                "inboundTag": ["dns-local"],
+                "outboundTag": "dns-out"
+            },
+            {
+                "type": "field",
+                "domain": [
+                    "common.dot.dns.yandex.net",
+                    "cloudflare-dns.com",
+                    "dns.google",
+                    "dns.quad9.net",
+                    "doh.opendns.com",
+                    "dns.nextdns.io"
+                ],
+                "outboundTag": "direct"
+            },
+            {
+                "type": "field",
+                "domain": ["geosite:category-ads"],
+                "outboundTag": "block"
+            },
+            {
+                "type": "field",
+                "ip": ["geoip:ru", "geoip:private"],
+                "outboundTag": "direct"
+            },
+            {
+                "type": "field",
+                "domain": [
+                    "geosite:private",
+                    "geosite:category-browser",
+                    "geosite:category-cdn-ru",
+                    "geosite:category-mobile",
+                    "geosite:category-ru"
+                ],
+                "outboundTag": "direct"
+            },
+            {
+                "type": "field",
+                "network": "tcp,udp",
+                "outboundTag": "direct"
+            }
+        ]
+    }
+    return cfg
+
+
 def build_dns_outbound() -> dict:
     """Создаёт outbound 'dns-out' с hijack во встроенный DNS"""
     return {
@@ -447,6 +539,17 @@ def main():
             log_error("Empty or invalid JSON subscription")
             sys.exit(1)
         
+        # ПРОВЕРКА НА "hole" (окончание срока подписки)
+        if has_hole_in_subscription(subscription):
+            print("  [!] Обнаружен сервер 'hole' (срок подписки истёк).", file=sys.stderr)
+            print("  [!] Включаем DIRECT-режим (весь трафик напрямую).", file=sys.stderr)
+            cfg = build_direct_config()
+            with open(args.output, "w") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
+            print(f"  ✓ DIRECT-конфиг сохранён: {args.output}", file=sys.stderr)
+            return
+        
+        # Если "hole" нет, продолжаем нормальную обработку
         proxy_outbounds = extract_outbounds_from_subscription(subscription, args.remarks)
         
         if not proxy_outbounds:
@@ -554,11 +657,12 @@ def main():
                 }
                 print(f"  ✓ Выбран сервер: {chosen_tag}", file=sys.stderr)
     
-    # Сохраняем результат
-    with open(args.output, "w") as f:
-        json.dump(cfg, f, indent=2, ensure_ascii=False)
-    
-    print(f"  ✓ Конфиг сохранён: {args.output}", file=sys.stderr)
+    # Сохраняем результат (если ещё не сохранён)
+    if args.format != 'json' or not has_hole_in_subscription(load_json_subscription()):
+        with open(args.output, "w") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        
+        print(f"  ✓ Конфиг сохранён: {args.output}", file=sys.stderr)
 
 
 if __name__ == "__main__":
