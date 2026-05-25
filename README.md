@@ -496,8 +496,11 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
 6. **Stream settings:**
    - `mark: 0` — исключение трафика Xray из TProxy
    - `tcpKeepAliveInterval: 30`
-   - `tcpNoDelay: true`
    - Mux отключён
+
+7. **Freedom (direct) outbound** — использует `domainStrategy: "UseIPv4"` для корректной работы в IPv4-only среде
+
+8. **Blackhole (block) outbound** — возвращает HTTP 403 вместо глухого закрытия соединения, чтобы браузер сразу показывал ошибку, а не висел в таймауте
 
 **Режим без серверов:** Если все сервера — заглушки, создаётся DIRECT-конфиг.
 

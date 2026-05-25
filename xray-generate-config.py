@@ -330,8 +330,8 @@ def build_direct_config() -> dict:
     """Создаёт DIRECT-конфиг (без прокси) для режима 'hole'"""
     cfg = base_config()
     cfg["outbounds"] = [
-        {"protocol": "freedom", "tag": "direct"},
-        {"protocol": "blackhole", "tag": "block"},
+        {"protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "UseIPv4"}},
+        {"protocol": "blackhole", "tag": "block", "settings": {"response": {"type": "http"}}},
         {
             "protocol": "dns",
             "tag": "dns-out",
@@ -581,16 +581,26 @@ def main():
         direct_outbound = {
             "protocol": "freedom",
             "tag": "direct",
+            "settings": {
+                "domainStrategy": "UseIPv4"
+            },
             "streamSettings": {
                 "sockopt": {
                     "mark": 0,
-                    "tcpKeepAliveInterval": 30,
-                    "tcpNoDelay": True
+                    "tcpKeepAliveInterval": 30
                 }
             }
         }
         
-        block_outbound = {"protocol": "blackhole", "tag": "block"}
+        block_outbound = {
+            "protocol": "blackhole",
+            "tag": "block",
+            "settings": {
+                "response": {
+                    "type": "http"
+                }
+            }
+        }
         dns_outbound = build_dns_outbound()
         
         cfg["outbounds"] = proxy_outbounds + [direct_outbound, block_outbound, dns_outbound]
@@ -621,8 +631,8 @@ def main():
         if has_hole(all_obs):
             # DIRECT режим (hole найден)
             cfg["outbounds"] = [
-                {"protocol": "freedom", "tag": "direct"},
-                {"protocol": "blackhole", "tag": "block"},
+                {"protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "UseIPv4"}},
+                {"protocol": "blackhole", "tag": "block", "settings": {"response": {"type": "http"}}},
                 build_dns_outbound()
             ]
             cfg["routing"] = {
@@ -636,8 +646,8 @@ def main():
             if chosen is None:
                 # Нет доступных серверов
                 cfg["outbounds"] = [
-                    {"protocol": "freedom", "tag": "direct"},
-                    {"protocol": "blackhole", "tag": "block"},
+                    {"protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "UseIPv4"}},
+                    {"protocol": "blackhole", "tag": "block", "settings": {"response": {"type": "http"}}},
                     build_dns_outbound()
                 ]
                 cfg["routing"] = {
@@ -657,11 +667,13 @@ def main():
                 direct_outbound = {
                     "protocol": "freedom",
                     "tag": "direct",
+                    "settings": {
+                        "domainStrategy": "UseIPv4"
+                    },
                     "streamSettings": {
                         "sockopt": {
                             "mark": 0,
-                            "tcpKeepAliveInterval": 30,
-                            "tcpNoDelay": True
+                            "tcpKeepAliveInterval": 30
                         }
                     }
                 }
@@ -669,7 +681,15 @@ def main():
                 cfg["outbounds"] = [
                     chosen,
                     direct_outbound,
-                    {"protocol": "blackhole", "tag": "block"},
+                    {
+                        "protocol": "blackhole",
+                        "tag": "block",
+                        "settings": {
+                            "response": {
+                                "type": "http"
+                            }
+                        }
+                    },
                     build_dns_outbound()
                 ]
                 cfg["routing"] = {
