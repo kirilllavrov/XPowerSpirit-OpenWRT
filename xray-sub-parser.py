@@ -7,13 +7,15 @@ import urllib.request
 import re
 import syslog
 
+syslog.openlog("xray-parser")
+
 
 # -----------------------------
 # ЛОГИРОВАНИЕ ОШИБОК
 # -----------------------------
 def log_error(msg: str) -> None:
     """Отправляет сообщение об ошибке в syslog и в stderr"""
-    syslog.syslog(syslog.LOG_ERR, f"xray-parser: {msg}")
+    syslog.syslog(syslog.LOG_ERR, msg)
     print(msg, file=sys.stderr)
 
 
