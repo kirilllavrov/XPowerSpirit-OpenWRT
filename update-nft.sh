@@ -63,10 +63,8 @@ setup_network() {
     nft add rule inet fw4 xray_tproxy iifname "$LAN_IF" meta l4proto tcp tproxy ip to 127.0.0.1:12345 meta mark set 0x1 accept
     nft add rule inet fw4 xray_tproxy iifname "$LAN_IF" meta l4proto udp tproxy ip to 127.0.0.1:12345 meta mark set 0x1 accept
 
-    # QUIC блокировка
-    if ! nft list chain inet fw4 prerouting 2>/dev/null | grep -q "udp dport 443 drop"; then
-        nft insert rule inet fw4 prerouting udp dport 443 drop
-    fi
+    # Блокировка QUIC (только с LAN, чтобы не трогать входящий UDP/443)
+    nft add rule inet fw4 xray_tproxy iifname "$LAN_IF" udp dport 443 drop
 
     logger -t update-nft "Xray TProxy rules applied"
 }
