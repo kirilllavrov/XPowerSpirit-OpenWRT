@@ -490,7 +490,7 @@ start_service() {
     ntpd -q -p 1.0.0.1 2>/dev/null || \
     logger -t xray "Time sync failed, continuing anyway"
     sleep 1
-	
+    
     for i in $(seq 1 15); do
         if ip route | grep -q default && resolveip -4 google.com 77.88.8.8 >/dev/null 2>&1; then
             break
