@@ -58,7 +58,7 @@
 │         │          ┌───────────────┐            │           │
 │         └─────────►│   Xray Core   │◄───────────┘           │
 │                    │  (TProxy +    │                        │
-│                    │   DNS 5053)   │                        │
+│                    │   DNS 5353)   │                        │
 │                    └───────────────┘                        │
 │                                                             │
 │  ┌──────────────────────────────────────────────────────┐   │
@@ -72,12 +72,14 @@
 
 ### Поток трафика
 
-1. **Клиент → Гостевая сеть**: Трафик попадает в цепочку `prerouting` nftables
-2. **nftables**: Отфильтровывает локальные адреса, DNS, исключения; остальное направляет на `127.0.0.1:12345`
-3. **Xray TProxy**: Принимает трафик, выполняет DNS-over-HTTPS через встроенный DNS-резолвер
+1. **Клиент** → трафик попадает в цепочку `prerouting` nftables
+2. **nftables (fw4 → xray_tproxy)**: Фильтрация локальных адресов, DNS, DHCP, bypass серверов подписки; остальное — TProxy на `127.0.0.1:12345`
+3. **Xray TProxy**: Прозрачно перехватывает трафик, выполняет DNS-over-HTTPS через встроенный DNS
 4. **Маршрутизация**:
    - `geoip:ru`, `geoip:private` → напрямую (`direct`)
-   - Остальной трафик → прокси (`proxy`)
+   - `geosite:category-ru`, `geosite:private`, `geosite:category-browser` и т.д. → напрямую
+   - `geosite:category-streaming`, `geosite:category-games` → прокси (или балансировщик)
+   - Остальной TCP/UDP → прокси (или балансировщик)
 
 ---
 
@@ -120,18 +122,41 @@ chmod +x install-openwrt-xray.sh
 
 ### 3. Запуск установки
 
+**Минимальная установка (только прокси):**
 ```bash
 ./install-openwrt-xray.sh --sub=https://your-subscription-url.com
+```
+
+**Полная установка (прокси + гостевая сеть + PPPoE):**
+```bash
+./install-openwrt-xray.sh \
+  --sub=https://your-subscription-url.com \
+  --sub-ua="happ/3.21" \
+  --remarks="best" \
+  --guest=1 \
+  --guest-ip=192.168.2.1 \
+  --guest-dl=10240 \
+  --guest-ul=5120 \
+  --pppoe=1 \
+  --pppoe-user=login \
+  --pppoe-pass=password
 ```
 
 **Параметры установки:**
 
 | Параметр | Описание | По умолчанию |
 |----------|----------|--------------|
-| `--sub=URL` | URL подписки VLESS (обязательно) | — |
+| `--sub=URL` | URL подписки (обязательно) | — |
+| `--sub-ua=STRING` | User-Agent для запроса подписки | `OpenWrt-Xray/1.0` |
+| `--remarks=STRING` | Фильтр профиля по remarks (для JSON-подписок) | — |
+| `--guest=1` | Включить гостевую сеть + SQM | `0` |
 | `--guest-ip=IP` | IP-адрес шлюза гостевой сети | `192.168.2.1` |
 | `--guest-dl=Kbps` | Лимит скачивания для гостей | `5120` (5 Mbps) |
 | `--guest-ul=Kbps` | Лимит загрузки для гостей | `5120` (5 Mbps) |
+| `--pppoe=1` | Настроить PPPoE-соединение | `0` |
+| `--pppoe-user=LOGIN` | Логин PPPoE | — |
+| `--pppoe-pass=PASS` | Пароль PPPoE | — |
+| `--dwl=DOMAIN` | Домен для whitelist (приоритет при выборе сервера) | — |
 
 ### 4. Настройка Wi-Fi (опционально)
 
@@ -158,33 +183,33 @@ chmod +x setup-wifi-network.sh
 
 **Что делает:**
 
-1. **Настройка времени** — устанавливает таймзону `Europe/Moscow` (MSK-3)
-2. **Сохранение подписки** — записывает URL в `/etc/xray/subscription.url`
-3. **Гостевая сеть** — создаёт:
+1. **Настройка времени** — устанавливает таймзону `Europe/Moscow` (MSK-3), синхронизирует NTP
+2. **Сохранение подписки** — записывает URL, User-Agent и опциональный фильтр remarks в `/etc/xray/`
+3. **Отключение IPv6** — отключает на LAN/WAN, останавливает `odhcpd`
+4. **PPPoE (опционально)** — настраивает подключение по PPPoE с MTU 1492
+5. **Гостевая сеть (опционально, `--guest=1`)**:
    - Bridge `br-guest`
    - Интерфейс `guest` с DHCP (диапазон `.100-.250`, аренда 12ч)
    - Firewall-зону с изоляцией от LAN
    - Правила для DNS/DHCP
    - Форвардинг в WAN
-4. **SQM QoS** — ограничивает скорость гостевой сети (по умолчанию 5 Mbps up/down)
-5. **Установка Xray**:
+6. **SQM QoS** — ограничивает скорость гостевой сети (cake, по умолчанию 5 Mbps up/down)
+7. **Установка Xray**:
    - Загружает последнюю версию с GitHub
    - Проверяет SHA256 через `.dgst` файл
-   - Кэширует ZIP при повторной установке
-6. **Загрузка вспомогательных скриптов** в `/usr/share/xray/`:
-   - `xray-generate-config.py`
-   - `xray-sub-parser.py`
-   - `update-xray.sh`
-   - `update-nft.sh`
-7. **Настройка DNS** — перенаправляет dnsmasq на `127.0.0.1:5353`
-8. **Init-скрипт** — создаёт `/etc/init.d/xray` с автозапуском
-9. **Маршрутизация** — добавляет таблицу `xray` (ID 100) в `/etc/iproute2/rt_tables`
-10. **Sysctl** — включает `route_localnet` и `ip_forward`
-11. **Гео-базы** — загружает `geoip.dat` и `geosite.dat` с проверкой SHA256
-12. **HWID** — генерирует уникальный идентификатор устройства HWID
-13. **Генерация config.json** — парсит подписку и создаёт конфигурацию
-14. **Cron** — добавляет задачу на обновление в 2:30 ночи
-15. **Hotplug** — настраивает автообновление при подъёме WAN-интерфейса
+   - Кэширует ZIP при повторной установке (по SHA)
+8. **Загрузка вспомогательных скриптов** в `/usr/share/xray/`
+9. **Настройка DNS** — dnsmasq → `127.0.0.1:5353` (Xray DNS) + fallback `77.88.8.8`
+10. **Init-скрипт** — `/etc/init.d/xray` с прокачкой времени, ожиданием сети, проверкой конфига
+11. **Маршрутизация** — таблица `xray` (ID 100) в `/etc/iproute2/rt_tables`
+12. **Sysctl** — `route_localnet`, `ip_forward`
+13. **Гео-базы** — `geoip.dat` / `geosite.dat` с проверкой SHA256
+14. **HWID** — уникальный ID устройства (UUID)
+15. **Генерация config.json** — автоматическое определение формата подписки:
+    - **Base64 (VLESS URI)** — через `xray-sub-parser.py` + `xray-generate-config.py`
+    - **JSON (Happ/Sing-box)** — напрямую через `xray-generate-config.py --format json`
+16. **Cron** — автообновление в 2:30 ночи
+17. **Hotplug** — автообновление при подъёме WAN (`ifup wan`)
 
 **Логирование:** Все этапы записываются в `/tmp/xray_install.log`
 
@@ -256,24 +281,30 @@ chmod +x setup-led-status.sh
 
 **Выполняет:**
 
-1. **Проверка HWID и подписки** — читает `/etc/xray/hwid` и `/etc/xray/subscription.url`
-2. **Обновление Xray**:
-   - Сверяет SHA256 текущей и новой версии
-   - Скачивает только если есть изменения
-   - Проверяет целостность после загрузки
-3. **Обновление geoip/geosite**:
-   - Загружает с CDN (jsdelivr.net) с проверкой SHA256
+1. **Ротация логов** — очищает логи при превышении 1MB
+2. **Проверка HWID и подписки** — читает `/etc/xray/hwid`, `subscription.url`, `sub_user_agent`, `sub_remarks`
+3. **Обновление Xray**:
+   - Скачивает `.dgst` с GitHub, сверяет SHA256
+   - Скачивает ZIP только если SHA изменился
+   - Останавливает Xray, обновляет бинарник, проверяет целостность
+4. **Обновление geoip/geosite**:
+   - Загружает с GitHub с проверкой SHA256
    - Кэширует SHA256 в `/etc/xray/state/`
-4. **Пересборка config.json**:
-   - Загружает подписку с заголовком `x-hwid: <uuid>`
-   - Парсит через `xray-sub-parser.py`
-   - Генерирует конфиг через `xray-generate-config.py`
-   - Проверяет валидность через `xray run -test`
-   - Имеет 2 попытки при ошибке
-5. **Пересборка nftables** — вызывает `update-nft.sh`
-6. **Перезапуск Xray** — применяет новые настройки
+   - Атомарное обновление (mv)
+5. **Пересборка config.json** (автоопределение формата подписки):
 
-**Отказоустойчивость:** При неудаче всех попыток останавливает Xray (не оставляет нерабочий конфиг)
+   **По User-Agent:**
+   - `*happ*`, `*singbox*`, `*karing*`, `*sfa*`, `*sfi*`, `*sfm*`, `*sft*` → **JSON формат** (напрямую `xray-generate-config.py --format json`)
+   - Любой другой → **Base64/VLESS формат** (через `xray-sub-parser.py` + `xray-generate-config.py`)
+
+   Для JSON формата поддерживается фильтрация по `--remarks` из файла `sub_remarks`.
+   
+   Готовый конфиг проверяется через `xray run -test` перед установкой.
+
+6. **Пересборка nftables** — вызывает `update-nft.sh`
+7. **Перезапуск Xray** — применяет новые настройки
+
+**Отказоустойчивость:** Если новый конфиг невалиден — старый остаётся, Xray не перезапускается. Если конфиг отсутствует — Xray останавливается.
 
 **Логирование:** `/tmp/log/xray-update.log`
 
@@ -286,30 +317,27 @@ chmod +x setup-led-status.sh
 
 ### update-nft.sh
 
-**Назначение:** Применение правил nftables для TProxy.
+**Назначение:** Применение правил nftables для TProxy (интеграция с fw4 OpenWrt).
 
 **Алгоритм:**
 
-1. **Очистка** — удаляет старую таблицу `inet xray`, правила fwmark и таблицу маршрутов 100
-2. **Policy Routing**:
-
+1. **Policy Routing**:
    ```bash
-   ip rule del fwmark 1 table 100  # очистка старых правил
-   ip route flush table 100
    ip rule add fwmark 1 table 100
    ip route add local 0.0.0.0/0 dev lo table 100
    ```
 
-3. **Извлечение IP серверов** — парсит `config.json` через Python или grep для исключения их из TProxy
-4. **Создание таблицы `inet xray`**:
-   - Исключения: localhost, RFC1918, link-local, multicast, резервные адреса
-   - Исключение IP серверов подписки
-   - Исключение DNS (порт 53)
-   - Исключение DHCP (порты 67-68)
-   - Исключение Mark 0x1 (трафик самого Xray)
-   - TProxy для TCP/UDP с LAN-интерфейса на `127.0.0.1:12345` с `meta mark set 1`
+2. **Извлечение IP серверов** — парсит `config.json` через Python для исключения их из TProxy
 
-**Автоопределение LAN:** Если `br-lan` отсутствует, автоматически определяет интерфейс из `network.lan.device`.
+3. **Создание/обновление цепочки `xray_tproxy`** в таблице `inet fw4`:
+   - **Bypass**: локальные адреса (127.0.0.0/8, RFC1918, link-local), DNS-резолверы, DHCP (порт 67-68)
+   - **Bypass прокси-серверов**: IP адреса серверов подписки
+   - **Bypass гостевой сети** (`br-guest`) — трафик гостей не проксируется
+   - **Bypass самого Xray**: `meta mark 0x1 return` (чтобы не зацикливать трафик)
+   - **TProxy для LAN** (`br-lan`): TCP/UDP → `tproxy ip to 127.0.0.1:12345`, `meta mark set 0x1`
+   - **Блокировка QUIC**: UDP/443 с LAN (чтобы не мешал обходу блокировок)
+
+4. Цепочка вызывается из `prerouting` через `jump xray_tproxy`
 
 ---
 
@@ -317,15 +345,15 @@ chmod +x setup-led-status.sh
 
 **Назначение:** Комплексная диагностика работы Xray TProxy.
 
-**Проверяет 10 ключевых точек:**
+**Проверяет 11 ключевых точек:**
 
 | # | Компонент | Что проверяется |
 |---|-----------|-----------------|
 | 1 | Процесс Xray | Запущен ли `xray` (`pgrep -a xray`) |
 | 2 | Порты | Слушается ли порт 12345 (через `ss -tuln`) |
-| 3 | Конфигурация | Наличие `tproxy` в inbound и `mark: 0` в outbound sockopt |
-| 4 | nftables | Таблица `inet xray`, исключение DNS (порт 53), hook prerouting priority mangle |
-| 5 | Интеграция fw4 | Jump в цепочку `prerouting` из `inet fw4 mangle_prerouting` |
+| 3 | Конфигурация | Наличие `tproxy` в inbound, `mark: 0` в sockopt |
+| 4 | nftables | Цепочка `inet fw4 xray_tproxy`: jump из prerouting, bypass DNS (53), bypass серверов, TProxy-правила, блокировка QUIC |
+| 5 | *(объединено с п.4)* | — |
 | 6 | Маршрутизация | `ip rule` с fwmark 0x1, таблица `xray` с `local default` |
 | 7 | dnsmasq | Перенаправление на `127.0.0.1#5353` |
 | 8 | Логи Xray | Последние 3 ошибки из `/tmp/log/xray-error.log` |
@@ -334,17 +362,8 @@ chmod +x setup-led-status.sh
 
 **Авто-рекомендации:** Скрипт выдаёт конкретные команды для исправления найденных проблем:
 
-- `[FIX DNS]` — если порт 53 не исключён из TProxy
-- `[FIX DNSMASQ]` — если dnsmasq не перенаправляет на Xray
-
-**Пример вывода:**
-
-```
-[FAIL] DNS (порт 53) НЕ исключён! ГЛАВНАЯ ПРИЧИНА: 'сайты не грузятся'
-🔧 РЕКОМЕНДАЦИИ:
-[FIX DNS] Выполни:
-/usr/share/xray/update-nft.sh
-```
+- `[FIX NFT]` — если TProxy-правила отсутствуют
+- `[FIX DNSMASQ]` — если dnsmasq не перенаправляет на Xray:5353
 
 **Запуск:**
 
@@ -374,10 +393,11 @@ chmod +x setup-led-status.sh
 
 **Функции:**
 
-1. **Нормализация тегов** — очистка названий серверов от спецсимволов, замена пробелов на `_`
-2. **Загрузка URL** — автоматическое скачивание, если входные данные — HTTP(S) URL
-3. **Base64-декодирование** — умное определение, нужно ли декодировать
-4. **Парсинг query-параметров**:
+1. **Логирование** — ошибки пишутся в syslog (ident: `xray-parser`) и stderr
+2. **Нормализация тегов** — очистка названий серверов от спецсимволов, замена пробелов на `_`
+3. **Загрузка URL** — автоматическое скачивание, если входные данные — HTTP(S) URL (с проверкой на HTML-ошибку)
+4. **Base64-декодирование** — умное определение (URL-safe, с/без padding), нужно ли декодировать
+5. **Парсинг query-параметров**:
    - `encryption`, `flow`, `type` (транспорт)
    - `security`, `sni`, `fp`, `alpn`, `allowInsecure`
    - `pbk`, `sid`, `spx` (Reality)
@@ -427,54 +447,72 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
 
 **Назначение:** Генерация полного `config.json` для Xray на основе распарсенных аутбаундов.
 
-**Входные данные:** JSON-массив аутбаундов из `xray-sub-parser.py` (через stdin)
+**Входные данные:** JSON-массив аутбаундов (через stdin)
 
-**Выходные данные:** Полный конфиг Xray с inbound, outbound, routing, DNS
+**Поддерживаемые форматы:**
+- `--format vless` — аутбаунды из `xray-sub-parser.py` (выбирается лучший сервер)
+- `--format json` — JSON-подписка Happ/Sing-box (все прокси, с опциональным фильтром `--remarks`)
+
+**Выходные данные:** Полный конфиг Xray с inbound, outbound, routing, DNS, burstObservatory
 
 **Ключевые функции:**
 
-1. **Выбор лучшего сервера**:
-   - Фильтрация заглушек (UUID `0000...`, адрес `0.0.0.0`, порт `1`)
-   - Приоритет доменов из whitelist (`router.freenternet.top`)
+1. **Выбор лучшего сервера** (только для `--format vless`):
+   - Фильтрация заглушек (UUID `0000...`, адрес `0.0.0.0`/`127.0.0.1`/`hole`, порт `1`)
+   - Приоритет доменов из `DOMAIN_WHITELIST`
    - Выбор первого доступного сервера
 
-2. **Режим "hole" (DIRECT-конфиг)**:
-   - Если в подписке обнаружен сервер с адресом `"hole"` — автоматически генерируется конфигурация без прокси
-   - Весь трафик идёт напрямую (`direct`), кроме блокировки рекламы
-   - Полезно для временного отключения прокси без изменения подписки
+2. **Множественные прокси и балансировка** (только для `--format json`):
+   - Все найденные outbounds добавляются в конфиг
+   - Если прокси > 1 — создаётся **балансировщик** (стратегия `leastLoad`)
+   - **burstObservatory** на корневом уровне — мониторинг пингами (`HEAD` к `google.com/generate_204`)
+   - Балансировщик использует результаты observatory для выбора наименее нагруженного сервера
 
-3. **Базовая конфигурация:**
+3. **Режим "hole" (DIRECT-конфиг)**:
+   - Если в подписке обнаружен сервер с адресом `"hole"` — генерируется конфиг без прокси
+   - Весь трафик идёт напрямую (`direct`), реклама блокируется
+   - Полезно при окончании срока подписки
+
+4. **Базовая конфигурация:**
    - **Логирование:** access/error логи в `/tmp/log/`
    - **DNS:**
-     - Yandex (`77.88.8.8`) для `.ru` доменов
-     - Cloudflare (`1.1.1.1`), Google (`8.8.8.8`), NextDNS (`45.90.28.0`)
-     - DoH: `cloudflare-dns.com`, `dns.google`, `dns.nextdns.io`
-     - Стратегия: `UseIPv4`, кэш включён, serveStale
+     - Yandex DoH (`common.dot.dns.yandex.net`) для `.ru` доменов
+     - Cloudflare DoH (`cloudflare-dns.com`), NextDNS (`dns.nextdns.io`)
+     - Стратегия: `UseIPv4`, `serveStale`, параллельные запросы
    - **Inbound:**
-     - `tproxy-in`: порт 12345, dokodemo-door, TProxy sockopt
-     - `dns-in`: порт 5053, forward на `8.8.8.8:53`
-     - `dns-in-alt`: порт 5054, forward на `1.1.1.1:53`
+     - `tproxy-in`: порт 12345, dokodemo-door, TProxy, сниффинг http/tls
+     - `dns-local`: порт 5353, UDP, для приёма DNS от dnsmasq
 
-4. **Правила маршрутизации:**
-   - DNS-трафик → `direct`
+5. **Правила маршрутизации:**
+   - DNS-трафик (с `dns-local`) → `dns-out` (hijack во встроенный DNS)
+   - DoH-домены → `direct` (чтобы DNS-запросы не уходили в прокси)
+   - `geosite:category-ads` → `block`
+   - NTP (порт 123/UDP) → `direct`
    - `geoip:ru`, `geoip:private` → `direct`
    - `geosite:private`, `geosite:category-browser`, `geosite:category-cdn-ru`, `geosite:category-mobile`, `geosite:category-ru` → `direct`
-   - `geosite:category-streaming`, `geosite:category-games` → `proxy`
-   - Остальной TCP/UDP → `proxy`
+   - `geosite:category-streaming`, `geosite:category-games` → прокси/балансировщик
+   - Остальной TCP/UDP → прокси/балансировщик
 
-5. **Stream settings:**
-   - `mark: 0` — исключение трафика Xray из TProxy (на уровне outbound)
+6. **Stream settings:**
+   - `mark: 0` — исключение трафика Xray из TProxy
    - `tcpKeepAliveInterval: 30`
    - `tcpNoDelay: true`
    - Mux отключён
 
-**Режим без серверов:** Если все сервера — заглушки или отсутствует рабочий сервер, создаётся DIRECT-конфиг (весь трафик напрямую).
+**Режим без серверов:** Если все сервера — заглушки, создаётся DIRECT-конфиг.
 
-**Пример использования:**
+**Примеры использования:**
 
 ```bash
+# VLESS формат (через парсер)
 python3 xray-sub-parser.py < subscription.url | \
-python3 xray-generate-config.py --output /etc/xray/config.json
+python3 xray-generate-config.py --format vless --output /etc/xray/config.json
+
+# JSON формат (Happ/Sing-box)
+python3 xray-generate-config.py --format json --output /etc/xray/config.json < subscription.json
+
+# JSON формат с фильтром по remarks
+python3 xray-generate-config.py --format json --remarks "best" --output config.json < sub.json
 ```
 
 ---
@@ -486,8 +524,11 @@ python3 xray-generate-config.py --output /etc/xray/config.json
 ├── config.json           # Активная конфигурация Xray
 ├── subscription.url      # URL подписки
 ├── hwid                  # Уникальный ID устройства (UUID)
+├── sub_user_agent        # User-Agent для запроса подписки
+├── sub_remarks           # Фильтр remarks для JSON-подписок (опционально)
 └── state/
     ├── xray.zip.sha256sum
+    ├── xray.dgst
     ├── geoip.dat.sha256sum
     └── geosite.dat.sha256sum
 
@@ -504,9 +545,10 @@ python3 xray-generate-config.py --output /etc/xray/config.json
 /etc/hotplug.d/iface/99-xray-autoupdate  # Автообновление при ifup wan
 
 /tmp/log/
-├── xray-access.log       # Логи доступа
-├── xray-error.log        # Логи ошибок
+├── xray-access.log       # Логи доступа Xray
+├── xray-error.log        # Логи ошибок Xray
 ├── xray-update.log       # Логи обновлений
+├── xray_install.log      # Логи установки
 └── setup-wifi.log        # Логи настройки Wi-Fi
 ```
 
@@ -517,15 +559,31 @@ python3 xray-generate-config.py --output /etc/xray/config.json
 ### Обновление подписки вручную
 
 ```bash
-# Перечитать подписку и перегенерировать конфиг
 HWID=$(cat /etc/xray/hwid)
 SUB_URL=$(cat /etc/xray/subscription.url)
 
-curl -s -L -H "x-hwid: $HWID" "$SUB_URL" | \
-  python3 /usr/share/xray/xray-sub-parser.py | \
-  python3 /usr/share/xray/xray-generate-config.py --output /etc/xray/config.json
+# Скачать подписку
+curl -s -L -H "x-hwid: $HWID" "$SUB_URL" > /tmp/sub.txt
+```
 
-# Проверить и перезапустить
+**Для VLESS (Base64) подписки:**
+```bash
+python3 /usr/share/xray/xray-sub-parser.py < /tmp/sub.txt | \
+python3 /usr/share/xray/xray-generate-config.py --format vless --output /etc/xray/config.json
+```
+
+**Для JSON (Happ/Sing-box) подписки:**
+```bash
+python3 /usr/share/xray/xray-generate-config.py --format json --output /etc/xray/config.json < /tmp/sub.txt
+```
+
+**С фильтром по remarks (JSON):**
+```bash
+python3 /usr/share/xray/xray-generate-config.py --format json --remarks "best" --output /etc/xray/config.json < /tmp/sub.txt
+```
+
+**Проверить и перезапустить:**
+```bash
 xray run -test -config /etc/xray/config.json && service xray restart
 ```
 
@@ -580,7 +638,7 @@ DOMAIN_WHITELIST = [
 2. **Проверьте исключение DNS в nftables:**
 
    ```bash
-   nft list chain ip xray xray_tproxy | grep 53
+   nft list chain inet fw4 xray_tproxy | grep 53
    ```
 
    Должно быть правило с `return` для порта 53.
@@ -591,13 +649,13 @@ DOMAIN_WHITELIST = [
    uci show dhcp.@dnsmasq[0].server
    ```
 
-   Должно быть: `127.0.0.1#5053` и `127.0.0.1#5054`
+   Должно быть: `127.0.0.1#5353`
 
 4. **Автоматическое исправление (если диагностика выявила проблемы):**
 
    ```bash
-   # Если DNS не исключён из TProxy:
-   nft delete table ip xray; service xray restart
+   # Если TProxy правила отсутствуют:
+   /usr/share/xray/update-nft.sh
    
    # Если dnsmasq не настроен:
    uci set dhcp.@dnsmasq[0].noresolv='1'
