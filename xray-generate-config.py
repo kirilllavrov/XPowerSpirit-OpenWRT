@@ -8,6 +8,9 @@ Xray Config Generator for OpenWrt TProxy
 Специальная обработка "hole":
   Если в подписке обнаружен outbound с address="hole", генерируется DIRECT-конфиг
   (весь трафик идёт напрямую, прокси отключены). Это сигнал об окончании срока подписки.
+
+Балансировка:
+  Используется стратегия leastLoad с burstObservatory для выбора наиболее стабильного прокси.
 """
 
 import json
@@ -495,26 +498,35 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
 
 
 def build_balancer(proxy_outbounds: list) -> dict:
-    """Создаёт конфигурацию балансировщика для нескольких прокси"""
+    """Создаёт конфигурацию балансировщика для нескольких прокси (leastLoad)"""
     selector = [ob["tag"] for ob in proxy_outbounds]
     return {
         "tag": "balancer",
         "selector": selector,
         "strategy": {
-            "type": "leastPing"
+            "type": "leastLoad"
         },
         "fallbackTag": "direct"
     }
 
 
-def build_observatory(proxy_outbounds: list) -> dict:
-    """Создаёт конфигурацию observatory для мониторинга прокси"""
+def build_burst_observatory(proxy_outbounds: list) -> dict:
+    """
+    Создаёт конфигурацию burstObservatory для мониторинга прокси.
+    Используется со стратегией leastLoad.
+    """
     subject_selector = [ob["tag"] for ob in proxy_outbounds]
     return {
-        "subjectSelector": subject_selector,
-        "probeURL": "https://www.google.com/generate_204",
-        "probeInterval": "300s",
-        "enableConcurrency": True
+        "burstObservatory": {
+            "subjectSelector": subject_selector,
+            "pingConfig": {
+                "destination": "https://www.google.com/generate_204",
+                "interval": "1m",
+                "sampling": 10,
+                "timeout": "5s",
+                "httpMethod": "HEAD"
+            }
+        }
     }
 
 
@@ -582,7 +594,9 @@ def main():
         dns_outbound = build_dns_outbound()
         
         cfg["outbounds"] = proxy_outbounds + [direct_outbound, block_outbound, dns_outbound]
-        cfg["observatory"] = build_observatory(proxy_outbounds)
+        
+        # Используем burstObservatory (для стратегии leastLoad)
+        cfg.update(build_burst_observatory(proxy_outbounds))
         
         routing = {"domainStrategy": "IPOnDemand", "rules": build_rules(proxy_outbounds)}
         
@@ -593,7 +607,7 @@ def main():
         
         print(f"  ✓ Сгенерировано {len(proxy_outbounds)} прокси", file=sys.stderr)
         if len(proxy_outbounds) > 1:
-            print(f"  ✓ Балансировщик: {len(proxy_outbounds)} серверов", file=sys.stderr)
+            print(f"  ✓ Балансировщик: {len(proxy_outbounds)} серверов (leastLoad)", file=sys.stderr)
         
     else:
         # ========================================
@@ -669,7 +683,7 @@ def main():
         with open(args.output, "w") as f:
             json.dump(cfg, f, indent=2, ensure_ascii=False)
         
-        print(f"  ✓ Конфиг сохранён: {args.output}", file=sys.stderr)
+        print(f"  ✓ Конфиг сохранен: {args.output}", file=sys.stderr)
 
 
 if __name__ == "__main__":
