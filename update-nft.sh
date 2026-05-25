@@ -128,10 +128,13 @@ NFT
         # 4. Bypass уже помеченного трафика (от самого Xray)
         meta mark 0x1 return;
 
-        # 5. DHCP — не трогаем
+		# 5. Блокируем UDP 443 (QUIC)
+		udp dport 443 drop;
+
+        # 6. DHCP — не трогаем
         udp dport { 67, 68 } return;
 
-        # 6. Всё остальное с LAN → TProxy
+        # 7. Всё остальное с LAN → TProxy
         iifname "$LAN_IF" meta l4proto { tcp, udp } \
             tproxy ip to 127.0.0.1:12345 meta mark set 1 accept;
     }
