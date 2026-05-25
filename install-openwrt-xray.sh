@@ -170,7 +170,10 @@ uci commit dhcp
 /etc/init.d/odhcpd stop 2>/dev/null || true
 /etc/init.d/odhcpd disable 2>/dev/null || true
 
-service network restart
+if ! service network restart; then
+	echo "  [X] Не удалось перезапустить сеть после отключения IPv6"
+	exit 1
+fi
 sleep 5
 for i in $(seq 1 10); do
 	ip link show br-lan >/dev/null 2>&1 && break
@@ -289,7 +292,10 @@ if [ $GUEST_ENABLED -eq 1 ]; then
 	echo "  → SQM настроен для Guest: ${DL_GUEST}kbps down / ${UL_GUEST}kbps up"
 
 	echo "Применяем сетевые изменения..."
-	service network restart
+	if ! service network restart; then
+		echo "  [X] Не удалось перезапустить сеть после настройки гостевой сети"
+		exit 1
+	fi
 	sleep 5
 	for i in $(seq 1 10); do
 		ip link show br-guest >/dev/null 2>&1 && break

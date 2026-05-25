@@ -678,12 +678,11 @@ def main():
                 }
                 print(f"  ✓ Выбран сервер: {chosen_tag}", file=sys.stderr)
     
-    # Сохраняем результат (если ещё не сохранён)
-    if args.format != 'json' or not has_hole_in_subscription(load_json_subscription()):
-        with open(args.output, "w") as f:
-            json.dump(cfg, f, indent=2, ensure_ascii=False)
-        
-        print(f"  ✓ Конфиг сохранен: {args.output}", file=sys.stderr)
+    # Сохраняем результат (JSON hole-путь уже вернулся раньше через return)
+    with open(args.output, "w") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+    print(f"  ✓ Конфиг сохранен: {args.output}", file=sys.stderr)
 
 
 if __name__ == "__main__":

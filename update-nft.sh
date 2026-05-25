@@ -2,8 +2,24 @@
 # OpenWrt — обновление nftables правил для Xray TProxy
 
 CONF="/etc/xray/config.json"
-LAN_IF="br-lan"
-GUEST_IF="br-guest"
+
+# Автоопределение LAN интерфейса
+if ip link show br-lan >/dev/null 2>&1; then
+    LAN_IF="br-lan"
+else
+    # Fallback: читаем из UCI
+    LAN_IF=$(uci -q get network.lan.device || uci -q get network.lan.ifname || echo "br-lan")
+    # Если UCI вернул несколько интерфейсов (bridge), берём первый
+    LAN_IF="${LAN_IF%% *}"
+fi
+
+# Автоопределение Guest интерфейса
+if ip link show br-guest >/dev/null 2>&1; then
+    GUEST_IF="br-guest"
+else
+    GUEST_IF=$(uci -q get network.guest.device || uci -q get network.guest.ifname || echo "")
+    GUEST_IF="${GUEST_IF%% *}"
+fi
 
 extract_server_ips() {
     python3 -c '
@@ -55,7 +71,7 @@ setup_network() {
     done
 
     # Гостевая сеть (если существует)
-    if ip link show br-guest >/dev/null 2>&1; then
+    if [ -n "$GUEST_IF" ] && ip link show "$GUEST_IF" >/dev/null 2>&1; then
         nft add rule inet fw4 xray_tproxy iifname "$GUEST_IF" return
     fi
 
