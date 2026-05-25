@@ -491,7 +491,13 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
    - `geoip:ru`, `geoip:private` → `direct`
    - `geosite:private`, `geosite:category-browser`, `geosite:category-cdn-ru`, `geosite:category-mobile`, `geosite:category-ru` → `direct`
    - `geosite:category-streaming`, `geosite:category-games` → прокси/балансировщик
-   - Остальной TCP/UDP → прокси/балансировщик
+   - `QUIC (UDP/443)` → `block` (VLESS+XTLS не поддерживает UDP)
+
+   > **Важно:** QUIC/UDP-443 блокируется на двух уровнях:
+   > 1. В nftables (до Xray) — только с `br-lan`
+   > 2. В Xray routing — для любого источника, включая трафик с самого роутера
+   >
+   > Это предотвращает ошибку `XTLS rejected UDP/443 traffic`
 
 6. **Stream settings:**
    - `mark: 0` — исключение трафика Xray из TProxy

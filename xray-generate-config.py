@@ -451,6 +451,13 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
             "network": "udp",
             "outboundTag": "direct"
         },
+        # QUIC (UDP/443) — блокируем на уровне Xray (VLESS+XTLS не поддерживает UDP)
+        {
+            "type": "field",
+            "port": "443",
+            "network": "udp",
+            "outboundTag": "block"
+        },
         # Локальные и российские IP — напрямую
         {
             "type": "field",
