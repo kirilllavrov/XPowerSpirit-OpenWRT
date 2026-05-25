@@ -82,24 +82,22 @@ mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR"
 #   ЕДИНАЯ ФУНКЦИЯ ЗАГРУЗКИ
 # =============================================
 
-# Универсальная загрузка файла (с поддержкой кастомных заголовков)
+# Универсальная загрузка файла (с поддержкой до 3 кастомных заголовков)
 # Использование:
-#   download_file "URL" "DEST" ["HEADER1" "HEADER2" ...]
+#   download_file "URL" "DEST" ["HEADER1" "HEADER2" "HEADER3"]
 download_file() {
     local url="$1"
     local dst="$2"
     shift 2
     local max_retries=3
     local retry=1
-    local curl_cmd="curl -s -L --max-time 15"
-    
-    # Добавляем заголовки, если они переданы
-    for header in "$@"; do
-        curl_cmd="$curl_cmd -H \"$header\""
-    done
-    
+
     while [ $retry -le $max_retries ]; do
-        eval $curl_cmd -o "$dst" "$url"
+        curl -s -L --max-time 15 \
+            ${1:+-H "$1"} \
+            ${2:+-H "$2"} \
+            ${3:+-H "$3"} \
+            -o "$dst" "$url"
         local rc=$?
 
         if [ $rc -eq 0 ] && [ -s "$dst" ]; then
