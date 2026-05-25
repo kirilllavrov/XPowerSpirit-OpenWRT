@@ -441,6 +441,13 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
             "domain": ["geosite:category-ads"],
             "outboundTag": "block"
         },
+        # NTP (порт 123) — напрямую
+        {
+            "type": "field",
+            "port": "123",
+            "network": "udp",
+            "outboundTag": "direct"
+        },
         # Локальные и российские IP — напрямую
         {
             "type": "field",
