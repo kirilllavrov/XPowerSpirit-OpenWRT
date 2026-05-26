@@ -260,7 +260,7 @@ def base_config() -> dict:
     """Возвращает базовую конфигурацию Xray с TProxy и DNS"""
     return {
         "log": {
-            "loglevel": "info",
+            "loglevel": "none",
             "access": "/tmp/log/xray-access.log",
             "error": "/tmp/log/xray-error.log"
         },
