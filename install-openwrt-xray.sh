@@ -313,7 +313,7 @@ echo "5. Устанавливаем Xray из GitHub..."
 
 # Ждём доступности GitHub API
 for i in $(seq 1 10); do
-	if curl -s --user-agent "OpenWrt-Xray/1.0" --max-time 3 https://api.github.com >/dev/null 2>&1; then
+	if curl -s --max-time 3 https://api.github.com >/dev/null 2>&1; then
 		break
 	fi
 	echo "  → Ожидание доступа к GitHub... ($i)"
@@ -321,7 +321,7 @@ for i in $(seq 1 10); do
 done
 
 # Получаем версию Xray
-LATEST_VERSION=$(curl -s --user-agent "OpenWrt-Xray/1.0" --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest |
+LATEST_VERSION=$(curl -s --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest |
 	sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
 
 [ -z "$LATEST_VERSION" ] && {
