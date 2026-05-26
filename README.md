@@ -140,6 +140,12 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
   --pass-guest=GuestPass456
 ```
 
+### 3. Настройка LED-индикации
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/setup-led-status.sh | sh
+```
+
 ---
 
 ## 📜 Детальное описание скриптов
@@ -199,12 +205,6 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
    - Горит при доступности интернета
    - Проверка через `curl https://www.google.com/gen_204` каждые 1 минуту
    - Скрипт проверки: `/usr/share/xray/net-check.sh`
-
-**Установка:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/setup-led-status.sh | sh
-```
 
 **Результат:**
 
