@@ -507,13 +507,27 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
 
 
 def build_balancer(proxy_outbounds: list) -> dict:
-    """Создаёт конфигурацию балансировщика для нескольких прокси (leastLoad)"""
+    """
+    Создаёт конфигурацию балансировщика для нескольких прокси (leastLoad).
+    
+    leastLoad выбирает наиболее стабильные серверы на основе данных burstObservatory:
+      - expected=3: трафик распределяется между тремя лучшими серверами (отказоустойчивость)
+      - maxRTT=600ms: серверы с пингом >600ms исключаются (даже если формально живы)
+      - baselines=[200ms]: серверы с разбросом задержки >200ms исключаются (джиттер)
+    
+    Если все серверы не проходят — fallback на direct.
+    """
     selector = [ob["tag"] for ob in proxy_outbounds]
     return {
         "tag": "balancer",
         "selector": selector,
         "strategy": {
-            "type": "leastLoad"
+            "type": "leastLoad",
+            "settings": {
+                "expected": 3,
+                "maxRTT": "600ms",
+                "baselines": ["200ms"]
+            }
         },
         "fallbackTag": "direct"
     }
