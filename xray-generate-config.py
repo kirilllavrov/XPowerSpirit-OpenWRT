@@ -270,6 +270,7 @@ def base_config() -> dict:
             "serveStale": True,
             "serveExpiredTTL": 1800,
             "disableFallback": False,
+            "disableFallbackIfMatch": True,
             "enableParallelQuery": True,
             "hosts": {
                 "common.dot.dns.yandex.net": ["77.88.8.1", "77.88.8.8"],
@@ -280,6 +281,7 @@ def base_config() -> dict:
                 {
                     "address": "https+local://common.dot.dns.yandex.net/dns-query",
                     "domains": ["geosite:category-ru"],
+                    "expectedIPs": ["geoip:ru"],
                     "skipFallback": True
                 },
                 {
@@ -299,7 +301,7 @@ def base_config() -> dict:
                 "port": 12345,
                 "protocol": "dokodemo-door",
                 "settings": {
-                    "network": "tcp,udp",
+                    "allowedNetwork": "tcp,udp",
                     "followRedirect": True
                 },
                 "streamSettings": {
@@ -319,7 +321,7 @@ def base_config() -> dict:
                 "port": 5353,
                 "protocol": "dokodemo-door",
                 "settings": {
-                    "network": "udp"
+                    "allowedNetwork": "udp"
                 }
             }
         ]
@@ -346,7 +348,7 @@ def build_direct_config() -> dict:
         }
     ]
     cfg["routing"] = {
-        "domainStrategy": "IPOnDemand",
+        "domainStrategy": "IPIfNonMatch",
         "rules": [
             {
                 "type": "field",
@@ -615,7 +617,7 @@ def main():
         # Используем burstObservatory (для стратегии leastLoad)
         cfg.update(build_burst_observatory(proxy_outbounds))
         
-        routing = {"domainStrategy": "IPOnDemand", "rules": build_rules(proxy_outbounds)}
+        routing = {"domainStrategy": "IPIfNonMatch", "rules": build_rules(proxy_outbounds)}
         
         if len(proxy_outbounds) > 1:
             routing["balancers"] = [build_balancer(proxy_outbounds)]
@@ -643,7 +645,7 @@ def main():
                 build_dns_outbound()
             ]
             cfg["routing"] = {
-                "domainStrategy": "IPOnDemand",
+                "domainStrategy": "IPIfNonMatch",
                 "rules": build_rules([], direct_mode=True)
             }
             print("[!] Найден сервер 'hole'. Включён DIRECT-конфиг.", file=sys.stderr)
@@ -658,7 +660,7 @@ def main():
                     build_dns_outbound()
                 ]
                 cfg["routing"] = {
-                    "domainStrategy": "IPOnDemand",
+                    "domainStrategy": "IPIfNonMatch",
                     "rules": build_rules([], direct_mode=True)
                 }
                 print("[!] Нет доступных серверов (только заглушки). Создан DIRECT-конфиг.", file=sys.stderr)
@@ -700,7 +702,7 @@ def main():
                     build_dns_outbound()
                 ]
                 cfg["routing"] = {
-                    "domainStrategy": "IPOnDemand",
+                    "domainStrategy": "IPIfNonMatch",
                     "rules": build_rules([chosen])
                 }
                 print(f"  ✓ Выбран сервер: {chosen_tag}", file=sys.stderr)

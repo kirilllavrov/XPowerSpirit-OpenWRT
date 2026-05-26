@@ -490,8 +490,8 @@ CONF="/etc/xray/config.json"
 ASSET_DIR="/usr/share/xray"
 
 start_service() {
-    ntpd -q -p 77.88.8.8 2>/dev/null || \
-    ntpd -q -p 1.0.0.1 2>/dev/null || \
+    ntpd -q -p ru.pool.ntp.org 2>/dev/null || \
+    ntpd -q -p time.google.com 2>/dev/null || \
     logger -t xray "Time sync failed, continuing anyway"
     sleep 1
     
@@ -521,7 +521,6 @@ start_service() {
     procd_set_param stdout 1
     procd_set_param stderr 1
     procd_set_param respawn 3600 5 5
-    procd_set_param limits core="unlimited"
     procd_set_param limits nofile="1000000 1000000"
     procd_set_param file "$CONF"
     procd_close_instance
@@ -529,7 +528,10 @@ start_service() {
     sleep 1
     if ! pidof xray >/dev/null; then
         logger -t xray "Xray failed to start — disabling TProxy"
-        nft delete table inet xray 2>/dev/null
+        nft flush chain inet fw4 xray_tproxy 2>/dev/null
+        nft delete chain inet fw4 xray_tproxy 2>/dev/null
+        nft flush chain inet fw4 xray_output 2>/dev/null
+        nft delete chain inet fw4 xray_output 2>/dev/null
         while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
         ip route flush table 100 2>/dev/null
         return 1

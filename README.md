@@ -94,8 +94,7 @@
 ### Программные зависимости
 
 ```bash
-curl ca-certificates python3 kmod-nft-tproxy kmod-nft-socket \
-unzip sqm-scripts jq wget nftables resolveip
+ca-certificates nftables kmod-nft-tproxy kmod-nft-socket python3 resolveip unzip sqm-scripts jq
 ```
 
 ### Опционально (для расширенной функциональности)
@@ -106,21 +105,14 @@ unzip sqm-scripts jq wget nftables resolveip
 
 ## 🚀 Быстрый старт
 
-### 1. Прошивка должна быть собрана со следующими пакетами:
-
-```bash
-apk-mbedtls base-files ca-bundle dnsmasq dropbear firewall4 fitblk fstools kmod-crypto-hw-safexcel kmod-gpio-button-hotplug kmod-leds-gpio kmod-nft-offload libc libgcc libustream-mbedtls logd mtd netifd nftables procd-ujail uboot-envtools uci uclient-fetch urandom-seed urngd wpad-basic-mbedtls kmod-mt7915e kmod-mt7981-firmware mt7981-wo-firmware luci luci-app-attendedsysupgrade curl ca-certificates python3 kmod-nft-tproxy kmod-nft-socket unzip sqm-scripts jq resolveip
-```
-
-### 2. Загрузка установщика
+### 1. Загрузка установщика
 
 ```bash
 cd /tmp
-wget https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/install-openwrt-xray.sh
-chmod +x install-openwrt-xray.sh
+curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/install-openwrt-xray.sh | sh
 ```
 
-### 3. Запуск установки
+### 2. Запуск установки
 
 **Минимальная установка (только прокси):**
 ```bash
@@ -158,11 +150,10 @@ chmod +x install-openwrt-xray.sh
 | `--pppoe-pass=PASS` | Пароль PPPoE | — |
 | `--dwl=DOMAIN` | Домен для whitelist (приоритет при выборе сервера) | — |
 
-### 4. Настройка Wi-Fi (опционально)
+### 3. Настройка Wi-Fi (опционально)
 
 ```bash
-wget https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/setup-wifi-network.sh
-chmod +x setup-wifi-network.sh
+curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/setup-wifi-network.sh | sh
 ```
 
 ```bash
@@ -322,6 +313,7 @@ chmod +x setup-led-status.sh
 **Алгоритм:**
 
 1. **Policy Routing**:
+
    ```bash
    ip rule add fwmark 1 table 100
    ip route add local 0.0.0.0/0 dev lo table 100
@@ -450,6 +442,7 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
 **Входные данные:** JSON-массив аутбаундов (через stdin)
 
 **Поддерживаемые форматы:**
+
 - `--format vless` — аутбаунды из `xray-sub-parser.py` (выбирается лучший сервер)
 - `--format json` — JSON-подписка Happ/Sing-box (все прокси, с опциональным фильтром `--remarks`)
 
