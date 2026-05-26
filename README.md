@@ -105,33 +105,13 @@ ca-certificates nftables kmod-nft-tproxy kmod-nft-socket python3 resolveip unzip
 
 ## 🚀 Быстрый старт
 
-### 1. Загрузка установщика
+### 1. Загрузка и минимальная установка
 
 ```bash
 cd /tmp
-curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/install-openwrt-xray.sh | sh
-```
-
-### 2. Запуск установки
-
-**Минимальная установка (только прокси):**
-```bash
-./install-openwrt-xray.sh --sub=https://your-subscription-url.com
-```
-
-**Полная установка (прокси + гостевая сеть + PPPoE):**
-```bash
-./install-openwrt-xray.sh \
+curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/install-openwrt-xray.sh | sh -s -- \
   --sub=https://your-subscription-url.com \
-  --sub-ua="happ/3.21" \
-  --remarks="best" \
-  --guest=1 \
-  --guest-ip=192.168.2.1 \
-  --guest-dl=10240 \
-  --guest-ul=5120 \
-  --pppoe=1 \
-  --pppoe-user=login \
-  --pppoe-pass=password
+  --guest=1
 ```
 
 **Параметры установки:**
@@ -150,14 +130,10 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 | `--pppoe-pass=PASS` | Пароль PPPoE | — |
 | `--dwl=DOMAIN` | Домен для whitelist (приоритет при выборе сервера) | — |
 
-### 3. Настройка Wi-Fi (опционально)
+### 2. Настройка Wi-Fi (опционально)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/setup-wifi-network.sh | sh
-```
-
-```bash
-./setup-wifi-network.sh \
+curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/setup-wifi-network.sh | sh -s -- \
   --ssid=Home-WiFi \
   --pass=MySecurePass123 \
   --ssid-guest=Guest-WiFi \
@@ -227,8 +203,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 **Установка:**
 
 ```bash
-chmod +x setup-led-status.sh
-./setup-led-status.sh
+curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/setup-led-status.sh | sh
 ```
 
 **Результат:**
