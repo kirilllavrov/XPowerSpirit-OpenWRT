@@ -21,7 +21,7 @@ printf "\n[3] Config Xray:\n"
 CFG="/etc/xray/config.json"
 [ -f "$CFG" ] || { _fail "$CFG отсутствует!"; exit 1; }
 grep -q '"tproxy": "tproxy"' "$CFG" && _ok "TProxy включён в inbound" || _fail "TProxy не настроен"
-grep -q '"mark": 0' "$CFG" && _ok "Mark 0 на месте (sockopt)" || _warn "Mark 0 не найден (может быть не указан явно)"
+grep -q '"mark": 2' "$CFG" && _ok "Mark 2 на месте (sockopt) — loop prevention через OUTPUT" || _warn "Mark 2 не найден (может быть не указан явно)"
 
 # 4. nftables (inet fw4, цепочка xray_tproxy)
 printf "\n[4] nftables (inet fw4 xray_tproxy):\n"
@@ -57,6 +57,25 @@ if [ -n "$CHAIN_EXISTS" ]; then
         _warn "Блокировка QUIC не настроена"
 else
     _fail "Цепочка inet fw4 xray_tproxy отсутствует!"
+fi
+
+# 5. OUTPUT chain (xray_output) — для трафика самого роутера
+printf "\n[5] nftables OUTPUT (inet fw4 xray_output):\n"
+OUTPUT_CHAIN=$(nft list chain inet fw4 xray_output 2>/dev/null)
+if [ -n "$OUTPUT_CHAIN" ]; then
+    _ok "Цепочка inet fw4 xray_output загружена"
+
+    # Loop prevention
+    echo "$OUTPUT_CHAIN" | grep -q "meta mark 2 return" && \
+        _ok "Loop prevention (mark 2 return) настроена" || \
+        _warn "Loop prevention (mark 2 return) не найдена"
+
+    # Маркировка для TProxy
+    echo "$OUTPUT_CHAIN" | grep -q "meta mark set 1" && \
+        _ok "Маркировка трафика роутера (mark 1) настроена" || \
+        _warn "Маркировка трафика роутера не найдена"
+else
+    _warn "Цепочка xray_output отсутствует (трафик роутера не проксируется)"
 fi
 
 # 6. Routing

@@ -60,7 +60,7 @@ def normalize_outbound(ob: dict) -> dict:
     if "sockopt" not in ob["streamSettings"]:
         ob["streamSettings"]["sockopt"] = {}
     
-    ob["streamSettings"]["sockopt"]["mark"] = 0
+    ob["streamSettings"]["sockopt"]["mark"] = 2
     ob["streamSettings"]["sockopt"]["tcpNoDelay"] = True
     ob["streamSettings"]["sockopt"]["tcpKeepAliveInterval"] = 30
     
@@ -243,7 +243,7 @@ def normalize_vless_outbound(ob: dict, chosen_tag: str) -> dict:
     
     ss = ob.setdefault("streamSettings", {})
     sockopt = ss.setdefault("sockopt", {})
-    sockopt["mark"] = 0
+    sockopt["mark"] = 2
     sockopt["tcpKeepAliveInterval"] = 30
     sockopt["tcpNoDelay"] = True
     ob.setdefault("mux", {"enabled": False})
@@ -593,7 +593,7 @@ def main():
             },
             "streamSettings": {
                 "sockopt": {
-                    "mark": 0,
+                    "mark": 2,
                     "tcpKeepAliveInterval": 30
                 }
             }
@@ -679,7 +679,7 @@ def main():
                     },
                     "streamSettings": {
                         "sockopt": {
-                            "mark": 0,
+                            "mark": 2,
                             "tcpKeepAliveInterval": 30
                         }
                     }

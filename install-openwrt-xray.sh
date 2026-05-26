@@ -539,7 +539,27 @@ start_service() {
 }
 
 stop_service() {
-    nft delete table inet xray 2>/dev/null
+    # Удаляем jump xray_tproxy из prerouting (по handle)
+    local _handle
+    _handle=$(nft -a list chain inet fw4 prerouting 2>/dev/null \
+        | grep 'jump xray_tproxy' \
+        | sed 's/.*handle //' \
+        | head -1)
+    [ -n "$_handle" ] && nft delete rule inet fw4 prerouting handle "$_handle" 2>/dev/null
+
+    # Удаляем jump xray_output из output (по handle)
+    _handle=$(nft -a list chain inet fw4 output 2>/dev/null \
+        | grep 'jump xray_output' \
+        | sed 's/.*handle //' \
+        | head -1)
+    [ -n "$_handle" ] && nft delete rule inet fw4 output handle "$_handle" 2>/dev/null
+
+    # Очищаем и удаляем цепочки
+    nft flush chain inet fw4 xray_tproxy 2>/dev/null
+    nft delete chain inet fw4 xray_tproxy 2>/dev/null
+    nft flush chain inet fw4 xray_output 2>/dev/null
+    nft delete chain inet fw4 xray_output 2>/dev/null
+
     while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
     ip route flush table 100 2>/dev/null
     logger -t xray "Stopped, network cleaned"
