@@ -678,45 +678,24 @@ if download_file "$SUB_URL" "/tmp/sub_raw.txt" "User-Agent: $SUB_USER_AGENT" "x-
         exit 1
     fi
     
-    # Определяем формат по User-Agent
-    case "$SUB_USER_AGENT" in
-        *happ*|*Happ*|*HAPP*|*singbox*|*Singbox*|*sfa*|*sfi*|*sfm*|*sft*|*karing*)
-            # JSON формат (Happ, Sing-box, Karing)
-            echo "  → Используем JSON формат (прямая генерация)"
-            if [ -n "$REMARKS_FILTER" ]; then
-                echo "  → Фильтр remarks: $REMARKS_FILTER"
-                python3 "$GENERATOR" --format json --remarks "$REMARKS_FILTER" --output "$CONFIG_JSON" < "/tmp/sub_raw.txt" 2>>"$LOG_FILE"
-            else
-                python3 "$GENERATOR" --format json --output "$CONFIG_JSON" < "/tmp/sub_raw.txt" 2>>"$LOG_FILE"
-            fi
-            if [ $? -eq 0 ]; then
-                echo "  ✓ config.json создан (JSON формат)"
-            else
-                echo "  [X] Ошибка генератора конфига (JSON)"
-                rm -f "/tmp/sub_raw.txt"
-                exit 1
-            fi
-            ;;
-        *)
-            # Base64 формат (VLESS URI)
-            echo "  → Используем Base64 формат (VLESS URI -> парсер)"
-            if python3 "$PARSER" < "/tmp/sub_raw.txt" > "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE"; then
-                if python3 "$GENERATOR" --format vless --output "$CONFIG_JSON" < "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE"; then
-                    echo "  ✓ config.json создан (VLESS формат)"
-                else
-                    echo "  [X] Ошибка генератора конфига (VLESS)"
-                    rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
-                    exit 1
-                fi
-            else
-                echo "  [X] Ошибка парсера подписки (VLESS)"
-                rm -f "/tmp/sub_raw.txt"
-                exit 1
-            fi
-            rm -f "/tmp/parsed_outbounds.json"
-            ;;
-    esac
-    rm -f "/tmp/sub_raw.txt"
+    # Единый пайплайн: парсер (с автоопределением формата) → генератор
+    PARSER_ARGS="python3 $PARSER --ua \"$SUB_USER_AGENT\""
+    [ -n "$REMARKS_FILTER" ] && PARSER_ARGS="$PARSER_ARGS --remarks \"$REMARKS_FILTER\""
+    
+    if eval $PARSER_ARGS < "/tmp/sub_raw.txt" > "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE"; then
+        if python3 "$GENERATOR" --format unified --output "$CONFIG_JSON" < "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE"; then
+            echo "  ✓ config.json создан"
+        else
+            echo "  [X] Ошибка генератора конфига"
+            rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
+            exit 1
+        fi
+    else
+        echo "  [X] Ошибка парсера подписки"
+        rm -f "/tmp/sub_raw.txt"
+        exit 1
+    fi
+    rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
 else
     echo "  [X] Не удалось скачать подписку"
     exit 1

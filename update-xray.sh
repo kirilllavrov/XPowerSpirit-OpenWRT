@@ -272,53 +272,25 @@ if curl -s -L -H "User-Agent: $SUB_USER_AGENT" -H "x-hwid: $HWID" "$SUB_URL" -o 
     if head -n 1 "$TMP_DIR/sub.txt" 2>/dev/null | grep -qi "<html\|<!DOCTYPE"; then
         echo "[X] Подписка вернула HTML, а не данные" >>"$LOG"
     else
-        # Определяем формат по User-Agent
-        case "$SUB_USER_AGENT" in
-            *happ*|*Happ*|*HAPP*|*singbox*|*Singbox*|*sfa*|*sfi*|*sfm*|*sft*|*karing*)
-                # JSON формат (Happ, Sing-box, Karing)
-                echo "  → Используем JSON формат (прямая генерация)" >>"$LOG"
-                if [ -n "$REMARKS_FILTER" ]; then
-                    echo "  → Фильтр remarks: $REMARKS_FILTER" >>"$LOG"
-                fi
-                
-                # Собираем команду генератора
-                GENERATOR_CMD="python3 $GENERATOR --format json --output $TMP_DIR/config.json"
-                if [ -n "$REMARKS_FILTER" ]; then
-                    GENERATOR_CMD="$GENERATOR_CMD --remarks \"$REMARKS_FILTER\""
-                fi
-                
-                if eval $GENERATOR_CMD < "$TMP_DIR/sub.txt" 2>>"$LOG"; then
-                    if xray run -test -config "$TMP_DIR/config.json" >>"$LOG" 2>&1; then
-                        mv "$TMP_DIR/config.json" "$CONFIG_JSON"
-                        echo "[+] Новый config.json установлен (JSON формат)" >>"$LOG"
-                    else
-                        echo "[X] Новый config.json невалиден" >>"$LOG"
-                        xray run -test -config "$TMP_DIR/config.json" 2>>"$LOG"
-                    fi
+        # Единый пайплайн: парсер (с автоопределением формата) → генератор
+        PARSER_ARGS="python3 $PARSER --ua \"$SUB_USER_AGENT\""
+        [ -n "$REMARKS_FILTER" ] && PARSER_ARGS="$PARSER_ARGS --remarks \"$REMARKS_FILTER\""
+        
+        if eval $PARSER_ARGS < "$TMP_DIR/sub.txt" > "$TMP_DIR/parsed.json" 2>>"$LOG"; then
+            if python3 "$GENERATOR" --format unified --output "$TMP_DIR/config.json" < "$TMP_DIR/parsed.json" 2>>"$LOG"; then
+                if xray run -test -config "$TMP_DIR/config.json" >>"$LOG" 2>&1; then
+                    mv "$TMP_DIR/config.json" "$CONFIG_JSON"
+                    echo "[+] Новый config.json установлен" >>"$LOG"
                 else
-                    echo "[X] Ошибка генератора конфига (JSON)" >>"$LOG"
+                    echo "[X] Новый config.json невалиден" >>"$LOG"
+                    xray run -test -config "$TMP_DIR/config.json" 2>>"$LOG"
                 fi
-                ;;
-            *)
-                # Base64 формат (VLESS URI)
-                echo "  → Используем Base64 формат (VLESS URI -> парсер)" >>"$LOG"
-                if python3 "$PARSER" < "$TMP_DIR/sub.txt" > "$TMP_DIR/parsed.json" 2>>"$LOG"; then
-                    if python3 "$GENERATOR" --format vless --output "$TMP_DIR/config.json" < "$TMP_DIR/parsed.json" 2>>"$LOG"; then
-                        if xray run -test -config "$TMP_DIR/config.json" >>"$LOG" 2>&1; then
-                            mv "$TMP_DIR/config.json" "$CONFIG_JSON"
-                            echo "[+] Новый config.json установлен (VLESS формат)" >>"$LOG"
-                        else
-                            echo "[X] Новый config.json невалиден" >>"$LOG"
-                            xray run -test -config "$TMP_DIR/config.json" 2>>"$LOG"
-                        fi
-                    else
-                        echo "[X] Ошибка генератора конфига (VLESS)" >>"$LOG"
-                    fi
-                else
-                    echo "[X] Ошибка парсера подписки (VLESS)" >>"$LOG"
-                fi
-                ;;
-        esac
+            else
+                echo "[X] Ошибка генератора конфига" >>"$LOG"
+            fi
+        else
+            echo "[X] Ошибка парсера подписки" >>"$LOG"
+        fi
     fi
 else
     echo "[!] Не удалось скачать подписку" >>"$LOG"

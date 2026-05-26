@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 Xray Config Generator for OpenWrt TProxy
-Поддерживает два входных формата:
-  --format vless - из xray-sub-parser.py (VLESS URI -> outbounds)
-  --format json  - из JSON-подписки (Happ/Sing-box) с фильтрацией по remarks
+Поддерживает три входных формата:
+  --format unified - унифицированный JSON из xray-sub-parser.py (рекомендуемый)
+  --format vless   - старый режим: VLESS outbounds из xray-sub-parser.py
+  --format json    - старый режим: сырая JSON-подписка Happ/Sing-box
 
 Специальная обработка "hole":
   Если в подписке обнаружен outbound с address="hole", генерируется DIRECT-конфиг
@@ -560,8 +561,9 @@ def build_burst_observatory(proxy_outbounds: list) -> dict:
 def parse_args():
     parser = argparse.ArgumentParser(description='Xray config generator for OpenWrt TProxy')
     parser.add_argument('--output', required=True, help='Output config file')
-    parser.add_argument('--format', choices=['json', 'vless'], default='vless',
-                        help='Input format: json (Happ/Sing-box subscription) or vless (parsed outbounds)')
+    parser.add_argument('--format', choices=['json', 'vless', 'unified'], default='vless',
+                        help='Input format: unified (from xray-sub-parser --ua), '
+                             'json (raw Happ/Sing-box), vless (parsed VLESS outbounds)')
     parser.add_argument('--remarks', default='', 
                         help='Filter outbounds by remarks (substring, case-insensitive). Only for JSON format')
     return parser.parse_args()
@@ -570,7 +572,77 @@ def parse_args():
 def main():
     args = parse_args()
     
-    if args.format == 'json':
+    if args.format == 'unified':
+        # ========================================
+        # УНИФИЦИРОВАННЫЙ формат (из xray-sub-parser --ua)
+        # На входе: {"hole": bool, "outbounds": [...]}
+        # ========================================
+        print("  → Обработка унифицированной подписки", file=sys.stderr)
+        
+        try:
+            data = json.load(sys.stdin)
+        except Exception as e:
+            log_error(f"Failed to parse unified input: {e}")
+            sys.exit(1)
+        
+        hole = data.get("hole", False)
+        raw_outbounds = data.get("outbounds", [])
+        
+        if hole:
+            print("  [!] Обнаружен сервер 'hole' (срок подписки истёк).", file=sys.stderr)
+            print("  [!] Включаем DIRECT-режим (весь трафик напрямую).", file=sys.stderr)
+            cfg = build_direct_config()
+            with open(args.output, "w") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
+            print(f"  ✓ DIRECT-конфиг сохранён: {args.output}", file=sys.stderr)
+            return
+        
+        if not raw_outbounds:
+            log_error("No outbounds in unified input — switching to DIRECT")
+            cfg = build_direct_config()
+            with open(args.output, "w") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
+            print(f"  ✓ DIRECT-конфиг сохранён (нет серверов): {args.output}", file=sys.stderr)
+            return
+        
+        # Нормализуем все outbounds (sockopt, mux — зона ответственности генератора)
+        proxy_outbounds = [normalize_outbound(ob) for ob in raw_outbounds]
+        
+        cfg = base_config()
+        
+        direct_outbound = {
+            "protocol": "freedom",
+            "tag": "direct",
+            "settings": {"domainStrategy": "UseIPv4"},
+            "streamSettings": {"sockopt": {"mark": 2, "tcpKeepAliveInterval": 30}}
+        }
+        block_outbound = {
+            "protocol": "blackhole",
+            "tag": "block",
+            "settings": {"response": {"type": "http"}}
+        }
+        
+        cfg["outbounds"] = proxy_outbounds + [direct_outbound, block_outbound, build_dns_outbound()]
+        
+        if len(proxy_outbounds) > 1:
+            cfg.update(build_burst_observatory(proxy_outbounds))
+        
+        routing = {"domainStrategy": "IPIfNonMatch", "rules": build_rules(proxy_outbounds)}
+        
+        if len(proxy_outbounds) > 1:
+            routing["balancers"] = [build_balancer(proxy_outbounds)]
+        
+        cfg["routing"] = routing
+        
+        print(f"  ✓ Сгенерировано {len(proxy_outbounds)} прокси", file=sys.stderr)
+        if len(proxy_outbounds) > 1:
+            print(f"  ✓ Балансировщик: {len(proxy_outbounds)} серверов (leastLoad)", file=sys.stderr)
+        
+        with open(args.output, "w") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        print(f"  ✓ Конфиг сохранён: {args.output}", file=sys.stderr)
+    
+    elif args.format == 'json':
         # ========================================
         # JSON формат (Happ/Sing-box подписка)
         # ========================================
