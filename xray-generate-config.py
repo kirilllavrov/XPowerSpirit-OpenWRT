@@ -349,7 +349,7 @@ def build_direct_config() -> dict:
         }
     ]
     cfg["routing"] = {
-        "domainStrategy": "IPIfNonMatch",
+        "domainStrategy": "IPOnDemand",
         "rules": [
             {
                 "type": "field",
@@ -632,7 +632,7 @@ def main():
         if len(proxy_outbounds) > 1:
             cfg.update(build_burst_observatory(proxy_outbounds))
         
-        routing = {"domainStrategy": "IPIfNonMatch", "rules": build_rules(proxy_outbounds)}
+        routing = {"domainStrategy": "IPOnDemand", "rules": build_rules(proxy_outbounds)}
         
         if len(proxy_outbounds) > 1:
             routing["balancers"] = [build_balancer(proxy_outbounds)]
@@ -708,7 +708,7 @@ def main():
         # Используем burstObservatory (для стратегии leastLoad)
         cfg.update(build_burst_observatory(proxy_outbounds))
         
-        routing = {"domainStrategy": "IPIfNonMatch", "rules": build_rules(proxy_outbounds)}
+        routing = {"domainStrategy": "IPOnDemand", "rules": build_rules(proxy_outbounds)}
         
         if len(proxy_outbounds) > 1:
             routing["balancers"] = [build_balancer(proxy_outbounds)]
@@ -736,7 +736,7 @@ def main():
                 build_dns_outbound()
             ]
             cfg["routing"] = {
-                "domainStrategy": "IPIfNonMatch",
+                "domainStrategy": "IPOnDemand",
                 "rules": build_rules([], direct_mode=True)
             }
             print("[!] Найден сервер 'hole'. Включён DIRECT-конфиг.", file=sys.stderr)
@@ -751,7 +751,7 @@ def main():
                     build_dns_outbound()
                 ]
                 cfg["routing"] = {
-                    "domainStrategy": "IPIfNonMatch",
+                    "domainStrategy": "IPOnDemand",
                     "rules": build_rules([], direct_mode=True)
                 }
                 print("[!] Нет доступных серверов (только заглушки). Создан DIRECT-конфиг.", file=sys.stderr)
@@ -793,7 +793,7 @@ def main():
                     build_dns_outbound()
                 ]
                 cfg["routing"] = {
-                    "domainStrategy": "IPIfNonMatch",
+                    "domainStrategy": "IPOnDemand",
                     "rules": build_rules([chosen])
                 }
                 print(f"  ✓ Выбран сервер: {chosen_tag}", file=sys.stderr)
