@@ -94,7 +94,7 @@
 ### Программные зависимости
 
 ```bash
-ca-certificates nftables kmod-nft-tproxy kmod-nft-socket python3 resolveip unzip sqm-scripts jq
+curl ca-certificates nftables kmod-nft-tproxy kmod-nft-socket python3 resolveip unzip sqm-scripts jq
 ```
 
 ### Опционально (для расширенной функциональности)
