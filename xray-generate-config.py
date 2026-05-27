@@ -538,17 +538,22 @@ def build_burst_observatory(proxy_outbounds: list) -> dict:
     """
     Создаёт конфигурацию burstObservatory для мониторинга прокси.
     Используется со стратегией leastLoad.
+    
+    Пингует connectivitycheck.gstatic.com (Google Connectivity Check) —
+    более надёжный endpoint, чем google.com, не троттлится.
+    GET вместо HEAD — лучше совместимость с прокси-протоколами.
+    Таймаут 15s — с запасом на Reality/TLS handshake.
     """
     subject_selector = [ob["tag"] for ob in proxy_outbounds]
     return {
         "burstObservatory": {
             "subjectSelector": subject_selector,
             "pingConfig": {
-                "destination": "https://www.google.com/generate_204",
+                "destination": "http://connectivitycheck.gstatic.com/generate_204",
                 "interval": "1m",
                 "sampling": 10,
-                "timeout": "5s",
-                "httpMethod": "HEAD"
+                "timeout": "15s",
+                "httpMethod": "GET"
             }
         }
     }
