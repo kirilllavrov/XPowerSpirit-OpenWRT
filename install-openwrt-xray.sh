@@ -198,7 +198,28 @@ if [ $PPPOE_ENABLED -eq 1 ]; then
 	
 	uci commit network
 	
-	echo "[+] PPPoE настроен (логин: $PPPOE_USER)"
+	# Применяем PPPoE немедленно — иначе на шаге 5 не будет интернета
+	echo "  → Перезапускаем сеть для применения PPPoE..."
+	if ! service network restart; then
+		echo "  [X] Не удалось перезапустить сеть"
+		exit 1
+	fi
+	
+	# Ждём PPPoE-дозвон (до 60 секунд)
+	echo "  → Ожидаем PPPoE-подключение..."
+	for i in $(seq 1 30); do
+		if ip route | grep -q default && resolveip -4 google.com >/dev/null 2>&1; then
+			echo "  ✓ PPPoE подключен (попытка $i)"
+			break
+		fi
+		[ "$i" = "30" ] && {
+			echo "  [X] PPPoE не подключился за 60 секунд"
+			exit 1
+		}
+		sleep 2
+	done
+	
+	echo "[+] PPPoE настроен и активен (логин: $PPPOE_USER)"
 fi
 
 # =============================================
@@ -304,6 +325,24 @@ if [ $GUEST_ENABLED -eq 1 ]; then
 	echo "[+] Настройка Guest Network и SQM завершена"
 else
 	echo "4. Пропускаем настройку гостевой сети (--guest=1 не указан)"
+fi
+
+# =============================================
+# 4.5. Убеждаемся, что интернет есть (PPPoE мог сброситься при network restart в шаге 4)
+# =============================================
+if [ $PPPOE_ENABLED -eq 1 ]; then
+	echo "4.5. Проверяем PPPoE после гостевой сети..."
+	for i in $(seq 1 30); do
+		if ip route | grep -q default && resolveip -4 google.com >/dev/null 2>&1; then
+			echo "  ✓ Интернет доступен (попытка $i)"
+			break
+		fi
+		[ "$i" = "30" ] && {
+			echo "  [X] Нет интернета после 60 секунд — PPPoE не поднялся"
+			exit 1
+		}
+		sleep 2
+	done
 fi
 
 # =============================================
