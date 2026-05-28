@@ -482,20 +482,17 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
     ]
     
     if not direct_mode and proxy_outbounds:
-        target = "balancer" if len(proxy_outbounds) > 1 else proxy_outbounds[0]["tag"]
-        
-        # Стриминг и игры — через прокси
+        # Всегда через balancer — даже для одного прокси (observatory следит, fallback на direct)
         rules.append({
             "type": "field",
             "domain": ["geosite:category-streaming", "geosite:category-games"],
-            "balancerTag" if len(proxy_outbounds) > 1 else "outboundTag": target
+            "balancerTag": "balancer"
         })
         
-        # Весь остальной трафик
         rules.append({
             "type": "field",
             "network": "tcp,udp",
-            "balancerTag" if len(proxy_outbounds) > 1 else "outboundTag": target
+            "balancerTag": "balancer"
         })
     else:
         rules.append({
@@ -619,19 +616,21 @@ def main():
         
         cfg["outbounds"] = proxy_outbounds + [direct_outbound, block_outbound, build_dns_outbound()]
         
-        if len(proxy_outbounds) > 1:
-            cfg.update(build_burst_observatory(proxy_outbounds))
+        # Всегда observatory — даже для одного прокси (детект невалидных ключей)
+        cfg.update(build_burst_observatory(proxy_outbounds))
         
         routing = {"domainStrategy": "IPOnDemand", "rules": build_rules(proxy_outbounds)}
         
-        if len(proxy_outbounds) > 1:
-            routing["balancers"] = [build_balancer(proxy_outbounds)]
+        # Всегда balancer — даже для одного прокси (fallback на direct при отказе)
+        routing["balancers"] = [build_balancer(proxy_outbounds)]
         
         cfg["routing"] = routing
         
         print(f"  ✓ Сгенерировано {len(proxy_outbounds)} прокси", file=sys.stderr)
         if len(proxy_outbounds) > 1:
             print(f"  ✓ Балансировщик: {len(proxy_outbounds)} серверов (leastLoad)", file=sys.stderr)
+        else:
+            print(f"  ✓ Балансировщик: 1 сервер + fallback DIRECT", file=sys.stderr)
         
         with open(args.output, "w") as f:
             json.dump(cfg, f, indent=2, ensure_ascii=False)
@@ -695,13 +694,13 @@ def main():
         
         cfg["outbounds"] = proxy_outbounds + [direct_outbound, block_outbound, dns_outbound]
         
-        # Используем burstObservatory (для стратегии leastLoad)
+        # Всегда observatory — даже для одного прокси (детект невалидных ключей)
         cfg.update(build_burst_observatory(proxy_outbounds))
         
         routing = {"domainStrategy": "IPOnDemand", "rules": build_rules(proxy_outbounds)}
         
-        if len(proxy_outbounds) > 1:
-            routing["balancers"] = [build_balancer(proxy_outbounds)]
+        # Всегда balancer — даже для одного прокси (fallback на direct при отказе)
+        routing["balancers"] = [build_balancer(proxy_outbounds)]
         
         cfg["routing"] = routing
         
@@ -782,11 +781,19 @@ def main():
                     },
                     build_dns_outbound()
                 ]
-                cfg["routing"] = {
+                
+                # Всегда observatory + balancer (детект невалидных ключей, fallback на direct)
+                cfg.update(build_burst_observatory([chosen]))
+                
+                routing = {
                     "domainStrategy": "IPOnDemand",
-                    "rules": build_rules([chosen])
+                    "rules": build_rules([chosen]),
+                    "balancers": [build_balancer([chosen])]
                 }
+                cfg["routing"] = routing
+                
                 print(f"  ✓ Выбран сервер: {chosen_tag}", file=sys.stderr)
+                print(f"  ✓ Балансировщик: 1 сервер + fallback DIRECT", file=sys.stderr)
     
     # Сохраняем результат (JSON hole-путь уже вернулся раньше через return)
     with open(args.output, "w") as f:
