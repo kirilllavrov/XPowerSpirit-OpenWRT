@@ -509,18 +509,8 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
 
 def build_balancer(proxy_outbounds: list) -> dict:
     """
-    Создаёт конфигурацию балансировщика для нескольких прокси (leastLoad).
-    
-    leastLoad выбирает наиболее стабильные серверы на основе данных burstObservatory.
-    
-    Параметры подобраны для мобильной сети (4G/5G):
-      - expected=2: два лучших сервера (отказоустойчивость без лишних соединений)
-      - maxRTT=1000ms: с запасом на пиковые нагрузки сотовой сети
-        (хендовер между вышками, час-пик). 800ms для мобилки маловато.
-      - baselines=[350ms]: мобильная сеть сама по себе джиттерная
-        (30-150ms stddev даже на хорошей связи). 200ms привело бы
-        к ложному выбрасыванию годных серверов.
-    
+    Создаёт конфигурацию балансировщика для нескольких прокси (leastLoad).    
+    leastLoad выбирает наиболее стабильные серверы на основе данных burstObservatory.    
     Если все серверы не проходят — fallback на direct.
     """
     selector = [ob["tag"] for ob in proxy_outbounds]
@@ -529,9 +519,6 @@ def build_balancer(proxy_outbounds: list) -> dict:
         "selector": selector,
         "strategy": {
             "type": "leastLoad",
-            "settings": {
-                "maxRTT": "600ms",
-            }
         },
         "fallbackTag": "direct"
     }
