@@ -153,9 +153,24 @@ else
 fi
 
 # =============================================
-# 3. Отключаем IPv6
+# 3. Настройка WAN (PPPoE, если требуется) и отключение IPv6
 # =============================================
-echo "3. Отключаем IPv6..."
+echo "3. Настройка WAN и отключение IPv6..."
+
+# 3.1. Сначала применяем ВСЕ uci-изменения (PPPoE + IPv6), потом один network restart
+if [ $PPPOE_ENABLED -eq 1 ]; then
+	echo "  → Настройка PPPoE..."
+	uci set network.wan.proto='pppoe'
+	uci set network.wan.device='wan'
+	uci set network.wan.username="$PPPOE_USER"
+	uci set network.wan.password="$PPPOE_PASS"
+	uci set network.wan.keepalive='4 5'
+	uci set network.wan.mtu='1492'
+	uci set network.wan.ipv6='0'
+	uci set network.wan.peerdns='1'
+	uci set network.wan.defaultroute='1'
+	echo "  ✓ PPPoE настроен (логин: $PPPOE_USER)"
+fi
 
 uci set network.lan.ipv6='0'
 uci set network.wan.ipv6='0'
@@ -168,59 +183,28 @@ uci commit dhcp
 /etc/init.d/odhcpd stop 2>/dev/null || true
 /etc/init.d/odhcpd disable 2>/dev/null || true
 
+echo "  → Применяем сетевые изменения..."
 if ! service network restart; then
-	echo "  [X] Не удалось перезапустить сеть после отключения IPv6"
+	echo "  [X] Не удалось перезапустить сеть"
 	exit 1
 fi
-sleep 5
-for i in $(seq 1 10); do
-	ip link show br-lan >/dev/null 2>&1 && break
-	sleep 2
-done
 
-echo "[+] IPv6 отключён"
-
-# =============================================
-# 3.5. Настройка PPPoE (если включён)
-# =============================================
-if [ $PPPOE_ENABLED -eq 1 ]; then
-	echo "3.5. Настройка PPPoE соединения..."
-	
-	uci set network.wan.proto='pppoe'
-	uci set network.wan.device='wan'
-	uci set network.wan.username="$PPPOE_USER"
-	uci set network.wan.password="$PPPOE_PASS"
-	uci set network.wan.keepalive='4 5'
-	uci set network.wan.mtu='1492'
-	uci set network.wan.ipv6='0'
-	uci set network.wan.peerdns='1'
-	uci set network.wan.defaultroute='1'
-	
-	uci commit network
-	
-	# Применяем PPPoE немедленно — иначе на шаге 5 не будет интернета
-	echo "  → Перезапускаем сеть для применения PPPoE..."
-	if ! service network restart; then
-		echo "  [X] Не удалось перезапустить сеть"
+# Ждём интернет (универсально: DHCP получит IP, PPPoE поднимет сессию)
+echo "  → Ожидание интернета..."
+for i in $(seq 1 20); do
+	if ip route | grep -q "^default" && \
+	   curl -fs --max-time 3 http://connectivitycheck.gstatic.com/generate_204 >/dev/null 2>&1; then
+		echo "  ✓ Интернет доступен"
+		break
+	fi
+	if [ $i -eq 20 ]; then
+		echo "  [X] Нет интернета после 80 секунд ожидания"
 		exit 1
 	fi
-	
-	# Ждём PPPoE-дозвон (до 60 секунд)
-	echo "  → Ожидаем PPPoE-подключение..."
-	for i in $(seq 1 30); do
-		if ip route | grep -q default && resolveip -4 google.com >/dev/null 2>&1; then
-			echo "  ✓ PPPoE подключен (попытка $i)"
-			break
-		fi
-		[ "$i" = "30" ] && {
-			echo "  [X] PPPoE не подключился за 60 секунд"
-			exit 1
-		}
-		sleep 2
-	done
-	
-	echo "[+] PPPoE настроен и активен (логин: $PPPOE_USER)"
-fi
+	sleep 4
+done
+
+echo "[+] Сеть настроена, IPv6 отключён"
 
 # =============================================
 # 4. Настраиваем гостевую сеть и лимиты скорости (если включена)
@@ -322,27 +306,21 @@ if [ $GUEST_ENABLED -eq 1 ]; then
 	done
 	service firewall restart
 
+	# Ждём интернет после перезапуска сети
+	echo "  → Ожидание интернета..."
+	for i in $(seq 1 20); do
+		if ip route | grep -q "^default" && \
+		   curl -fs --max-time 3 http://connectivitycheck.gstatic.com/generate_204 >/dev/null 2>&1; then
+			echo "  ✓ Интернет доступен"
+			break
+		fi
+		[ $i -eq 20 ] && { echo "  [X] Нет интернета"; exit 1; }
+		sleep 4
+	done
+
 	echo "[+] Настройка Guest Network и SQM завершена"
 else
 	echo "4. Пропускаем настройку гостевой сети (--guest=1 не указан)"
-fi
-
-# =============================================
-# 4.5. Убеждаемся, что интернет есть (PPPoE мог сброситься при network restart в шаге 4)
-# =============================================
-if [ $PPPOE_ENABLED -eq 1 ]; then
-	echo "4.5. Проверяем PPPoE после гостевой сети..."
-	for i in $(seq 1 30); do
-		if ip route | grep -q default && resolveip -4 google.com >/dev/null 2>&1; then
-			echo "  ✓ Интернет доступен (попытка $i)"
-			break
-		fi
-		[ "$i" = "30" ] && {
-			echo "  [X] Нет интернета после 60 секунд — PPPoE не поднялся"
-			exit 1
-		}
-		sleep 2
-	done
 fi
 
 # =============================================
