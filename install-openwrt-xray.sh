@@ -500,37 +500,48 @@ cat >/etc/init.d/xray <<'XRAYEOF'
 #!/bin/sh /etc/rc.common
 
 USE_PROCD=1
-START=99
+START=85
 STOP=10
 
 CONF="/etc/xray/config.json"
 ASSET_DIR="/usr/share/xray"
 
 start_service() {
-    ntpd -q -p ru.pool.ntp.org 2>/dev/null || \
-    ntpd -q -p time.google.com 2>/dev/null || \
-    logger -t xray "Time sync failed, continuing anyway"
-    sleep 1
-    
+    # Ждём сеть
     for i in $(seq 1 15); do
-        if ip route | grep -q default && resolveip -4 google.com >/dev/null 2>&1; then
+        if ip route | grep -q default; then
             break
         fi
-        logger -t xray "Waiting for network/DNS... ($i)"
+        logger -t xray "Waiting for network... ($i)"
         sleep 2
     done
 
+    # Сохраняем IP шлюза (нужен генератору для dns-in)
+    ip -4 addr show br-lan 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1 > /etc/xray/gateway_ip 2>/dev/null || true
+
+    # Синхронизация времени (важно для TLS/REALITY)
+    ntpd -q -p ru.pool.ntp.org 2>/dev/null || \
+    ntpd -q -p time.google.com 2>/dev/null || \
+    logger -t xray "Time sync failed, continuing"
+    sleep 1
+
+    # Проверяем geo-файлы
     if [ ! -s "$ASSET_DIR/geoip.dat" ] || [ ! -s "$ASSET_DIR/geosite.dat" ]; then
         logger -t xray "Geo assets missing — run update-xray.sh"
         return 1
     fi
 
+    # Валидация конфига
     if ! xray run -test -config "$CONF" >/dev/null 2>&1; then
         logger -t xray "Invalid config.json"
         return 1
     fi
 
-    /usr/share/xray/update-nft.sh || return 1
+    # Применяем nftables правила
+    /usr/share/xray/update-nft.sh || {
+        logger -t xray "Failed to apply nftables rules"
+        return 1
+    }
 
     procd_open_instance "xray"
     procd_set_param command /usr/bin/xray run -config "$CONF"
@@ -542,38 +553,23 @@ start_service() {
     procd_set_param file "$CONF"
     procd_close_instance
 
-    sleep 1
-    if ! pidof xray >/dev/null; then
-        logger -t xray "Xray failed to start — disabling TProxy"
-        nft flush chain inet fw4 xray_tproxy 2>/dev/null
-        nft delete chain inet fw4 xray_tproxy 2>/dev/null
-        nft flush chain inet fw4 xray_output 2>/dev/null
-        nft delete chain inet fw4 xray_output 2>/dev/null
-        while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
-        ip route flush table 100 2>/dev/null
-        return 1
-    fi
-
-    logger -t xray "Xray started successfully"
+    # procd запустит xray после возврата из start_service().
+    # Конфиг уже проверен xray run -test. При падении — respawn 3600 5 5.
+    logger -t xray "Xray registered with procd (transparent gateway mode)"
 }
 
 stop_service() {
-    # Удаляем jump xray_tproxy из prerouting (по handle)
+    # Убираем jump-правила из fw4
     local _handle
     _handle=$(nft -a list chain inet fw4 prerouting 2>/dev/null \
-        | grep 'jump xray_tproxy' \
-        | sed 's/.*handle //' \
-        | head -1)
+        | grep 'jump xray_tproxy' | sed 's/.*handle //' | head -1)
     [ -n "$_handle" ] && nft delete rule inet fw4 prerouting handle "$_handle" 2>/dev/null
 
-    # Удаляем jump xray_output из output (по handle)
     _handle=$(nft -a list chain inet fw4 output 2>/dev/null \
-        | grep 'jump xray_output' \
-        | sed 's/.*handle //' \
-        | head -1)
+        | grep 'jump xray_output' | sed 's/.*handle //' | head -1)
     [ -n "$_handle" ] && nft delete rule inet fw4 output handle "$_handle" 2>/dev/null
 
-    # Очищаем и удаляем цепочки
+    # Чистим цепочки
     nft flush chain inet fw4 xray_tproxy 2>/dev/null
     nft delete chain inet fw4 xray_tproxy 2>/dev/null
     nft flush chain inet fw4 xray_output 2>/dev/null
@@ -581,7 +577,7 @@ stop_service() {
 
     while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
     ip route flush table 100 2>/dev/null
-    logger -t xray "Stopped, network cleaned"
+    logger -t xray "Stopped, network restored"
 }
 
 service_triggers() {
