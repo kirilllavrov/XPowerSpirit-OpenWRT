@@ -269,7 +269,7 @@ def base_config() -> dict:
             "queryStrategy": "UseIPv4",
             "disableCache": False,
             "serveStale": True,
-            "serveExpiredTTL": 1800,
+            "serveExpiredTTL": 600,
             "disableFallback": False,
             "disableFallbackIfMatch": True,
             "enableParallelQuery": True,
