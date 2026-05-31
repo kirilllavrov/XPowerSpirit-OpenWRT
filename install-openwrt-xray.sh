@@ -153,28 +153,7 @@ uci commit dhcp
 /etc/init.d/odhcpd stop 2>/dev/null || true
 /etc/init.d/odhcpd disable 2>/dev/null || true
 
-echo "  → Применяем сетевые изменения..."
-if ! service network restart; then
-	echo "  [X] Не удалось перезапустить сеть"
-	exit 1
-fi
-
-# Ждём интернет (DHCP получит IP, маршрут по умолчанию появится)
-echo "  → Ожидание интернета..."
-for i in $(seq 1 20); do
-	if ip route | grep -q "^default" && \
-	   curl -fs --max-time 3 http://connectivitycheck.gstatic.com/generate_204 >/dev/null 2>&1; then
-		echo "  ✓ Интернет доступен"
-		break
-	fi
-	if [ $i -eq 20 ]; then
-		echo "  [X] Нет интернета после 80 секунд ожидания"
-		exit 1
-	fi
-	sleep 4
-done
-
-echo "[+] Сеть настроена, IPv6 отключён"
+echo "[+] Сеть настроена (изменения применятся после перезагрузки), IPv6 отключён"
 
 # =============================================
 # 4. Настраиваем гостевую сеть и лимиты скорости (если включена)
@@ -264,31 +243,7 @@ if [ $GUEST_ENABLED -eq 1 ]; then
 	uci commit sqm
 	echo "  → SQM настроен для Guest: ${DL_GUEST}kbps down / ${UL_GUEST}kbps up"
 
-	echo "Применяем сетевые изменения..."
-	if ! service network restart; then
-		echo "  [X] Не удалось перезапустить сеть после настройки гостевой сети"
-		exit 1
-	fi
-	sleep 5
-	for i in $(seq 1 10); do
-		ip link show br-guest >/dev/null 2>&1 && break
-		sleep 1
-	done
-	service firewall restart
-
-	# Ждём интернет после перезапуска сети
-	echo "  → Ожидание интернета..."
-	for i in $(seq 1 20); do
-		if ip route | grep -q "^default" && \
-		   curl -fs --max-time 3 http://connectivitycheck.gstatic.com/generate_204 >/dev/null 2>&1; then
-			echo "  ✓ Интернет доступен"
-			break
-		fi
-		[ $i -eq 20 ] && { echo "  [X] Нет интернета"; exit 1; }
-		sleep 4
-	done
-
-	echo "[+] Настройка Guest Network и SQM завершена"
+	echo "[+] Настройка Guest Network и SQM завершена (изменения применятся после перезагрузки)"
 else
 	echo "4. Пропускаем настройку гостевой сети (--guest=1 не указан)"
 fi
@@ -738,30 +693,9 @@ chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
 echo "[+] Hotplug для автообновления после включения WAN настроен"
 
 # =============================================
-# 14. Запуск и рестарт служб
+# 14. Проверяем config.json
 # =============================================
-echo "14. Запускаем службы..."
-
-service cron restart
-service firewall restart
-
-if [ $GUEST_ENABLED -eq 1 ]; then
-	service sqm restart
-fi
-
-sleep 3
-service xray start
-sleep 3
-service dnsmasq restart
-
-echo "[+] Службы запущены"
-
-sleep 3
-
-# =============================================
-# 15. Проверяем config.json и Xray
-# =============================================
-echo "15. Проверяем config.json для Xray на валидность..."
+echo "14. Проверяем config.json на валидность..."
 if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
 	echo "  ✓ $CONFIG_JSON прошел проверку"
 else
@@ -769,12 +703,12 @@ else
 	exit 1
 fi
 
-echo "  → Проверяем, запущен ли Xray:"
-if pgrep -a xray >/dev/null; then
-	echo "  ✓ Xray запущен"
-else
-	echo "  [X] Xray НЕ запущен"
-fi
-
+# =============================================
+# 15. Перезагрузка
+# =============================================
+echo "15. Перезагрузка для применения всех изменений..."
 echo ""
 echo "=== Установка завершена ==="
+echo "Устройство будет перезагружено через 5 секунд..."
+sleep 5
+reboot
