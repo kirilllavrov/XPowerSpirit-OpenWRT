@@ -39,11 +39,6 @@ GUEST_IP="192.168.2.1"
 DL_GUEST="5120"
 UL_GUEST="5120"
 
-# PPPoE переменные
-PPPOE_ENABLED=0
-PPPOE_USER=""
-PPPOE_PASS=""
-
 # Парсер аргументов
 for arg in "$@"; do
 	case $arg in
@@ -55,9 +50,6 @@ for arg in "$@"; do
 	--guest-ul=*) UL_GUEST="${arg#*=}" ;;
 	--sub=*) SUB_URL="${arg#*=}" ;;
 	--dwl=*) DWL_DOMAIN="${arg#*=}" ;;
-	--pppoe=1) PPPOE_ENABLED=1 ;;
-	--pppoe-user=*) PPPOE_USER="${arg#*=}" ;;
-	--pppoe-pass=*) PPPOE_PASS="${arg#*=}" ;;
 	*) echo "[!] Неизвестный аргумент: $arg" ;;
 	esac
 done
@@ -66,13 +58,6 @@ done
 if [ -z "$SUB_URL" ]; then
 	echo "[!] Ошибка: --sub=URL обязателен"
 	exit 1
-fi
-
-if [ $PPPOE_ENABLED -eq 1 ]; then
-	if [ -z "$PPPOE_USER" ] || [ -z "$PPPOE_PASS" ]; then
-		echo "[!] Ошибка: --pppoe=1 требует --pppoe-user и --pppoe-pass"
-		exit 1
-	fi
 fi
 
 # Создаём необходимые директории
@@ -153,24 +138,9 @@ else
 fi
 
 # =============================================
-# 3. Настройка WAN (PPPoE, если требуется) и отключение IPv6
+# 3. Отключаем IPv6
 # =============================================
-echo "3. Настройка WAN и отключение IPv6..."
-
-# 3.1. Сначала применяем ВСЕ uci-изменения (PPPoE + IPv6), потом один network restart
-if [ $PPPOE_ENABLED -eq 1 ]; then
-	echo "  → Настройка PPPoE..."
-	uci set network.wan.proto='pppoe'
-	uci set network.wan.device='wan'
-	uci set network.wan.username="$PPPOE_USER"
-	uci set network.wan.password="$PPPOE_PASS"
-	uci set network.wan.keepalive='4 5'
-	uci set network.wan.mtu='1492'
-	uci set network.wan.ipv6='0'
-	uci set network.wan.peerdns='1'
-	uci set network.wan.defaultroute='1'
-	echo "  ✓ PPPoE настроен (логин: $PPPOE_USER)"
-fi
+echo "3. Отключаем IPv6..."
 
 uci set network.lan.ipv6='0'
 uci set network.wan.ipv6='0'
@@ -189,7 +159,7 @@ if ! service network restart; then
 	exit 1
 fi
 
-# Ждём интернет (универсально: DHCP получит IP, PPPoE поднимет сессию)
+# Ждём интернет (DHCP получит IP, маршрут по умолчанию появится)
 echo "  → Ожидание интернета..."
 for i in $(seq 1 20); do
 	if ip route | grep -q "^default" && \
