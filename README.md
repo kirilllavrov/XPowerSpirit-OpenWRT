@@ -125,9 +125,6 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 | `--guest-ip=IP` | IP-адрес шлюза гостевой сети | `192.168.2.1` |
 | `--guest-dl=Kbps` | Лимит скачивания для гостей | `5120` (5 Mbps) |
 | `--guest-ul=Kbps` | Лимит загрузки для гостей | `5120` (5 Mbps) |
-| `--pppoe=1` | Настроить PPPoE-соединение | `0` |
-| `--pppoe-user=LOGIN` | Логин PPPoE | — |
-| `--pppoe-pass=PASS` | Пароль PPPoE | — |
 | `--dwl=DOMAIN` | Домен для whitelist (приоритет при выборе сервера) | — |
 
 ### 2. Настройка Wi-Fi (опционально)
@@ -159,30 +156,29 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 1. **Настройка времени** — устанавливает таймзону `Europe/Moscow` (MSK-3), синхронизирует NTP
 2. **Сохранение подписки** — записывает URL, User-Agent и опциональный фильтр remarks в `/etc/xray/`
 3. **Отключение IPv6** — отключает на LAN/WAN, останавливает `odhcpd`
-4. **PPPoE (опционально)** — настраивает подключение по PPPoE с MTU 1492
-5. **Гостевая сеть (опционально, `--guest=1`)**:
+4. **Гостевая сеть (опционально, `--guest=1`)**:
    - Bridge `br-guest`
    - Интерфейс `guest` с DHCP (диапазон `.100-.250`, аренда 12ч)
    - Firewall-зону с изоляцией от LAN
    - Правила для DNS/DHCP
    - Форвардинг в WAN
-6. **SQM QoS** — ограничивает скорость гостевой сети (cake, по умолчанию 5 Mbps up/down)
-7. **Установка Xray**:
+5. **SQM QoS** — ограничивает скорость гостевой сети (cake, по умолчанию 5 Mbps up/down)
+6. **Установка Xray**:
    - Загружает последнюю версию с GitHub
    - Проверяет SHA256 через `.dgst` файл
    - Кэширует ZIP при повторной установке (по SHA)
-8. **Загрузка вспомогательных скриптов** в `/usr/share/xray/`
-9. **Настройка DNS** — dnsmasq → `127.0.0.1:5353` (Xray DNS) + fallback `77.88.8.8`
-10. **Init-скрипт** — `/etc/init.d/xray` с прокачкой времени, ожиданием сети, проверкой конфига
-11. **Маршрутизация** — таблица `xray` (ID 100) в `/etc/iproute2/rt_tables`
-12. **Sysctl** — `route_localnet`, `ip_forward`
-13. **Гео-базы** — `geoip.dat` / `geosite.dat` с проверкой SHA256
-14. **HWID** — уникальный ID устройства (UUID)
-15. **Генерация config.json** — автоматическое определение формата подписки:
+7. **Загрузка вспомогательных скриптов** в `/usr/share/xray/`
+8. **Настройка DNS** — dnsmasq → `127.0.0.1:5353` (Xray DNS) + fallback `77.88.8.8`
+9. **Init-скрипт** — `/etc/init.d/xray` с прокачкой времени, ожиданием сети, проверкой конфига
+10. **Маршрутизация** — таблица `xray` (ID 100) в `/etc/iproute2/rt_tables`
+11. **Sysctl** — `route_localnet`, `ip_forward`
+12. **Гео-базы** — `geoip.dat` / `geosite.dat` с проверкой SHA256
+13. **HWID** — уникальный ID устройства (UUID)
+14. **Генерация config.json** — автоматическое определение формата подписки:
     - **Base64 (VLESS URI)** — через `xray-sub-parser.py` + `xray-generate-config.py`
     - **JSON (Happ/Sing-box)** — напрямую через `xray-generate-config.py --format json`
-16. **Cron** — автообновление в 2:30 ночи
-17. **Hotplug** — автообновление при подъёме WAN (`ifup wan`)
+15. **Cron** — автообновление в 2:30 ночи
+16. **Hotplug** — автообновление при подъёме WAN (`ifup wan`)
 
 **Логирование:** Все этапы записываются в `/tmp/xray_install.log`
 
