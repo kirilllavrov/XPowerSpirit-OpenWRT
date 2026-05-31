@@ -273,6 +273,11 @@ def _is_json_format(user_agent: str) -> bool:
     return any(m in ua_lower for m in json_markers)
 
 
+def _is_placeholder_addr(addr: str) -> bool:
+    """Проверяет, является ли адрес заглушкой (0.0.0.0, 127.0.0.1, hole)"""
+    return addr in ("0.0.0.0", "127.0.0.1", "hole")
+
+
 def parse_json_subscription(raw_data: str, remarks_filter: str = '') -> dict:
     """
     Парсит JSON-подписку (Happ/Sing-box формат).
@@ -323,6 +328,15 @@ def parse_json_subscription(raw_data: str, remarks_filter: str = '') -> dict:
             # Пропускаем служебные outbounds
             if protocol in ("freedom", "blackhole", "dns"):
                 continue
+
+            # Пропускаем заглушки (0.0.0.0, 127.0.0.1)
+            try:
+                addr = ob.get("settings", {}).get("vnext", [{}])[0].get("address", "")
+                if _is_placeholder_addr(addr):
+                    print(f"  → Пропускаем заглушку: {addr}", file=sys.stderr)
+                    continue
+            except Exception:
+                pass
 
             # Нормализуем тег (минимально)
             tag = ob.get("tag", "") or "proxy"
@@ -397,11 +411,14 @@ def unified_main():
             if line.startswith("vless://"):
                 ob = parse_vless_uri(line, idx)
                 if ob:
-                    # Проверка hole
+                    # Проверка hole и заглушек
                     try:
                         addr = ob.get("settings", {}).get("vnext", [{}])[0].get("address", "")
                         if addr == "hole":
                             hole = True
+                        if _is_placeholder_addr(addr):
+                            print(f"  → Пропускаем заглушку: {addr}", file=sys.stderr)
+                            continue
                     except Exception:
                         pass
                     outbounds.append(ob)
