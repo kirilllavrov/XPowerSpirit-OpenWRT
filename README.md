@@ -119,7 +119,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 | Параметр | Описание | По умолчанию |
 |----------|----------|--------------|
 | `--sub=URL` | URL подписки (обязательно) | — |
-| `--sub-ua=STRING` | User-Agent для запроса подписки | `XPower/1.0` |
+| `--sub-ua=STRING` | User-Agent для запроса подписки | `OpenWrt-Xray/1.0` |
 | `--remarks=STRING` | Фильтр профиля по remarks (для JSON-подписок) | — |
 | `--guest=1` | Включить гостевую сеть + SQM | `0` |
 | `--guest-ip=IP` | IP-адрес шлюза гостевой сети | `192.168.2.1` |

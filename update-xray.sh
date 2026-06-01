@@ -1,7 +1,7 @@
 #!/bin/sh
 # OpenWrt — обновление Xray, geoip, geosite, подписки и config.json
 # Поддерживает два формата подписки:
-#   - Base64 (VLESS URI) - User-Agent: OpenWRT/1.0
+#   - Base64 (VLESS URI) - User-Agent: OpenWrt-Xray/1.0
 #   - JSON (Happ/Sing-box/XPower) - User-Agent: happ/3.21, singbox или XPower
 
 # ============================================
@@ -31,7 +31,7 @@ fetch_url() {
     local retry=1
 
     while [ $retry -le $max_retries ]; do
-        curl -s -L --user-agent "XPower/1.0" --max-time 15 -o "$dst" "$url"
+        curl -s -L --user-agent "OpenWrt-Xray/1.0" --max-time 15 -o "$dst" "$url"
         local rc=$?
 
         if [ $rc -eq 0 ] && [ -s "$dst" ]; then
@@ -119,7 +119,7 @@ SUB_URL="$(cat "$SUB_FILE" | tr -d '\n\r')"
 [ -z "$SUB_URL" ] && die "Пустой URL подписки"
 
 # Читаем User-Agent для подписки
-SUB_USER_AGENT="XPower/1.0"
+SUB_USER_AGENT="OpenWrt-Xray/1.0"
 if [ -f "$SUB_USER_AGENT_FILE" ]; then
     SUB_USER_AGENT="$(cat "$SUB_USER_AGENT_FILE" | tr -d '\n\r')"
 fi
@@ -146,7 +146,7 @@ for i in $(seq 1 5); do
     sleep 2
 done
 
-LATEST_VERSION=$(curl -s --user-agent "XPower/1.0" --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest |
+LATEST_VERSION=$(curl -s --user-agent "OpenWrt-Xray/1.0" --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest |
     sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
 
 if [ -z "$LATEST_VERSION" ]; then
