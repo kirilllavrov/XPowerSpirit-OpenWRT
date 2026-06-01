@@ -154,7 +154,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 **Что делает:**
 
 1. **Настройка времени** — устанавливает таймзону `Europe/Moscow` (MSK-3), синхронизирует NTP
-2. **Сохранение подписки** — записывает URL, User-Agent и опциональный фильтр remarks в `/etc/xray/`
+2. **Сохранение настроек** — записывает URL подписки, User-Agent, фильтр remarks, HWID и настройки гостевой сети в единый JSON-файл `/etc/xray/settings.json`
 3. **Отключение IPv6** — отключает на LAN/WAN, останавливает `odhcpd`
 4. **Гостевая сеть (опционально, `--guest=1`)**:
    - Bridge `br-guest`
@@ -244,7 +244,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 **Выполняет:**
 
 1. **Ротация логов** — очищает логи при превышении 1MB
-2. **Проверка HWID и подписки** — читает `/etc/xray/hwid`, `subscription.url`, `sub_user_agent`, `sub_remarks`
+2. **Проверка HWID и подписки** — читает все настройки из единого `/etc/xray/settings.json`
 3. **Обновление Xray**:
    - Скачивает `.dgst` с GitHub, сверяет SHA256
    - Скачивает ZIP только если SHA изменился
@@ -494,11 +494,9 @@ python3 xray-generate-config.py --format json --remarks "best" --output config.j
 
 ```
 /etc/xray/
-├── config.json           # Активная конфигурация Xray
-├── subscription.url      # URL подписки
-├── hwid                  # Уникальный ID устройства (UUID)
-├── sub_user_agent        # User-Agent для запроса подписки
-├── sub_remarks           # Фильтр remarks для JSON-подписок (опционально)
+├── settings.json         # 🔥 ЕДИНЫЙ конфигурационный файл (см. ниже)
+├── config.json           # Активная конфигурация Xray (генерируется автоматически)
+├── gateway_ip            # IP шлюза (создаётся при старте, transient)
 └── state/
     ├── xray.zip.sha256sum
     ├── xray.dgst
@@ -525,6 +523,53 @@ python3 xray-generate-config.py --format json --remarks "best" --output config.j
 └── setup-wifi.log        # Логи настройки Wi-Fi
 ```
 
+### settings.json — единый конфигурационный файл
+
+Все настройки проекта хранятся в одном JSON-файле `/etc/xray/settings.json`:
+
+```json
+{
+  "subscription": {
+    "url": "https://your-subscription-url.com",
+    "user_agent": "XPower/1.0",
+    "remarks_filter": ""
+  },
+  "hwid": "a1b2c3d4e5f6...",
+  "domain_whitelist": [
+    "router.freenternet.top"
+  ]
+}
+```
+
+**Описание полей:**
+
+| Путь | Тип | Описание |
+|------|-----|----------|
+| `subscription.url` | string | URL подписки |
+| `subscription.user_agent` | string | User-Agent для запроса подписки |
+| `subscription.remarks_filter` | string | Фильтр профиля по remarks (для JSON-подписок) |
+| `hwid` | string | Уникальный ID устройства (UUID без дефисов) |
+| `domain_whitelist` | array | Домены для приоритетного выбора сервера |
+
+> **Примечание:** Настройки гостевой сети (`--guest=1`, `--guest-ip=`, `--guest-dl=`, `--guest-ul=`) — это параметры установочного скрипта. Они применяются в UCI напрямую и не сохраняются в `settings.json`.
+
+**Чтение/запись из командной строки:**
+
+```bash
+# Прочитать значение
+python3 -c "import json; print(json.load(open('/etc/xray/settings.json'))['subscription']['url'])"
+
+# Изменить значение
+python3 -c "
+import json
+with open('/etc/xray/settings.json') as f:
+    data = json.load(f)
+data['domain_whitelist'].append('new-domain.com')
+with open('/etc/xray/settings.json', 'w') as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+"
+```
+
 ---
 
 ## 💡 Примеры использования
@@ -532,11 +577,13 @@ python3 xray-generate-config.py --format json --remarks "best" --output config.j
 ### Обновление подписки вручную
 
 ```bash
-HWID=$(cat /etc/xray/hwid)
-SUB_URL=$(cat /etc/xray/subscription.url)
+# Прочитать настройки из единого JSON-конфига
+HWID=$(python3 -c "import json; print(json.load(open('/etc/xray/settings.json'))['hwid'])")
+SUB_URL=$(python3 -c "import json; print(json.load(open('/etc/xray/settings.json'))['subscription']['url'])")
+SUB_UA=$(python3 -c "import json; print(json.load(open('/etc/xray/settings.json'))['subscription']['user_agent'])")
 
 # Скачать подписку
-curl -s -L -H "x-hwid: $HWID" "$SUB_URL" > /tmp/sub.txt
+curl -s -L -H "User-Agent: $SUB_UA" -H "x-hwid: $HWID" "$SUB_URL" > /tmp/sub.txt
 ```
 
 **Для VLESS (Base64) подписки:**
@@ -585,16 +632,21 @@ service sqm restart
 
 ### Добавление своего домена в whitelist
 
-Отредактировать `/usr/share/xray/xray-generate-config.py`:
+Добавить домен в `settings.json` (не нужно редактировать Python-скрипты):
 
-```python
-DOMAIN_WHITELIST = [
-    "router.freenternet.top",
-    "your-custom-domain.com"  # Добавить сюда
-]
+```bash
+python3 -c "
+import json
+with open('/etc/xray/settings.json') as f:
+    data = json.load(f)
+if 'your-custom-domain.com' not in data.get('domain_whitelist', []):
+    data.setdefault('domain_whitelist', []).append('your-custom-domain.com')
+with open('/etc/xray/settings.json', 'w') as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+"
 ```
 
-Затем перегенерировать конфиг.
+Затем перегенерировать конфиг через `update-xray.sh`.
 
 ---
 
@@ -650,7 +702,10 @@ rm -f /tmp/*.log
 Проверьте логи парсера:
 
 ```bash
-curl -s -L -H "x-hwid: $(cat /etc/xray/hwid)" "$(cat /etc/xray/subscription.url)" | \
+HWID=$(python3 -c "import json; print(json.load(open('/etc/xray/settings.json'))['hwid'])")
+SUB_URL=$(python3 -c "import json; print(json.load(open('/etc/xray/settings.json'))['subscription']['url'])")
+
+curl -s -L -H "x-hwid: $HWID" "$SUB_URL" | \
   python3 /usr/share/xray/xray-sub-parser.py 2>&1 | tee /tmp/debug.json
 ```
 

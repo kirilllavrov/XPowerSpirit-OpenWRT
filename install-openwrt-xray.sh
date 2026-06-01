@@ -21,23 +21,103 @@ UPDATER="/usr/share/xray/update-xray.sh"
 NFT_UPDATER="/usr/share/xray/update-nft.sh"
 CONFIG_DIR="/etc/xray"
 CONFIG_JSON="$CONFIG_DIR/config.json"
+SETTINGS_JSON="$CONFIG_DIR/settings.json"
 TMP_DIR="/tmp/xray_install"
 GEO_DIR="/usr/share/xray"
 STATE_DIR="/etc/xray/state"
 
+# Значения по умолчанию (переопределяются аргументами и/или settings.json)
 SUB_USER_AGENT="XPower/1.0"
-SUB_FILE="$CONFIG_DIR/subscription.url"
-HWID_FILE="$CONFIG_DIR/hwid"
-DWL_DOMAIN=""
 SUB_URL=""
 REMARKS_FILTER=""
-
-# Гостевая сеть
+DWL_DOMAIN=""
 GUEST_ENABLED=0
 GUEST_NET="guest"
 GUEST_IP="192.168.2.1"
 DL_GUEST="5120"
 UL_GUEST="5120"
+
+# =============================================
+#   ХЕЛПЕРЫ ДЛЯ ЕДИНОГО JSON-КОНФИГА
+# =============================================
+
+# Чтение значения из settings.json по json-пути (python3)
+# Пример: settings_get ".subscription.url"
+settings_get() {
+    local key="$1"
+    [ -f "$SETTINGS_JSON" ] || return 1
+    python3 -c "
+import json, sys
+try:
+    with open('$SETTINGS_JSON') as f:
+        data = json.load(f)
+    val = data
+    for k in '$key'.lstrip('.').split('.'):
+        val = val[k]
+    if isinstance(val, bool):
+        print('1' if val else '0')
+    elif isinstance(val, list):
+        print('\n'.join(str(v) for v in val))
+    else:
+        print(val if val is not None else '')
+except:
+    sys.exit(1)
+" 2>/dev/null
+}
+
+# Запись значения в settings.json по json-пути
+# Пример: settings_set ".subscription.url" "https://..."
+settings_set() {
+    local key="$1"
+    local val="$2"
+    mkdir -p "$(dirname "$SETTINGS_JSON")"
+    [ -f "$SETTINGS_JSON" ] || echo '{}' > "$SETTINGS_JSON"
+    python3 -c "
+import json, sys
+key = '$key'.lstrip('.').split('.')
+val = '''$val'''
+
+# Пробуем интерпретировать val как bool/int
+if val == '1' and key[-1] in ('enabled',):
+    val = True
+elif val == '0' and key[-1] in ('enabled',):
+    val = False
+elif val.isdigit():
+    val = int(val)
+
+with open('$SETTINGS_JSON') as f:
+    data = json.load(f)
+
+ptr = data
+for k in key[:-1]:
+    if k not in ptr:
+        ptr[k] = {}
+    ptr = ptr[k]
+ptr[key[-1]] = val
+
+with open('$SETTINGS_JSON', 'w') as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+" 2>/dev/null
+}
+
+# Инициализация settings.json значениями по умолчанию (если файла нет)
+init_settings() {
+    if [ ! -f "$SETTINGS_JSON" ]; then
+        cat > "$SETTINGS_JSON" << 'SETEOF'
+{
+  "subscription": {
+    "url": "",
+    "user_agent": "XPower/1.0",
+    "remarks_filter": ""
+  },
+  "hwid": "",
+  "domain_whitelist": []
+}
+SETEOF
+        chmod 600 "$SETTINGS_JSON"
+        echo "  ✓ settings.json инициализирован"
+    fi
+}
 
 # Парсер аргументов
 for arg in "$@"; do
@@ -62,6 +142,9 @@ fi
 
 # Создаём необходимые директории
 mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR"
+
+# Инициализируем единый JSON-конфиг
+init_settings
 
 # =============================================
 #   ЕДИНАЯ ФУНКЦИЯ ЗАГРУЗКИ
@@ -117,25 +200,22 @@ ntpd -q -p ru.pool.ntp.org 2>/dev/null ||
 echo "[+] Timezone установлен в Europe/Moscow, время синхронизировано"
 
 # =============================================
-# 2. Просим подписку
+# 2. Сохраняем настройки в единый settings.json
 # =============================================
-echo "2. Просим подписку..."
-echo "$SUB_URL" >"$SUB_FILE"
-chmod 600 "$SUB_FILE"
-echo "[+] Подписка сохранена: $SUB_URL"
-
-# =============================================
-# 3. Сохраняем User-Agent и remarks фильтр
-# =============================================
-echo "$SUB_USER_AGENT" > "$CONFIG_DIR/sub_user_agent"
-echo "[+] User-Agent сохранён: $SUB_USER_AGENT"
-
-if [ -n "$REMARKS_FILTER" ]; then
-    echo "$REMARKS_FILTER" > "$CONFIG_DIR/sub_remarks"
-    echo "[+] Фильтр remarks сохранён: $REMARKS_FILTER"
-else
-    rm -f "$CONFIG_DIR/sub_remarks"
-fi
+echo "2. Сохраняем настройки в settings.json..."
+settings_set ".subscription.url" "$SUB_URL"
+settings_set ".subscription.user_agent" "$SUB_USER_AGENT"
+[ -n "$REMARKS_FILTER" ] && settings_set ".subscription.remarks_filter" "$REMARKS_FILTER"
+[ -n "$DWL_DOMAIN" ] && python3 -c "
+import json
+with open('$SETTINGS_JSON') as f:
+    data = json.load(f)
+if '$DWL_DOMAIN' not in data.get('domain_whitelist', []):
+    data.setdefault('domain_whitelist', []).append('$DWL_DOMAIN')
+with open('$SETTINGS_JSON', 'w') as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+"
+echo "[+] settings.json сохранён: $SETTINGS_JSON"
 
 # =============================================
 # 4. Отключаем IPv6
@@ -391,11 +471,6 @@ download_script "$REPO/xray-sub-parser.py" "$PARSER"
 download_script "$REPO/update-xray.sh" "$UPDATER"
 download_script "$REPO/update-nft.sh" "$NFT_UPDATER"
 
-if [ -n "$DWL_DOMAIN" ]; then
-	echo "  → Добавляем домен в whitelist: $DWL_DOMAIN"
-	sed -i "s/DOMAIN_WHITELIST = \[/DOMAIN_WHITELIST = [\n    \"$DWL_DOMAIN\",/" "$GENERATOR"
-fi
-
 echo "[+] Все скрипты загружены и готовы к использованию"
 
 # =============================================
@@ -600,9 +675,8 @@ update_geo \
 
 echo "  → Генерируем HWID..."
 HWID="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
-echo "$HWID" >"$HWID_FILE"
-chmod 600 "$HWID_FILE"
-echo "  ✓ HWID сохранён: $HWID"
+settings_set ".hwid" "$HWID"
+echo "  ✓ HWID сохранён в settings.json: $HWID"
 
 echo "  → Генерируем config.json из подписки (User-Agent: $SUB_USER_AGENT)..."
 

@@ -12,20 +12,38 @@ Xray Config Generator for OpenWrt TProxy
 
 Балансировка:
   Используется стратегия leastLoad с burstObservatory для выбора наиболее стабильного прокси.
+
+Настройки:
+  Читает /etc/xray/settings.json — единый конфигурационный файл:
+    - domain_whitelist: список доменов для приоритетного выбора сервера
 """
 
 import json
 import sys
 import re
 import argparse
+import os
 
 # ============================================
 #   КОНФИГУРАЦИЯ
 # ============================================
 
-DOMAIN_WHITELIST = [
-    # "example.com"
-]
+SETTINGS_FILE = "/etc/xray/settings.json"
+
+# Whitelist по умолчанию (переопределяется из settings.json)
+DOMAIN_WHITELIST = []
+
+
+def load_settings():
+    """Загружает настройки из /etc/xray/settings.json"""
+    global DOMAIN_WHITELIST
+    if os.path.isfile(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE) as f:
+                settings = json.load(f)
+            DOMAIN_WHITELIST = settings.get("domain_whitelist", [])
+        except Exception:
+            pass
 
 
 # ============================================
@@ -563,6 +581,11 @@ def parse_args():
 
 def main():
     args = parse_args()
+    
+    # Загружаем настройки из единого JSON-конфига
+    load_settings()
+    if DOMAIN_WHITELIST:
+        print(f"  → Domain whitelist из settings.json: {', '.join(DOMAIN_WHITELIST)}", file=sys.stderr)
     
     if args.format == 'unified':
         # ========================================

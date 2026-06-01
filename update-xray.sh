@@ -52,11 +52,8 @@ fetch_url() {
 }
 
 CONFIG_DIR="/etc/xray"
-SUB_FILE="$CONFIG_DIR/subscription.url"
+SETTINGS_JSON="$CONFIG_DIR/settings.json"
 CONFIG_JSON="$CONFIG_DIR/config.json"
-HWID_FILE="$CONFIG_DIR/hwid"
-SUB_USER_AGENT_FILE="$CONFIG_DIR/sub_user_agent"
-SUB_REMARKS_FILE="$CONFIG_DIR/sub_remarks"
 
 STATE_DIR="/etc/xray/state"
 TMP_DIR="/tmp/xray_update"
@@ -72,6 +69,60 @@ GEOIP_URL="https://raw.githubusercontent.com/kirilllavrov/geoip-builder/release/
 GEOSITE_URL="https://raw.githubusercontent.com/kirilllavrov/geosite-builder/release/geosite.dat"
 
 mkdir -p "$STATE_DIR" "$TMP_DIR"
+
+# =============================================
+#   ХЕЛПЕРЫ ДЛЯ ЕДИНОГО JSON-КОНФИГА
+# =============================================
+
+settings_get() {
+    local key="$1"
+    [ -f "$SETTINGS_JSON" ] || return 1
+    python3 -c "
+import json, sys
+try:
+    with open('$SETTINGS_JSON') as f:
+        data = json.load(f)
+    val = data
+    for k in '$key'.lstrip('.').split('.'):
+        val = val[k]
+    if isinstance(val, bool):
+        print('1' if val else '0')
+    elif isinstance(val, list):
+        print('\n'.join(str(v) for v in val))
+    else:
+        print(val if val is not None else '')
+except:
+    sys.exit(1)
+" 2>/dev/null
+}
+
+settings_set() {
+    local key="$1"
+    local val="$2"
+    mkdir -p "$(dirname "$SETTINGS_JSON")"
+    [ -f "$SETTINGS_JSON" ] || echo '{}' > "$SETTINGS_JSON"
+    python3 -c "
+import json, sys
+key = '$key'.lstrip('.').split('.')
+val = '''$val'''
+if val == '1' and key[-1] in ('enabled',):
+    val = True
+elif val == '0' and key[-1] in ('enabled',):
+    val = False
+elif val.isdigit():
+    val = int(val)
+with open('$SETTINGS_JSON') as f:
+    data = json.load(f)
+ptr = data
+for k in key[:-1]:
+    if k not in ptr:
+        ptr[k] = {}
+    ptr = ptr[k]
+ptr[key[-1]] = val
+with open('$SETTINGS_JSON', 'w') as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+" 2>/dev/null
+}
 
 echo "===== $(date) =====" >>"$LOG"
 
@@ -107,30 +158,25 @@ if [ "$FREE_SPACE_ROOT" -lt 10240 ]; then
 fi
 
 # ============================
-#   HWID + подписка + настройки
+#   HWID + подписка + настройки (из settings.json)
 # ============================
 
-[ -f "$HWID_FILE" ] || die "Нет HWID (файл $HWID_FILE)"
-HWID="$(cat "$HWID_FILE" | tr -d '\n\r')"
-[ -z "$HWID" ] && die "HWID пуст"
+[ -f "$SETTINGS_JSON" ] || die "Нет $SETTINGS_JSON"
 
-[ -f "$SUB_FILE" ] || die "Нет subscription.url (файл $SUB_FILE)"
-SUB_URL="$(cat "$SUB_FILE" | tr -d '\n\r')"
-[ -z "$SUB_URL" ] && die "Пустой URL подписки"
+HWID="$(settings_get ".hwid")"
+[ -z "$HWID" ] && die "HWID пуст в settings.json"
+
+SUB_URL="$(settings_get ".subscription.url")"
+[ -z "$SUB_URL" ] && die "Пустой URL подписки в settings.json"
 
 # Читаем User-Agent для подписки
-SUB_USER_AGENT="OpenWrt-Xray/1.0"
-if [ -f "$SUB_USER_AGENT_FILE" ]; then
-    SUB_USER_AGENT="$(cat "$SUB_USER_AGENT_FILE" | tr -d '\n\r')"
-fi
+SUB_USER_AGENT="$(settings_get ".subscription.user_agent")"
+[ -z "$SUB_USER_AGENT" ] && SUB_USER_AGENT="OpenWrt-Xray/1.0"
 echo "→ User-Agent: $SUB_USER_AGENT" >>"$LOG"
 
 # Читаем фильтр remarks для JSON-формата
-REMARKS_FILTER=""
-if [ -f "$SUB_REMARKS_FILE" ]; then
-    REMARKS_FILTER="$(cat "$SUB_REMARKS_FILE" | tr -d '\n\r')"
-    echo "→ Фильтр remarks: $REMARKS_FILTER" >>"$LOG"
-fi
+REMARKS_FILTER="$(settings_get ".subscription.remarks_filter")"
+[ -n "$REMARKS_FILTER" ] && echo "→ Фильтр remarks: $REMARKS_FILTER" >>"$LOG"
 
 # ============================
 #   Обновление Xray
