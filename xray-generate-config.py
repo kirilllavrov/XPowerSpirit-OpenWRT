@@ -4,7 +4,7 @@ Xray Config Generator for OpenWrt TProxy
 Поддерживает три входных формата:
   --format unified - унифицированный JSON из xray-sub-parser.py (рекомендуемый)
   --format vless   - старый режим: VLESS outbounds из xray-sub-parser.py
-  --format json    - старый режим: сырая JSON-подписка Happ/Sing-box
+  --format json    - старый режим: сырая JSON-подписка Happ/Sing-box/XPower
 
 Специальная обработка "hole":
   Если в подписке обнаружен outbound с address="hole", генерируется DIRECT-конфиг
@@ -74,11 +74,11 @@ def normalize_outbound(ob: dict) -> dict:
 
 
 # ============================================
-#   ФУНКЦИИ ДЛЯ JSON ФОРМАТА (Happ/Sing-box)
+#   ФУНКЦИИ ДЛЯ JSON ФОРМАТА (Happ/Sing-box/XPower)
 # ============================================
 
 def load_json_subscription() -> list:
-    """Загружает JSON-подписку из stdin (формат Happ/Sing-box)"""
+    """Загружает JSON-подписку из stdin (формат Happ/Sing-box/XPower)"""
     try:
         data = json.load(sys.stdin)
         if isinstance(data, list):
@@ -555,7 +555,7 @@ def parse_args():
     parser.add_argument('--output', required=True, help='Output config file')
     parser.add_argument('--format', choices=['json', 'vless', 'unified'], default='vless',
                         help='Input format: unified (from xray-sub-parser --ua), '
-                             'json (raw Happ/Sing-box), vless (parsed VLESS outbounds)')
+                             'json (raw Happ/Sing-box/XPower), vless (parsed VLESS outbounds)')
     parser.add_argument('--remarks', default='', 
                         help='Filter outbounds by remarks (substring, case-insensitive). Only for JSON format')
     return parser.parse_args()
@@ -638,7 +638,7 @@ def main():
     
     elif args.format == 'json':
         # ========================================
-        # JSON формат (Happ/Sing-box подписка)
+        # JSON формат (Happ/Sing-box/XPower подписка)
         # ========================================
         print("  → Обработка JSON подписки", file=sys.stderr)
         

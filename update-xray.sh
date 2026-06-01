@@ -2,7 +2,7 @@
 # OpenWrt — обновление Xray, geoip, geosite, подписки и config.json
 # Поддерживает два формата подписки:
 #   - Base64 (VLESS URI) - User-Agent: OpenWrt-Xray/1.0
-#   - JSON (Happ/Sing-box) - User-Agent: happ/3.21 или singbox
+#   - JSON (Happ/Sing-box/XPower) - User-Agent: happ/3.21, singbox или XPower
 
 # ============================================
 #   КОНФИГУРАЦИЯ

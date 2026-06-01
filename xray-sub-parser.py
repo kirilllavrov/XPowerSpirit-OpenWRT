@@ -3,7 +3,7 @@
 Xray Subscription Parser
 Поддерживает два входных формата:
   1. Base64 VLESS (традиционный) — без --ua или с любым неизвестным User-Agent
-  2. JSON (Happ/Sing-box/Karing) — с --ua happ/singbox/sfa/sfi/sfm/sft/karing
+  2. JSON (Happ/Sing-box/Karing/XPower) — с --ua happ/singbox/sfa/sfi/sfm/sft/karing/xpower
 
 Унифицированный режим (с --ua):
   Определяет формат по User-Agent, парсит, проверяет hole,
@@ -269,7 +269,7 @@ def parse_vless_uri(uri: str, idx: int):
 def _is_json_format(user_agent: str) -> bool:
     """Определяет, является ли User-Agent признаком JSON-подписки"""
     ua_lower = user_agent.lower()
-    json_markers = ["happ", "singbox", "sfa", "sfi", "sfm", "sft", "karing"]
+    json_markers = ["happ", "singbox", "sfa", "sfi", "sfm", "sft", "karing", "xpower"]
     return any(m in ua_lower for m in json_markers)
 
 
@@ -280,7 +280,7 @@ def _is_placeholder_addr(addr: str) -> bool:
 
 def parse_json_subscription(raw_data: str, remarks_filter: str = '') -> dict:
     """
-    Парсит JSON-подписку (Happ/Sing-box формат).
+    Парсит JSON-подписку (Happ/Sing-box/XPower формат).
     Возвращает {"hole": bool, "outbounds": [сырые outbounds из подписки]}.
     """
     try:
@@ -384,8 +384,8 @@ def unified_main():
         sys.exit(1)
 
     if _is_json_format(args.ua):
-        # --- JSON формат (Happ/Sing-box) ---
-        print("  → Определён JSON формат подписки (Happ/Sing-box)", file=sys.stderr)
+        # --- JSON формат (Happ/Sing-box/XPower) ---
+        print("  → Определён JSON формат подписки (Happ/Sing-box/XPower)", file=sys.stderr)
         result = parse_json_subscription(data, args.remarks)
     else:
         # --- Base64 VLESS формат ---
