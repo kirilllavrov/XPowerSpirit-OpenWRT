@@ -41,63 +41,36 @@ UL_GUEST="5120"
 #   ХЕЛПЕРЫ ДЛЯ ЕДИНОГО JSON-КОНФИГА
 # =============================================
 
-# Чтение значения из settings.json по json-пути (python3)
+# Чтение значения из settings.json по jq-пути
 # Пример: settings_get ".subscription.url"
 settings_get() {
     local key="$1"
     [ -f "$SETTINGS_JSON" ] || return 1
-    python3 -c "
-import json, sys
-try:
-    with open('$SETTINGS_JSON') as f:
-        data = json.load(f)
-    val = data
-    for k in '$key'.lstrip('.').split('.'):
-        val = val[k]
-    if isinstance(val, bool):
-        print('1' if val else '0')
-    elif isinstance(val, list):
-        print('\n'.join(str(v) for v in val))
-    else:
-        print(val if val is not None else '')
-except:
-    sys.exit(1)
-" 2>/dev/null
+    jq -r "
+        if $key | type == \"boolean\" then
+            if $key then \"1\" else \"0\" end
+        elif $key | type == \"array\" then
+            $key[]
+        else
+            $key // empty
+        end
+    " "$SETTINGS_JSON" 2>/dev/null
 }
 
-# Запись значения в settings.json по json-пути
+# Запись значения в settings.json по jq-пути
 # Пример: settings_set ".subscription.url" "https://..."
 settings_set() {
     local key="$1"
     local val="$2"
     mkdir -p "$(dirname "$SETTINGS_JSON")"
     [ -f "$SETTINGS_JSON" ] || echo '{}' > "$SETTINGS_JSON"
-    python3 -c "
-import json, sys
-key = '$key'.lstrip('.').split('.')
-val = '''$val'''
-
-# Пробуем интерпретировать val как bool/int
-if val == '1' and key[-1] in ('enabled',):
-    val = True
-elif val == '0' and key[-1] in ('enabled',):
-    val = False
-elif val.isdigit():
-    val = int(val)
-
-with open('$SETTINGS_JSON') as f:
-    data = json.load(f)
-
-ptr = data
-for k in key[:-1]:
-    if k not in ptr:
-        ptr[k] = {}
-    ptr = ptr[k]
-ptr[key[-1]] = val
-
-with open('$SETTINGS_JSON', 'w') as f:
-    json.dump(data, f, indent=2, ensure_ascii=False)
-" 2>/dev/null
+    if echo "$val" | grep -qE '^[0-9]+$'; then
+        jq --argjson v "$val" "$key = \$v" "$SETTINGS_JSON" > "${SETTINGS_JSON}.tmp"
+    else
+        jq --arg v "$val" "$key = \$v" "$SETTINGS_JSON" > "${SETTINGS_JSON}.tmp"
+    fi
+    mv "${SETTINGS_JSON}.tmp" "$SETTINGS_JSON"
+    chmod 600 "$SETTINGS_JSON"
 }
 
 # Инициализация settings.json значениями по умолчанию (если файла нет)
@@ -206,15 +179,9 @@ echo "2. Сохраняем настройки в settings.json..."
 settings_set ".subscription.url" "$SUB_URL"
 settings_set ".subscription.user_agent" "$SUB_USER_AGENT"
 [ -n "$REMARKS_FILTER" ] && settings_set ".subscription.remarks_filter" "$REMARKS_FILTER"
-[ -n "$DWL_DOMAIN" ] && python3 -c "
-import json
-with open('$SETTINGS_JSON') as f:
-    data = json.load(f)
-if '$DWL_DOMAIN' not in data.get('domain_whitelist', []):
-    data.setdefault('domain_whitelist', []).append('$DWL_DOMAIN')
-with open('$SETTINGS_JSON', 'w') as f:
-    json.dump(data, f, indent=2, ensure_ascii=False)
-"
+[ -n "$DWL_DOMAIN" ] && jq --arg d "$DWL_DOMAIN" \
+    'if .domain_whitelist | index($d) then . else .domain_whitelist += [$d] end' \
+    "$SETTINGS_JSON" > "${SETTINGS_JSON}.tmp" && mv "${SETTINGS_JSON}.tmp" "$SETTINGS_JSON"
 echo "[+] settings.json сохранён: $SETTINGS_JSON"
 
 # =============================================

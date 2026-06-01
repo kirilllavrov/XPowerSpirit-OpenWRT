@@ -557,17 +557,12 @@ python3 xray-generate-config.py --format json --remarks "best" --output config.j
 
 ```bash
 # Прочитать значение
-python3 -c "import json; print(json.load(open('/etc/xray/settings.json'))['subscription']['url'])"
+jq -r '.subscription.url' /etc/xray/settings.json
 
 # Изменить значение
-python3 -c "
-import json
-with open('/etc/xray/settings.json') as f:
-    data = json.load(f)
-data['domain_whitelist'].append('new-domain.com')
-with open('/etc/xray/settings.json', 'w') as f:
-    json.dump(data, f, indent=2, ensure_ascii=False)
-"
+jq --arg d 'new-domain.com' \
+    'if .domain_whitelist | index($d) then . else .domain_whitelist += [$d] end' \
+    /etc/xray/settings.json > /tmp/settings.tmp && mv /tmp/settings.tmp /etc/xray/settings.json
 ```
 
 ---
@@ -578,9 +573,9 @@ with open('/etc/xray/settings.json', 'w') as f:
 
 ```bash
 # Прочитать настройки из единого JSON-конфига
-HWID=$(python3 -c "import json; print(json.load(open('/etc/xray/settings.json'))['hwid'])")
-SUB_URL=$(python3 -c "import json; print(json.load(open('/etc/xray/settings.json'))['subscription']['url'])")
-SUB_UA=$(python3 -c "import json; print(json.load(open('/etc/xray/settings.json'))['subscription']['user_agent'])")
+HWID=$(jq -r '.hwid' /etc/xray/settings.json)
+SUB_URL=$(jq -r '.subscription.url' /etc/xray/settings.json)
+SUB_UA=$(jq -r '.subscription.user_agent' /etc/xray/settings.json)
 
 # Скачать подписку
 curl -s -L -H "User-Agent: $SUB_UA" -H "x-hwid: $HWID" "$SUB_URL" > /tmp/sub.txt
@@ -635,15 +630,9 @@ service sqm restart
 Добавить домен в `settings.json` (не нужно редактировать Python-скрипты):
 
 ```bash
-python3 -c "
-import json
-with open('/etc/xray/settings.json') as f:
-    data = json.load(f)
-if 'your-custom-domain.com' not in data.get('domain_whitelist', []):
-    data.setdefault('domain_whitelist', []).append('your-custom-domain.com')
-with open('/etc/xray/settings.json', 'w') as f:
-    json.dump(data, f, indent=2, ensure_ascii=False)
-"
+jq --arg d 'your-custom-domain.com' \
+    'if .domain_whitelist | index($d) then . else .domain_whitelist += [$d] end' \
+    /etc/xray/settings.json > /tmp/settings.tmp && mv /tmp/settings.tmp /etc/xray/settings.json
 ```
 
 Затем перегенерировать конфиг через `update-xray.sh`.
@@ -702,8 +691,8 @@ rm -f /tmp/*.log
 Проверьте логи парсера:
 
 ```bash
-HWID=$(python3 -c "import json; print(json.load(open('/etc/xray/settings.json'))['hwid'])")
-SUB_URL=$(python3 -c "import json; print(json.load(open('/etc/xray/settings.json'))['subscription']['url'])")
+HWID=$(jq -r '.hwid' /etc/xray/settings.json)
+SUB_URL=$(jq -r '.subscription.url' /etc/xray/settings.json)
 
 curl -s -L -H "x-hwid: $HWID" "$SUB_URL" | \
   python3 /usr/share/xray/xray-sub-parser.py 2>&1 | tee /tmp/debug.json

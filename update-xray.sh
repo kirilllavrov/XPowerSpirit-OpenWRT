@@ -77,23 +77,15 @@ mkdir -p "$STATE_DIR" "$TMP_DIR"
 settings_get() {
     local key="$1"
     [ -f "$SETTINGS_JSON" ] || return 1
-    python3 -c "
-import json, sys
-try:
-    with open('$SETTINGS_JSON') as f:
-        data = json.load(f)
-    val = data
-    for k in '$key'.lstrip('.').split('.'):
-        val = val[k]
-    if isinstance(val, bool):
-        print('1' if val else '0')
-    elif isinstance(val, list):
-        print('\n'.join(str(v) for v in val))
-    else:
-        print(val if val is not None else '')
-except:
-    sys.exit(1)
-" 2>/dev/null
+    jq -r "
+        if $key | type == \"boolean\" then
+            if $key then \"1\" else \"0\" end
+        elif $key | type == \"array\" then
+            $key[]
+        else
+            $key // empty
+        end
+    " "$SETTINGS_JSON" 2>/dev/null
 }
 
 settings_set() {
@@ -101,27 +93,13 @@ settings_set() {
     local val="$2"
     mkdir -p "$(dirname "$SETTINGS_JSON")"
     [ -f "$SETTINGS_JSON" ] || echo '{}' > "$SETTINGS_JSON"
-    python3 -c "
-import json, sys
-key = '$key'.lstrip('.').split('.')
-val = '''$val'''
-if val == '1' and key[-1] in ('enabled',):
-    val = True
-elif val == '0' and key[-1] in ('enabled',):
-    val = False
-elif val.isdigit():
-    val = int(val)
-with open('$SETTINGS_JSON') as f:
-    data = json.load(f)
-ptr = data
-for k in key[:-1]:
-    if k not in ptr:
-        ptr[k] = {}
-    ptr = ptr[k]
-ptr[key[-1]] = val
-with open('$SETTINGS_JSON', 'w') as f:
-    json.dump(data, f, indent=2, ensure_ascii=False)
-" 2>/dev/null
+    if echo "$val" | grep -qE '^[0-9]+$'; then
+        jq --argjson v "$val" "$key = \$v" "$SETTINGS_JSON" > "${SETTINGS_JSON}.tmp"
+    else
+        jq --arg v "$val" "$key = \$v" "$SETTINGS_JSON" > "${SETTINGS_JSON}.tmp"
+    fi
+    mv "${SETTINGS_JSON}.tmp" "$SETTINGS_JSON"
+    chmod 600 "$SETTINGS_JSON"
 }
 
 echo "===== $(date) =====" >>"$LOG"
