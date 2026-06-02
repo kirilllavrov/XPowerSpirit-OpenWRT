@@ -221,7 +221,7 @@ echo "[+] Сеть настроена (изменения применятся �
 if [ $GUEST_ENABLED -eq 1 ]; then
 	echo "5. Настройка Guest Network и SQM:"
 
-	# 4.1. Guest Bridge + Interface
+	# 5.1. Guest Bridge + Interface
 	uci -q delete network.${GUEST_NET}_dev
 	uci set network.${GUEST_NET}_dev="device"
 	uci set network.${GUEST_NET}_dev.type="bridge"
@@ -239,7 +239,7 @@ if [ $GUEST_ENABLED -eq 1 ]; then
 	uci commit network
 	echo "  → Guest Bridge + Interface настроены: br-${GUEST_NET} (${GUEST_IP}/24)"
 
-	# 4.2. DHCP Guest
+	# 5.2. DHCP Guest
 	uci -q delete dhcp.$GUEST_NET
 	uci set dhcp.$GUEST_NET="dhcp"
 	uci set dhcp.$GUEST_NET.interface="$GUEST_NET"
@@ -251,7 +251,7 @@ if [ $GUEST_ENABLED -eq 1 ]; then
 	uci commit dhcp
 	echo "  → DHCP для Guest настроен: $GUEST_NET"
 
-	# 4.3. Firewall Guest Zone + Rules
+	# 5.3. Firewall Guest Zone + Rules
 	uci -q delete firewall.$GUEST_NET
 	uci set firewall.$GUEST_NET="zone"
 	uci set firewall.$GUEST_NET.name="$GUEST_NET"
@@ -263,7 +263,7 @@ if [ $GUEST_ENABLED -eq 1 ]; then
 	uci set firewall.$GUEST_NET.mtu_fix="1"
 	echo "  → Firewall зона для Guest создана: $GUEST_NET"
 
-	# 4.4 Firewall DNS
+	# 5.4 Firewall DNS
 	uci -q delete firewall.${GUEST_NET}_dns
 	uci set firewall.${GUEST_NET}_dns="rule"
 	uci set firewall.${GUEST_NET}_dns.name="Allow-DNS-Guest"
@@ -273,7 +273,7 @@ if [ $GUEST_ENABLED -eq 1 ]; then
 	uci set firewall.${GUEST_NET}_dns.target="ACCEPT"
 	echo "  → Firewall правило для DNS создано: $GUEST_NET"
 
-	# 4.5 Firewall DHCP
+	# 5.5 Firewall DHCP
 	uci -q delete firewall.${GUEST_NET}_dhcp
 	uci set firewall.${GUEST_NET}_dhcp="rule"
 	uci set firewall.${GUEST_NET}_dhcp.name="Allow-DHCP-Guest"
@@ -283,7 +283,7 @@ if [ $GUEST_ENABLED -eq 1 ]; then
 	uci set firewall.${GUEST_NET}_dhcp.target="ACCEPT"
 	echo "  → Firewall правило для DHCP создано: $GUEST_NET"
 
-	# 4.6 Forward to WAN
+	# 5.6 Forward to WAN
 	uci -q delete firewall.${GUEST_NET}_wan
 	uci set firewall.${GUEST_NET}_wan="forwarding"
 	uci set firewall.${GUEST_NET}_wan.src="$GUEST_NET"
@@ -291,7 +291,7 @@ if [ $GUEST_ENABLED -eq 1 ]; then
 	uci commit firewall
 	echo "  → Firewall правило для доступа Guest в WAN создано: $GUEST_NET → wan"
 
-	# 4.7 Настраиваем SQM только для Guest
+	# 5.7 Настраиваем SQM только для Guest
 	uci -q delete sqm.$GUEST_NET
 	uci set sqm.$GUEST_NET="queue"
 	uci set sqm.$GUEST_NET.interface="br-${GUEST_NET}"
@@ -424,7 +424,6 @@ else
 	cp "$TMP_DIR/xray" /usr/bin/xray
 	chmod 755 /usr/bin/xray
 
-	rm -rf "$TMP_DIR"
 	echo "[+] Xray установлен версии $LATEST_VERSION"
 fi
 
@@ -654,10 +653,13 @@ if download_file "$SUB_URL" "/tmp/sub_raw.txt" "User-Agent: $SUB_UA" "x-hwid: $H
     fi
     
     # Единый пайплайн: парсер (с автоопределением формата) → генератор
-    PARSER_ARGS="python3 $PARSER --ua \"$SUB_UA\""
-    [ -n "$REMARKS" ] && PARSER_ARGS="$PARSER_ARGS --remarks \"$REMARKS\""
+    if [ -n "$REMARKS" ]; then
+        python3 "$PARSER" --ua "$SUB_UA" --remarks "$REMARKS" < "/tmp/sub_raw.txt" > "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE"
+    else
+        python3 "$PARSER" --ua "$SUB_UA" < "/tmp/sub_raw.txt" > "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE"
+    fi
     
-    if eval $PARSER_ARGS < "/tmp/sub_raw.txt" > "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE"; then
+    if [ $? -eq 0 ]; then
         if python3 "$GENERATOR" --format unified --output "$CONFIG_JSON" < "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE"; then
             echo "  ✓ config.json создан"
         else

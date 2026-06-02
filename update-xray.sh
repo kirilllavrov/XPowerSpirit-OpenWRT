@@ -297,10 +297,13 @@ if curl -s -L -H "User-Agent: $SUB_USER_AGENT" -H "x-hwid: $HWID" "$SUB_URL" -o 
         echo "[X] Подписка вернула HTML, а не данные" >>"$LOG"
     else
         # Единый пайплайн: парсер (с автоопределением формата) → генератор
-        PARSER_ARGS="python3 $PARSER --ua \"$SUB_USER_AGENT\""
-        [ -n "$REMARKS_FILTER" ] && PARSER_ARGS="$PARSER_ARGS --remarks \"$REMARKS_FILTER\""
+        if [ -n "$REMARKS_FILTER" ]; then
+            python3 "$PARSER" --ua "$SUB_USER_AGENT" --remarks "$REMARKS_FILTER" < "$TMP_DIR/sub.txt" > "$TMP_DIR/parsed.json" 2>>"$LOG"
+        else
+            python3 "$PARSER" --ua "$SUB_USER_AGENT" < "$TMP_DIR/sub.txt" > "$TMP_DIR/parsed.json" 2>>"$LOG"
+        fi
         
-        if eval $PARSER_ARGS < "$TMP_DIR/sub.txt" > "$TMP_DIR/parsed.json" 2>>"$LOG"; then
+        if [ $? -eq 0 ]; then
             if python3 "$GENERATOR" --format unified --output "$TMP_DIR/config.json" < "$TMP_DIR/parsed.json" 2>>"$LOG"; then
                 if xray run -test -config "$TMP_DIR/config.json" >>"$LOG" 2>&1; then
                     mv "$TMP_DIR/config.json" "$CONFIG_JSON"
