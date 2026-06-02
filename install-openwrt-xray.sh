@@ -26,8 +26,8 @@ TMP_DIR="/tmp/xray_install"
 GEO_DIR="/usr/share/xray"
 STATE_DIR="/etc/xray/state"
 
-# Значения по умолчанию (переопределяются аргументами и/или settings.json)
-SUB_USER_AGENT="XPower/1.0"
+# Значения из CLI (если не указаны — берутся из settings.default.json)
+SUB_USER_AGENT=""
 SUB_URL=""
 REMARKS_FILTER=""
 DWL_DOMAIN=""
@@ -73,52 +73,6 @@ settings_set() {
     chmod 600 "$SETTINGS_JSON"
 }
 
-# Инициализация settings.json значениями по умолчанию (если файла нет)
-init_settings() {
-    if [ ! -f "$SETTINGS_JSON" ]; then
-        cat > "$SETTINGS_JSON" << 'SETEOF'
-{
-  "subscription": {
-    "url": "",
-    "user_agent": "XPower/1.0",
-    "remarks_filter": ""
-  },
-  "hwid": "",
-  "domain_whitelist": []
-}
-SETEOF
-        chmod 600 "$SETTINGS_JSON"
-        echo "  ✓ settings.json инициализирован"
-    fi
-}
-
-# Парсер аргументов
-for arg in "$@"; do
-	case $arg in
-	--sub-ua=*) SUB_USER_AGENT="${arg#*=}" ;;
-	--remarks=*) REMARKS_FILTER="${arg#*=}" ;;
-	--guest=1) GUEST_ENABLED=1 ;;
-	--guest-ip=*) GUEST_IP="${arg#*=}" ;;
-	--guest-dl=*) DL_GUEST="${arg#*=}" ;;
-	--guest-ul=*) UL_GUEST="${arg#*=}" ;;
-	--sub=*) SUB_URL="${arg#*=}" ;;
-	--dwl=*) DWL_DOMAIN="${arg#*=}" ;;
-	*) echo "[!] Неизвестный аргумент: $arg" ;;
-	esac
-done
-
-# Валидация
-if [ -z "$SUB_URL" ]; then
-	echo "[!] Ошибка: --sub=URL обязателен"
-	exit 1
-fi
-
-# Создаём необходимые директории
-mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR"
-
-# Инициализируем единый JSON-конфиг
-init_settings
-
 # =============================================
 #   ЕДИНАЯ ФУНКЦИЯ ЗАГРУЗКИ
 # =============================================
@@ -158,6 +112,53 @@ download_file() {
     return 1
 }
 
+download_script() {
+    local url="$1"
+    local dst="$2"
+    if download_file "$url" "$dst"; then
+        chmod +x "$dst"
+        echo "  → $dst"
+    else
+        echo "  [X] Ошибка: не удалось скачать $dst"
+        exit 1
+    fi
+}
+
+# Парсер аргументов
+for arg in "$@"; do
+	case $arg in
+	--sub-ua=*) SUB_USER_AGENT="${arg#*=}" ;;
+	--remarks=*) REMARKS_FILTER="${arg#*=}" ;;
+	--guest=1) GUEST_ENABLED=1 ;;
+	--guest-ip=*) GUEST_IP="${arg#*=}" ;;
+	--guest-dl=*) DL_GUEST="${arg#*=}" ;;
+	--guest-ul=*) UL_GUEST="${arg#*=}" ;;
+	--sub=*) SUB_URL="${arg#*=}" ;;
+	--dwl=*) DWL_DOMAIN="${arg#*=}" ;;
+	*) echo "[!] Неизвестный аргумент: $arg" ;;
+	esac
+done
+
+# Валидация
+if [ -z "$SUB_URL" ]; then
+	echo "[!] Ошибка: --sub=URL обязателен"
+	exit 1
+fi
+
+# Создаём необходимые директории
+mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR"
+
+# Инициализируем settings.json из репозитория (если файла нет)
+if [ ! -f "$SETTINGS_JSON" ]; then
+    echo "  → Скачиваем settings.default.json из репозитория..."
+    download_file "$REPO/settings.default.json" "$SETTINGS_JSON" || {
+        echo "  [X] Не удалось скачать settings.default.json"
+        exit 1
+    }
+    chmod 600 "$SETTINGS_JSON"
+    echo "  ✓ settings.json инициализирован"
+fi
+
 # =============================================
 # 1. Устанавливаем Timezone и синхронизируем время
 # =============================================
@@ -173,11 +174,23 @@ ntpd -q -p ru.pool.ntp.org 2>/dev/null ||
 echo "[+] Timezone установлен в Europe/Moscow, время синхронизировано"
 
 # =============================================
-# 2. Сохраняем настройки в единый settings.json
+# 2. Загружаем скрипты из репозитория
 # =============================================
-echo "2. Сохраняем настройки в settings.json..."
+echo "2. Загружаем скрипты из репозитория..."
+
+download_script "$REPO/xray-generate-config.py" "$GENERATOR"
+download_script "$REPO/xray-sub-parser.py" "$PARSER"
+download_script "$REPO/update-xray.sh" "$UPDATER"
+download_script "$REPO/update-nft.sh" "$NFT_UPDATER"
+
+echo "[+] Все скрипты загружены и готовы к использованию"
+
+# =============================================
+# 3. Сохраняем настройки в единый settings.json
+# =============================================
+echo "3. Сохраняем настройки в settings.json..."
 settings_set ".subscription.url" "$SUB_URL"
-settings_set ".subscription.user_agent" "$SUB_USER_AGENT"
+[ -n "$SUB_USER_AGENT" ] && settings_set ".subscription.user_agent" "$SUB_USER_AGENT"
 [ -n "$REMARKS_FILTER" ] && settings_set ".subscription.remarks_filter" "$REMARKS_FILTER"
 [ -n "$DWL_DOMAIN" ] && jq --arg d "$DWL_DOMAIN" \
     'if .domain_whitelist | index($d) then . else .domain_whitelist += [$d] end' \
@@ -416,34 +429,9 @@ else
 fi
 
 # =============================================
-# 7. Загружаем скрипты из репозитория
+# 7. Настройка DNS (dnsmasq → Xray)
 # =============================================
-echo "7. Загружаем скрипты из репозитория..."
-
-download_script() {
-	local url="$1"
-	local dst="$2"
-
-	if download_file "$url" "$dst"; then
-		chmod +x "$dst"
-		echo "  → $dst"
-	else
-		echo "  [X] Ошибка: не удалось скачать $dst"
-		exit 1
-	fi
-}
-
-download_script "$REPO/xray-generate-config.py" "$GENERATOR"
-download_script "$REPO/xray-sub-parser.py" "$PARSER"
-download_script "$REPO/update-xray.sh" "$UPDATER"
-download_script "$REPO/update-nft.sh" "$NFT_UPDATER"
-
-echo "[+] Все скрипты загружены и готовы к использованию"
-
-# =============================================
-# 8. Настройка DNS (dnsmasq → Xray)
-# =============================================
-echo "8. Настраиваем DNS (dnsmasq → Xray)..."
+echo "7. Настраиваем DNS (dnsmasq → Xray)..."
 
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci set dhcp.@dnsmasq[0].strictorder='1'
@@ -459,9 +447,9 @@ uci commit dhcp
 echo "[+] DNS настроен (dnsmasq → Xray:5353 + fallback 77.88.8.8)"
 
 # =============================================
-# 9. Создаём init.d для Xray
+# 8. Создаём init.d для Xray
 # =============================================
-echo "9. Создаём init.d для Xray..."
+echo "8. Создаём init.d для Xray..."
 
 cat >/etc/init.d/xray <<'XRAYEOF'
 #!/bin/sh /etc/rc.common
@@ -558,9 +546,9 @@ chmod +x /etc/init.d/xray
 echo "[+] init.d для Xray создан и включён"
 
 # =============================================
-# 10. Настраиваем routing
+# 9. Настраиваем routing
 # =============================================
-echo "10. Настраиваем routing..."
+echo "9. Настраиваем routing..."
 
 if ! grep -q "^100[[:space:]]\+xray$" /etc/iproute2/rt_tables; then
 	echo "100 xray" >>/etc/iproute2/rt_tables
@@ -569,9 +557,9 @@ fi
 echo "[+] Routing настроен"
 
 # =============================================
-# 11. Настраиваем sysctl
+# 10. Настраиваем sysctl
 # =============================================
-echo "11. Настраиваем sysctl:"
+echo "10. Настраиваем sysctl:"
 
 sysctl -w net.ipv4.conf.all.route_localnet=1
 sysctl -w net.ipv4.ip_forward=1
@@ -585,9 +573,9 @@ sysctl -p /etc/sysctl.d/99-xray.conf >/dev/null 2>&1
 echo "[+] Sysctl настроен"
 
 # =============================================
-# 12. Geo + HWID + config.json
+# 11. Geo + HWID + config.json
 # =============================================
-echo "12. Скачиваем геофайлы, делаем HWID, генерируем config.json..."
+echo "11. Скачиваем геофайлы, делаем HWID, генерируем config.json..."
 
 update_geo() {
 	local URL="$1"
@@ -632,23 +620,31 @@ update_geo() {
 	echo "  ✓ $BASE скачан и проверен"
 }
 
-update_geo \
-	"https://raw.githubusercontent.com/kirilllavrov/geoip-builder/release/geoip.dat" \
-	"$GEO_DIR/geoip.dat"
+GEOIP_URL=$(settings_get ".geo.geoip_url")
+GEOSITE_URL=$(settings_get ".geo.geosite_url")
 
-update_geo \
-	"https://raw.githubusercontent.com/kirilllavrov/geosite-builder/release/geosite.dat" \
-	"$GEO_DIR/geosite.dat"
+update_geo "$GEOIP_URL" "$GEO_DIR/geoip.dat"
+update_geo "$GEOSITE_URL" "$GEO_DIR/geosite.dat"
 
 echo "  → Генерируем HWID..."
 HWID="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
 settings_set ".hwid" "$HWID"
 echo "  ✓ HWID сохранён в settings.json: $HWID"
 
-echo "  → Генерируем config.json из подписки (User-Agent: $SUB_USER_AGENT)..."
+echo "  → Генерируем config.json из подписки..."
+
+# Все значения — из единого settings.json
+SUB_URL=$(settings_get ".subscription.url")
+SUB_UA=$(settings_get ".subscription.user_agent")
+HWID=$(settings_get ".hwid")
+REMARKS=$(settings_get ".subscription.remarks_filter")
+
+echo "  → URL: $SUB_URL"
+echo "  → User-Agent: $SUB_UA"
+echo "  → HWID: $HWID"
 
 # Скачиваем подписку с заголовками
-if download_file "$SUB_URL" "/tmp/sub_raw.txt" "User-Agent: $SUB_USER_AGENT" "x-hwid: $HWID"; then
+if download_file "$SUB_URL" "/tmp/sub_raw.txt" "User-Agent: $SUB_UA" "x-hwid: $HWID"; then
     
     # Проверяем, что скачалось не HTML
     if head -n 1 "/tmp/sub_raw.txt" 2>/dev/null | grep -qi "<html\|<!DOCTYPE"; then
@@ -658,8 +654,8 @@ if download_file "$SUB_URL" "/tmp/sub_raw.txt" "User-Agent: $SUB_USER_AGENT" "x-
     fi
     
     # Единый пайплайн: парсер (с автоопределением формата) → генератор
-    PARSER_ARGS="python3 $PARSER --ua \"$SUB_USER_AGENT\""
-    [ -n "$REMARKS_FILTER" ] && PARSER_ARGS="$PARSER_ARGS --remarks \"$REMARKS_FILTER\""
+    PARSER_ARGS="python3 $PARSER --ua \"$SUB_UA\""
+    [ -n "$REMARKS" ] && PARSER_ARGS="$PARSER_ARGS --remarks \"$REMARKS\""
     
     if eval $PARSER_ARGS < "/tmp/sub_raw.txt" > "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE"; then
         if python3 "$GENERATOR" --format unified --output "$CONFIG_JSON" < "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE"; then
@@ -688,9 +684,9 @@ echo ""
 echo "[+] Геофайлы загружены, конфиг сгенерирован"
 
 # =============================================
-# 13. Cron: автообновление в 2.30 ночи
+# 12. Cron: автообновление в 2.30 ночи
 # =============================================
-echo "13. Настройка Crontab..."
+echo "12. Настройка Crontab..."
 
 uci set system.@system[0].cronloglevel='9'
 uci commit system
@@ -707,9 +703,9 @@ else
 fi
 
 # =============================================
-# 14. Настройка hotplug (автообновление после включения WAN)
+# 13. Настройка hotplug (автообновление после включения WAN)
 # =============================================
-echo "14. Настройка hotplug..."
+echo "13. Настройка hotplug..."
 
 cat >/etc/hotplug.d/iface/99-xray-autoupdate <<'EOF'
 #!/bin/sh
@@ -734,9 +730,9 @@ chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
 echo "[+] Hotplug для автообновления после включения WAN настроен"
 
 # =============================================
-# 15. Проверяем config.json
+# 14. Проверяем config.json
 # =============================================
-echo "15. Проверяем config.json на валидность..."
+echo "14. Проверяем config.json на валидность..."
 if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
 	echo "  ✓ $CONFIG_JSON прошел проверку"
 else
@@ -745,9 +741,9 @@ else
 fi
 
 # =============================================
-# 16. Перезагрузка
+# 15. Перезагрузка
 # =============================================
-echo "16. Перезагрузка для применения всех изменений..."
+echo "15. Перезагрузка для применения всех изменений..."
 echo ""
 echo "=== Установка завершена ==="
 echo "Устройство будет перезагружено через 5 секунд..."

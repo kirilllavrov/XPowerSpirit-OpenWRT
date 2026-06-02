@@ -65,8 +65,8 @@ GEO_DIR="/usr/share/xray"
 GEOIP="$GEO_DIR/geoip.dat"
 GEOSITE="$GEO_DIR/geosite.dat"
 
-GEOIP_URL="https://raw.githubusercontent.com/kirilllavrov/geoip-builder/release/geoip.dat"
-GEOSITE_URL="https://raw.githubusercontent.com/kirilllavrov/geosite-builder/release/geosite.dat"
+GEOIP_URL=$(settings_get ".geo.geoip_url")
+GEOSITE_URL=$(settings_get ".geo.geosite_url")
 
 mkdir -p "$STATE_DIR" "$TMP_DIR"
 

@@ -154,7 +154,8 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 **Что делает:**
 
 1. **Настройка времени** — устанавливает таймзону `Europe/Moscow` (MSK-3), синхронизирует NTP
-2. **Сохранение настроек** — записывает URL подписки, User-Agent, фильтр remarks, HWID и настройки гостевой сети в единый JSON-файл `/etc/xray/settings.json`
+2. **Загрузка скриптов** — скачивает `xray-generate-config.py`, `xray-sub-parser.py`, `update-xray.sh`, `update-nft.sh` из репозитория
+3. **Сохранение настроек** — записывает URL подписки, User-Agent, фильтр remarks, HWID и домен в whitelist в единый JSON-файл `/etc/xray/settings.json` (файл инициализируется из `settings.default.json` в репозитории)
 3. **Отключение IPv6** — отключает на LAN/WAN, останавливает `odhcpd`
 4. **Гостевая сеть (опционально, `--guest=1`)**:
    - Bridge `br-guest`
@@ -537,7 +538,11 @@ python3 xray-generate-config.py --format json --remarks "best" --output config.j
   "hwid": "a1b2c3d4e5f6...",
   "domain_whitelist": [
     "router.freenternet.top"
-  ]
+  ],
+  "geo": {
+    "geoip_url": "https://raw.githubusercontent.com/kirilllavrov/geoip-builder/release/geoip.dat",
+    "geosite_url": "https://raw.githubusercontent.com/kirilllavrov/geosite-builder/release/geosite.dat"
+  }
 }
 ```
 
@@ -550,6 +555,8 @@ python3 xray-generate-config.py --format json --remarks "best" --output config.j
 | `subscription.remarks_filter` | string | Фильтр профиля по remarks (для JSON-подписок) |
 | `hwid` | string | Уникальный ID устройства (UUID без дефисов) |
 | `domain_whitelist` | array | Домены для приоритетного выбора сервера |
+| `geo.geoip_url` | string | URL geoip.dat |
+| `geo.geosite_url` | string | URL geosite.dat |
 
 > **Примечание:** Настройки гостевой сети (`--guest=1`, `--guest-ip=`, `--guest-dl=`, `--guest-ul=`) — это параметры установочного скрипта. Они применяются в UCI напрямую и не сохраняются в `settings.json`.
 
