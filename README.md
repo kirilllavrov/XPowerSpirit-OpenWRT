@@ -117,7 +117,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 **Параметры установки:**
 
 | Параметр | Описание | По умолчанию |
-|------------------------------------|
+|----------|----------|--------------|
 | `--sub=URL` | URL подписки (обязательно) | — |
 | `--sub-ua=STRING` | User-Agent для запроса подписки | `OpenWrt-Xray/1.0` |
 | `--remarks=STRING` | Фильтр профиля по remarks (для JSON-подписок) | — |
