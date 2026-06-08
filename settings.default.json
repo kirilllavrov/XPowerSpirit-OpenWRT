@@ -5,6 +5,9 @@
     "remarks_filter": ""
   },
   "hwid": "",
+  "device_model": "",
+  "device_os": "",
+  "ver_os": "",
   "domain_whitelist": [],
   "geo": {
     "geoip_url": "https://raw.githubusercontent.com/kirilllavrov/geoip-builder/release/geoip.dat",

@@ -77,7 +77,7 @@ settings_set() {
 #   ЕДИНАЯ ФУНКЦИЯ ЗАГРУЗКИ
 # =============================================
 
-# Универсальная загрузка файла (с поддержкой до 3 кастомных заголовков)
+# Универсальная загрузка файла (с авто-заголовками из settings.json + до 3 кастомных)
 # Использование:
 #   download_file "URL" "DEST" ["HEADER1" "HEADER2" "HEADER3"]
 download_file() {
@@ -87,8 +87,19 @@ download_file() {
     local max_retries=3
     local retry=1
 
+    # Системные заголовки из settings.json (могут быть пустыми при первом запуске)
+    local _ua _ver _model _os
+    _ua=$(settings_get ".subscription.user_agent" 2>/dev/null || echo "XPower/1.0")
+    _ver=$(settings_get ".ver_os" 2>/dev/null || echo "")
+    _model=$(settings_get ".device_model" 2>/dev/null || echo "")
+    _os=$(settings_get ".device_os" 2>/dev/null || echo "")
+
     while [ $retry -le $max_retries ]; do
         curl -s -L --max-time 15 \
+            -H "User-Agent: $_ua" \
+            ${_ver:+-H "X-Ver-Os: $_ver"} \
+            ${_model:+-H "X-Device-Model: $_model"} \
+            ${_os:+-H "X-Device-Os: $_os"} \
             ${1:+-H "$1"} \
             ${2:+-H "$2"} \
             ${3:+-H "$3"} \
@@ -189,6 +200,28 @@ echo "[+] Все скрипты загружены и готовы к испол
 # 3. Сохраняем настройки в единый settings.json
 # =============================================
 echo "3. Сохраняем настройки в settings.json..."
+
+# Определяем модель устройства
+echo "  → Определяем модель устройства..."
+DEVICE_MODEL=$(dmesg | sed -n 's/.*Machine model: //p' | head -1)
+if [ -n "$DEVICE_MODEL" ]; then
+    settings_set ".device_model" "$DEVICE_MODEL"
+    echo "  ✓ Модель: $DEVICE_MODEL"
+else
+    echo "  [!] Не удалось определить модель устройства"
+fi
+
+# Определяем версию OpenWrt
+echo "  → Определяем версию OpenWrt..."
+if [ -f /etc/openwrt_release ]; then
+    . /etc/openwrt_release
+    [ -n "$DISTRIB_ID" ] && settings_set ".device_os" "$DISTRIB_ID"
+    [ -n "$DISTRIB_RELEASE" ] && settings_set ".ver_os" "$DISTRIB_RELEASE"
+    echo "  ✓ ОС: $DISTRIB_ID $DISTRIB_RELEASE"
+else
+    echo "  [!] /etc/openwrt_release не найден"
+fi
+
 settings_set ".subscription.url" "$SUB_URL"
 [ -n "$SUB_USER_AGENT" ] && settings_set ".subscription.user_agent" "$SUB_USER_AGENT"
 [ -n "$REMARKS_FILTER" ] && settings_set ".subscription.remarks_filter" "$REMARKS_FILTER"
@@ -643,7 +676,7 @@ echo "  → User-Agent: $SUB_UA"
 echo "  → HWID: $HWID"
 
 # Скачиваем подписку с заголовками
-if download_file "$SUB_URL" "/tmp/sub_raw.txt" "User-Agent: $SUB_UA" "x-hwid: $HWID"; then
+if download_file "$SUB_URL" "/tmp/sub_raw.txt" "x-hwid: $HWID"; then
     
     # Проверяем, что скачалось не HTML
     if head -n 1 "/tmp/sub_raw.txt" 2>/dev/null | grep -qi "<html\|<!DOCTYPE"; then

@@ -30,8 +30,20 @@ fetch_url() {
     local max_retries=2
     local retry=1
 
+    # Системные заголовки из settings.json
+    local _ua _ver _model _os
+    _ua=$(settings_get ".subscription.user_agent" 2>/dev/null || echo "OpenWrt-Xray/1.0")
+    _ver=$(settings_get ".ver_os" 2>/dev/null || echo "")
+    _model=$(settings_get ".device_model" 2>/dev/null || echo "")
+    _os=$(settings_get ".device_os" 2>/dev/null || echo "")
+
     while [ $retry -le $max_retries ]; do
-        curl -s -L --user-agent "OpenWrt-Xray/1.0" --max-time 15 -o "$dst" "$url"
+        curl -s -L --max-time 15 \
+            -H "User-Agent: $_ua" \
+            ${_ver:+-H "X-Ver-Os: $_ver"} \
+            ${_model:+-H "X-Device-Model: $_model"} \
+            ${_os:+-H "X-Device-Os: $_os"} \
+            -o "$dst" "$url"
         local rc=$?
 
         if [ $rc -eq 0 ] && [ -s "$dst" ]; then
@@ -289,8 +301,19 @@ update_geo "$GEOSITE_URL" "$GEOSITE"
 
 echo "→ Генерация config.json (User-Agent: $SUB_USER_AGENT)..." >>"$LOG"
 
+# Системные заголовки для запроса подписки
+_ver=$(settings_get ".ver_os" 2>/dev/null || echo "")
+_model=$(settings_get ".device_model" 2>/dev/null || echo "")
+_os=$(settings_get ".device_os" 2>/dev/null || echo "")
+
 # Скачиваем подписку
-if curl -s -L -H "User-Agent: $SUB_USER_AGENT" -H "x-hwid: $HWID" "$SUB_URL" -o "$TMP_DIR/sub.txt"; then
+if curl -s -L \
+    -H "User-Agent: $SUB_USER_AGENT" \
+    -H "x-hwid: $HWID" \
+    ${_ver:+-H "X-Ver-Os: $_ver"} \
+    ${_model:+-H "X-Device-Model: $_model"} \
+    ${_os:+-H "X-Device-Os: $_os"} \
+    "$SUB_URL" -o "$TMP_DIR/sub.txt"; then
     
     # Проверяем, что скачалось не HTML
     if head -n 1 "$TMP_DIR/sub.txt" 2>/dev/null | grep -qi "<html\|<!DOCTYPE"; then

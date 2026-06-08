@@ -536,6 +536,9 @@ python3 xray-generate-config.py --format json --remarks "best" --output config.j
     "remarks_filter": ""
   },
   "hwid": "a1b2c3d4e5f6...",
+  "device_model": "Cudy WR3000S v1",
+  "device_os": "OpenWrt",
+  "ver_os": "25.12.4",
   "domain_whitelist": [
     "router.freenternet.top"
   ],
@@ -554,6 +557,9 @@ python3 xray-generate-config.py --format json --remarks "best" --output config.j
 | `subscription.user_agent` | string | User-Agent для запроса подписки |
 | `subscription.remarks_filter` | string | Фильтр профиля по remarks (для JSON-подписок) |
 | `hwid` | string | Уникальный ID устройства (UUID без дефисов) |
+| `device_model` | string | Модель устройства (из dmesg) |
+| `device_os` | string | Операционная система (DISTRIB_ID) |
+| `ver_os` | string | Версия ОС (DISTRIB_RELEASE) |
 | `domain_whitelist` | array | Домены для приоритетного выбора сервера |
 | `geo.geoip_url` | string | URL geoip.dat |
 | `geo.geosite_url` | string | URL geosite.dat |
