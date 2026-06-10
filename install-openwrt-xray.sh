@@ -674,6 +674,7 @@ REMARKS=$(settings_get ".subscription.remarks_filter")
 echo "  → URL: $SUB_URL"
 echo "  → User-Agent: $SUB_UA"
 echo "  → HWID: $HWID"
+echo "  → Remarks: ${REMARKS:-(нет)}"
 
 # Скачиваем подписку с заголовками
 if download_file "$SUB_URL" "/tmp/sub_raw.txt" "x-hwid: $HWID"; then
