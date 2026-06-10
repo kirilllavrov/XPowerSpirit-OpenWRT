@@ -320,7 +320,7 @@ def base_config() -> dict:
                 "port": 12345,
                 "protocol": "dokodemo-door",
                 "settings": {
-                    "allowedNetwork": "tcp,udp",
+                    "network": "tcp,udp",
                     "followRedirect": True
                 },
                 "streamSettings": {
@@ -340,7 +340,7 @@ def base_config() -> dict:
                 "port": 5353,
                 "protocol": "dokodemo-door",
                 "settings": {
-                    "allowedNetwork": "tcp,udp"
+                    "network": "tcp,udp"
                 }
             }
         ]
