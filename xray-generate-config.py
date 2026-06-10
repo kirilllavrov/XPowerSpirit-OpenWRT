@@ -340,7 +340,7 @@ def base_config() -> dict:
                 "port": 5353,
                 "protocol": "dokodemo-door",
                 "settings": {
-                    "network": "tcp,udp"
+                    "allowedNetwork": "tcp,udp"
                 }
             }
         ]
@@ -351,7 +351,7 @@ def build_direct_config() -> dict:
     """Создаёт DIRECT-конфиг (без прокси) для режима 'hole'"""
     cfg = base_config()
     cfg["outbounds"] = [
-        {"protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "UseIPv4"}},
+        {"protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "UseIPv4"}, "streamSettings": {"sockopt": {"mark": 2, "tcpKeepAliveInterval": 30}}},
         {"protocol": "blackhole", "tag": "block", "settings": {"response": {"type": "http"}}},
         {
             "protocol": "dns",
@@ -742,30 +742,14 @@ def main():
         
         if has_hole(all_obs):
             # DIRECT режим (hole найден)
-            cfg["outbounds"] = [
-                {"protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "UseIPv4"}},
-                {"protocol": "blackhole", "tag": "block", "settings": {"response": {"type": "http"}}},
-                build_dns_outbound()
-            ]
-            cfg["routing"] = {
-                "domainStrategy": "IPOnDemand",
-                "rules": build_rules([], direct_mode=True)
-            }
+            cfg = build_direct_config()
             print("[!] Найден сервер 'hole'. Включён DIRECT-конфиг.", file=sys.stderr)
         else:
             chosen = choose_best_server(all_obs)
             
             if chosen is None:
                 # Нет доступных серверов
-                cfg["outbounds"] = [
-                    {"protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "UseIPv4"}},
-                    {"protocol": "blackhole", "tag": "block", "settings": {"response": {"type": "http"}}},
-                    build_dns_outbound()
-                ]
-                cfg["routing"] = {
-                    "domainStrategy": "IPOnDemand",
-                    "rules": build_rules([], direct_mode=True)
-                }
+                cfg = build_direct_config()
                 print("[!] Нет доступных серверов (только заглушки). Создан DIRECT-конфиг.", file=sys.stderr)
             else:
                 # Выбран один сервер
