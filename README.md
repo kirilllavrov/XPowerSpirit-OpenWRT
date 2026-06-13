@@ -542,6 +542,35 @@ python3 xray-generate-config.py --format json --remarks "best" --output config.j
   "device_model": "Cudy WR3000S v1",
   "device_os": "OpenWrt",
   "ver_os": "25.12.4",
+  "routing": {
+    "domainStrategy": "IPOnDemand",
+    "doh_domains": [
+      "common.dot.dns.yandex.net",
+      "cloudflare-dns.com",
+      "dns.google",
+      "dns.quad9.net",
+      "doh.opendns.com",
+      "dns.nextdns.io"
+    ],
+    "block_domains": [
+      "geosite:category-ads"
+    ],
+    "direct_ips": [
+      "geoip:ru",
+      "geoip:private"
+    ],
+    "direct_domains": [
+      "geosite:private",
+      "geosite:category-browser",
+      "geosite:category-cdn-ru",
+      "geosite:category-mobile",
+      "geosite:category-ru"
+    ],
+    "proxy_domains": [
+      "geosite:category-streaming",
+      "geosite:category-games"
+    ]
+  },
   "geo": {
     "geoip_url": "https://raw.githubusercontent.com/kirilllavrov/geoip-builder/release/geoip.dat",
     "geosite_url": "https://raw.githubusercontent.com/kirilllavrov/geosite-builder/release/geosite.dat"
@@ -561,6 +590,12 @@ python3 xray-generate-config.py --format json --remarks "best" --output config.j
 | `device_os` | string | Операционная система (DISTRIB_ID) |
 | `ver_os` | string | Версия ОС (DISTRIB_RELEASE) |
 | `subscription.domain_whitelist` | array | Домены для приоритетного выбора сервера |
+| `routing.domainStrategy` | string | Стратегия маршрутизации (по умолчанию `IPOnDemand`) |
+| `routing.doh_domains` | array | DoH-домены → direct (защита от DNS-петель) |
+| `routing.block_domains` | array | Домены для блокировки (реклама) |
+| `routing.direct_ips` | array | IP-адреса напрямую (РФ + локальные) |
+| `routing.direct_domains` | array | Домены напрямую (geosite-категории РФ) |
+| `routing.proxy_domains` | array | Домены через прокси (стриминг, игры) |
 | `geo.geoip_url` | string | URL geoip.dat |
 | `geo.geosite_url` | string | URL geosite.dat |
 
@@ -649,6 +684,43 @@ jq --arg d 'your-custom-domain.com' \
 ```
 
 Затем перегенерировать конфиг через `update-xray.sh`.
+
+### Настройка правил роутинга
+
+Правила маршрутизации настраиваются через секцию `routing` в `settings.json`.
+Все поля опциональны — при отсутствии используются значения по умолчанию.
+
+**Добавить домен в обход прокси (direct):**
+
+```bash
+jq '.routing.direct_domains += ["domain:example.com"]' \
+    /etc/xray/settings.json > /tmp/settings.tmp && mv /tmp/settings.tmp /etc/xray/settings.json
+```
+
+**Добавить сайт в прокси:**
+
+```bash
+jq '.routing.proxy_domains += ["domain:youtube.com"]' \
+    /etc/xray/settings.json > /tmp/settings.tmp && mv /tmp/settings.tmp /etc/xray/settings.json
+```
+
+**Заблокировать домен:**
+
+```bash
+jq '.routing.block_domains += ["domain:doubleclick.net"]' \
+    /etc/xray/settings.json > /tmp/settings.tmp && mv /tmp/settings.tmp /etc/xray/settings.json
+```
+
+**Изменить стратегию маршрутизации:**
+
+```bash
+jq '.routing.domainStrategy = "IPIfNonMatch"' \
+    /etc/xray/settings.json > /tmp/settings.tmp && mv /tmp/settings.tmp /etc/xray/settings.json
+```
+
+> Поддерживаемые форматы: `"domain:example.com"`, `"geosite:category-ru"`, `"geoip:ru"`, `"geoip:private"`, `"ext:custom.dat:tag"`.
+
+После любых изменений перегенерируйте конфиг: `update-xray.sh`.
 
 ---
 
