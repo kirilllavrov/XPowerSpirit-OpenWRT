@@ -273,9 +273,32 @@ def _is_json_format(user_agent: str) -> bool:
     return any(m in ua_lower for m in json_markers)
 
 
-def _is_placeholder_addr(addr: str) -> bool:
-    """Проверяет, является ли адрес заглушкой (0.0.0.0, 127.0.0.1, hole)"""
-    return addr in ("0.0.0.0", "127.0.0.1", "hole")
+def is_hole(ob: dict) -> bool:
+    """Проверяет, является ли outbound сигналом hole (окончание подписки)"""
+    try:
+        return ob.get("settings", {}).get("vnext", [{}])[0].get("address", "") == "hole"
+    except Exception:
+        return False
+
+
+def is_placeholder(ob: dict) -> bool:
+    """
+    Проверяет, является ли outbound заглушкой.
+    Критерии: address=0.0.0.0/127.0.0.1/hole, port=1, UUID=000...
+    """
+    try:
+        vnext = ob.get("settings", {}).get("vnext", [{}])[0]
+        addr = vnext.get("address", "")
+        if addr in ("0.0.0.0", "127.0.0.1", "hole"):
+            return True
+        if str(vnext.get("port", 0)) == "1":
+            return True
+        uid = vnext.get("users", [{}])[0].get("id", "")
+        if uid == "00000000-0000-0000-0000-000000000000":
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def parse_json_subscription(raw_data: str, remarks_filter: str = '') -> dict:
@@ -295,18 +318,8 @@ def parse_json_subscription(raw_data: str, remarks_filter: str = '') -> dict:
         log_error("Unexpected JSON structure (expected list or dict)")
         return {"hole": False, "outbounds": []}
 
-    # Проверка hole
+    # Один проход: hole, фильтрация, извлечение
     hole = False
-    for config in data:
-        for ob in config.get("outbounds", []):
-            try:
-                addr = ob.get("settings", {}).get("vnext", [{}])[0].get("address", "")
-                if addr == "hole":
-                    hole = True
-            except Exception:
-                pass
-
-    # Извлечение outbounds
     all_outbounds = []
     seen_tags = set()
     found_profile = False
@@ -314,7 +327,6 @@ def parse_json_subscription(raw_data: str, remarks_filter: str = '') -> dict:
     for config in data:
         config_remarks = config.get("remarks", "")
 
-        # Фильтрация по remarks
         if remarks_filter:
             if remarks_filter.lower() not in config_remarks.lower():
                 print(f"  → Пропускаем профиль: {config_remarks}", file=sys.stderr)
@@ -324,21 +336,26 @@ def parse_json_subscription(raw_data: str, remarks_filter: str = '') -> dict:
         print(f"  → Используем профиль: {config_remarks}", file=sys.stderr)
 
         for ob in config.get("outbounds", []):
-            protocol = ob.get("protocol", "")
+            # Проверка hole (сигнал окончания подписки)
+            if is_hole(ob):
+                hole = True
+                continue
+
             # Пропускаем служебные outbounds
+            protocol = ob.get("protocol", "")
             if protocol in ("freedom", "blackhole", "dns"):
                 continue
 
-            # Пропускаем заглушки (0.0.0.0, 127.0.0.1)
-            try:
-                addr = ob.get("settings", {}).get("vnext", [{}])[0].get("address", "")
-                if _is_placeholder_addr(addr):
+            # Пропускаем заглушки (невалидные серверы)
+            if is_placeholder(ob):
+                try:
+                    addr = ob.get("settings", {}).get("vnext", [{}])[0].get("address", "")
                     print(f"  → Пропускаем заглушку: {addr}", file=sys.stderr)
-                    continue
-            except Exception:
-                pass
+                except Exception:
+                    pass
+                continue
 
-            # Нормализуем тег (минимально)
+            # Нормализуем тег
             tag = ob.get("tag", "") or "proxy"
             tag = normalize_tag(tag)
             counter = 2
@@ -411,16 +428,16 @@ def unified_main():
             if line.startswith("vless://"):
                 ob = parse_vless_uri(line, idx)
                 if ob:
-                    # Проверка hole и заглушек
-                    try:
-                        addr = ob.get("settings", {}).get("vnext", [{}])[0].get("address", "")
-                        if addr == "hole":
-                            hole = True
-                        if _is_placeholder_addr(addr):
+                    if is_hole(ob):
+                        hole = True
+                        continue
+                    if is_placeholder(ob):
+                        try:
+                            addr = ob.get("settings", {}).get("vnext", [{}])[0].get("address", "")
                             print(f"  → Пропускаем заглушку: {addr}", file=sys.stderr)
-                            continue
-                    except Exception:
-                        pass
+                        except Exception:
+                            pass
+                        continue
                     outbounds.append(ob)
                     idx += 1
 
