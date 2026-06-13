@@ -533,15 +533,15 @@ python3 xray-generate-config.py --format json --remarks "best" --output config.j
   "subscription": {
     "url": "https://your-subscription-url.com",
     "user_agent": "XPower/1.0",
-    "remarks_filter": ""
+    "remarks_filter": "",
+    "domain_whitelist": [
+      "router.freenternet.top"
+    ]
   },
   "hwid": "a1b2c3d4e5f6...",
   "device_model": "Cudy WR3000S v1",
   "device_os": "OpenWrt",
   "ver_os": "25.12.4",
-  "domain_whitelist": [
-    "router.freenternet.top"
-  ],
   "geo": {
     "geoip_url": "https://raw.githubusercontent.com/kirilllavrov/geoip-builder/release/geoip.dat",
     "geosite_url": "https://raw.githubusercontent.com/kirilllavrov/geosite-builder/release/geosite.dat"
@@ -560,7 +560,7 @@ python3 xray-generate-config.py --format json --remarks "best" --output config.j
 | `device_model` | string | Модель устройства (из dmesg) |
 | `device_os` | string | Операционная система (DISTRIB_ID) |
 | `ver_os` | string | Версия ОС (DISTRIB_RELEASE) |
-| `domain_whitelist` | array | Домены для приоритетного выбора сервера |
+| `subscription.domain_whitelist` | array | Домены для приоритетного выбора сервера |
 | `geo.geoip_url` | string | URL geoip.dat |
 | `geo.geosite_url` | string | URL geosite.dat |
 
@@ -574,7 +574,7 @@ jq -r '.subscription.url' /etc/xray/settings.json
 
 # Изменить значение
 jq --arg d 'new-domain.com' \
-    'if .domain_whitelist | index($d) then . else .domain_whitelist += [$d] end' \
+    'if .subscription.domain_whitelist | index($d) then . else .subscription.domain_whitelist += [$d] end' \
     /etc/xray/settings.json > /tmp/settings.tmp && mv /tmp/settings.tmp /etc/xray/settings.json
 ```
 
@@ -644,7 +644,7 @@ service sqm restart
 
 ```bash
 jq --arg d 'your-custom-domain.com' \
-    'if .domain_whitelist | index($d) then . else .domain_whitelist += [$d] end' \
+    'if .subscription.domain_whitelist | index($d) then . else .subscription.domain_whitelist += [$d] end' \
     /etc/xray/settings.json > /tmp/settings.tmp && mv /tmp/settings.tmp /etc/xray/settings.json
 ```
 

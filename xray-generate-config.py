@@ -41,7 +41,7 @@ def load_settings():
         try:
             with open(SETTINGS_FILE) as f:
                 settings = json.load(f)
-            DOMAIN_WHITELIST = settings.get("domain_whitelist", [])
+            DOMAIN_WHITELIST = settings.get("subscription", {}).get("domain_whitelist", [])
         except Exception:
             pass
 
