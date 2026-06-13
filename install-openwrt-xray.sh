@@ -8,10 +8,13 @@ exec 2>&1
 
 echo "=== Установка Xray TProxy ==="
 echo "  "
-[ "$(id -u)" != "0" ] && {
-	echo "Запускать нужно от root"
-	exit 1
+
+die() {
+    echo "  [X] $1" >&2
+    exit 1
 }
+
+[ "$(id -u)" != "0" ] && die "Запускать нужно от root"
 
 # Переменные
 REPO="https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main"
@@ -126,13 +129,9 @@ download_file() {
 download_script() {
     local url="$1"
     local dst="$2"
-    if download_file "$url" "$dst"; then
-        chmod +x "$dst"
-        echo "  → $dst"
-    else
-        echo "  [X] Ошибка: не удалось скачать $dst"
-        exit 1
-    fi
+    download_file "$url" "$dst" || die "Не удалось скачать $dst"
+    chmod +x "$dst"
+    echo "  → $dst"
 }
 
 # Парсер аргументов
@@ -152,8 +151,7 @@ done
 
 # Валидация
 if [ -z "$SUB_URL" ]; then
-	echo "[!] Ошибка: --sub=URL обязателен"
-	exit 1
+	die "--sub=URL обязателен"
 fi
 
 # Создаём необходимые директории
@@ -162,10 +160,7 @@ mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR"
 # Инициализируем settings.json из репозитория (если файла нет)
 if [ ! -f "$SETTINGS_JSON" ]; then
     echo "  → Скачиваем settings.default.json из репозитория..."
-    download_file "$REPO/settings.default.json" "$SETTINGS_JSON" || {
-        echo "  [X] Не удалось скачать settings.default.json"
-        exit 1
-    }
+    download_file "$REPO/settings.default.json" "$SETTINGS_JSON" || die "Не удалось скачать settings.default.json"
     chmod 600 "$SETTINGS_JSON"
     echo "  ✓ settings.json инициализирован"
 fi
@@ -359,10 +354,7 @@ done
 LATEST_VERSION=$(curl -s --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest |
 	sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
 
-[ -z "$LATEST_VERSION" ] && {
-	echo "  [X] Ошибка: не удалось получить версию Xray"
-	exit 1
-}
+[ -z "$LATEST_VERSION" ] && die "Не удалось получить версию Xray"
 
 LATEST_VER_NUM="${LATEST_VERSION#v}"
 
@@ -401,53 +393,33 @@ else
 	echo "  → URL: ${ZIP_URL}.dgst"
 
 	echo "  → Скачиваем .dgst для Xray..."
-	download_file "${ZIP_URL}.dgst" "$DGST_FILE" || {
-		echo "  [X] Ошибка: не удалось скачать .dgst для Xray"
-		exit 1
-	}
+	download_file "${ZIP_URL}.dgst" "$DGST_FILE" || die "Не удалось скачать .dgst для Xray"
 
 	if [ ! -s "$DGST_FILE" ] || ! grep -q 'SHA2-256' "$DGST_FILE" 2>/dev/null; then
-		echo "  [X] Ошибка: .dgst файл пустой или не содержит SHA2-256"
 		echo "  → Содержимое ответа:"
 		cat "$DGST_FILE" 2>/dev/null || echo " (файл пустой)"
-		exit 1
+		die ".dgst файл пустой или не содержит SHA2-256"
 	fi
 
 	REMOTE_SHA="$(extract_sha256 "$DGST_FILE")"
-	[ -z "$REMOTE_SHA" ] && {
-		echo "  [X] Ошибка: не удалось извлечь SHA2-256 из .dgst"
-		exit 1
-	}
+	[ -z "$REMOTE_SHA" ] && die "Не удалось извлечь SHA2-256 из .dgst"
 
 	echo "  → Ожидаемый SHA2-256: ${REMOTE_SHA:0:16}..."
 
 	FREE_SPACE_TMP=$(df /tmp | awk 'NR==2 {print $4}')
-	if [ "$FREE_SPACE_TMP" -lt 20480 ]; then
-		echo "  [X] Недостаточно места в /tmp (нужно минимум 20MB)" >>"$LOG_FILE"
-		exit 1
-	fi
+	[ "$FREE_SPACE_TMP" -ge 20480 ] || die "Недостаточно места в /tmp (нужно минимум 20MB)"
 
 	if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ] && [ -f "$ZIP_DEST" ]; then
 		echo "  ✓ Найден локальный ZIP с тем же SHA, повторное скачивание не требуется"
 	else
 		echo "  → Скачиваем Xray ZIP (${LATEST_VERSION})..."
-		download_file "$ZIP_URL" "$ZIP_DEST" || {
-			echo "  [X] Ошибка: не удалось скачать Xray ZIP"
-			exit 1
-		}
+download_file "$ZIP_URL" "$ZIP_DEST" || die "Не удалось скачать Xray ZIP"
 
-		if [ ! -s "$ZIP_DEST" ]; then
-			echo "  [X] Ошибка: скачанный ZIP пустой"
-			exit 1
-		fi
+	[ -s "$ZIP_DEST" ] || die "Скачанный ZIP пустой"
 
 		LOCAL_SHA="$(sha256sum "$ZIP_DEST" | awk '{print $1}')"
 		if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-			echo "  [X] Ошибка: SHA не совпадает!"
-			echo "  ожидалось: $REMOTE_SHA"
-			echo "  получено : $LOCAL_SHA"
-			exit 1
-		fi
+		die "SHA не совпадает! ожидалось: $REMOTE_SHA, получено: $LOCAL_SHA"
 
 		echo "$REMOTE_SHA" >"$SHA_FILE"
 	fi
@@ -607,12 +579,11 @@ echo "[+] Sysctl настроен"
 # =============================================
 # 11. Geo + HWID + config.json
 # =============================================
-echo "11. Скачиваем геофайлы, делаем HWID, генерируем config.json..."
+echo "[+] Geo + HWID + config.json"
 
 update_geo() {
 	local URL="$1"
 	local DEST="$2"
-
 	local BASE="$(basename "$DEST")"
 	local TMP="/tmp/$BASE.tmp"
 	local TMP_SHA="/tmp/$BASE.sha256"
@@ -620,35 +591,21 @@ update_geo() {
 
 	echo "  → Скачиваем $BASE"
 
-	download_file "${URL}.sha256sum" "$TMP_SHA" || {
-		echo "  [X] Не удалось получить SHA256 для $BASE" >>"$LOG_FILE"
-		exit 1
-	}
+	download_file "${URL}.sha256sum" "$TMP_SHA" || die "Не удалось получить SHA256 для $BASE"
 	REMOTE_SHA="$(cut -d' ' -f1 "$TMP_SHA")"
+	[ -n "$REMOTE_SHA" ] || die "Пустой SHA256 для $BASE"
 
-	if [ -z "$REMOTE_SHA" ]; then
-		echo "  [X] Не удалось получить SHA256 для $BASE" >>"$LOG_FILE"
-		exit 1
-	fi
-
-	download_file "$URL" "$TMP" || {
-		echo "  [X] Не удалось скачать $BASE" >>"$LOG_FILE"
-		exit 1
-	}
-
+	download_file "$URL" "$TMP" || die "Не удалось скачать $BASE"
 	LOCAL_SHA="$(sha256sum "$TMP" | awk '{print $1}')"
 
 	if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-		echo "  [X] SHA не совпадает для $BASE" >>"$LOG_FILE"
-		echo "ожидаемый: $REMOTE_SHA" >>"$LOG_FILE"
-		echo "фактический:   $LOCAL_SHA" >>"$LOG_FILE"
 		rm -f "$TMP" "$TMP_SHA"
-		exit 1
+		die "SHA не совпадает для $BASE: ожидалось $REMOTE_SHA, получено $LOCAL_SHA"
 	fi
 
 	mv "$TMP" "$DEST"
-	echo "$REMOTE_SHA" >"$SHA_FILE"
-
+	echo "$REMOTE_SHA" > "$SHA_FILE"
+	rm -f "$TMP_SHA"
 	echo "  ✓ $BASE скачан и проверен"
 }
 
@@ -658,14 +615,19 @@ GEOSITE_URL=$(settings_get ".geo.geosite_url")
 update_geo "$GEOIP_URL" "$GEO_DIR/geoip.dat"
 update_geo "$GEOSITE_URL" "$GEO_DIR/geosite.dat"
 
-echo "  → Генерируем HWID..."
+# =============================================
+# 11b. HWID
+# =============================================
+echo "11b. Генерируем HWID..."
 HWID="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
 settings_set ".hwid" "$HWID"
 echo "  ✓ HWID сохранён в settings.json: $HWID"
 
-echo "  → Генерируем config.json из подписки..."
+# =============================================
+# 11c. Генерация config.json
+# =============================================
+echo "11c. Генерируем config.json из подписки..."
 
-# Все значения — из единого settings.json
 SUB_URL=$(settings_get ".subscription.url")
 SUB_UA=$(settings_get ".subscription.user_agent")
 HWID=$(settings_get ".hwid")
@@ -677,44 +639,28 @@ echo "  → HWID: $HWID"
 echo "  → Remarks: ${REMARKS:-(нет)}"
 
 # Скачиваем подписку с заголовками
-if download_file "$SUB_URL" "/tmp/sub_raw.txt" "x-hwid: $HWID"; then
-    
-    # Проверяем, что скачалось не HTML
-    if head -n 1 "/tmp/sub_raw.txt" 2>/dev/null | grep -qi "<html\|<!DOCTYPE"; then
-        echo "  [X] Подписка вернула HTML, а не данные"
-        rm -f "/tmp/sub_raw.txt"
-        exit 1
-    fi
-    
-    # Единый пайплайн: парсер (с автоопределением формата) → генератор
-    if [ -n "$REMARKS" ]; then
-        python3 "$PARSER" --ua "$SUB_UA" --remarks "$REMARKS" < "/tmp/sub_raw.txt" > "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE"
-    else
-        python3 "$PARSER" --ua "$SUB_UA" < "/tmp/sub_raw.txt" > "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE"
-    fi
-    
-    if [ $? -eq 0 ]; then
-        if python3 "$GENERATOR" --format unified --output "$CONFIG_JSON" < "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE"; then
-            echo "  ✓ config.json создан"
-        else
-            echo "  [X] Ошибка генератора конфига"
-            rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
-            exit 1
-        fi
-    else
-        echo "  [X] Ошибка парсера подписки"
-        rm -f "/tmp/sub_raw.txt"
-        exit 1
-    fi
-    rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
-else
-    echo "  [X] Не удалось скачать подписку"
+download_file "$SUB_URL" "/tmp/sub_raw.txt" "x-hwid: $HWID" || die "Не удалось скачать подписку"
+
+# Проверяем, что скачалось не HTML
+head -n 1 "/tmp/sub_raw.txt" 2>/dev/null | grep -qi "<html\|<!DOCTYPE" && die "Подписка вернула HTML, а не данные"
+
+# Единый пайплайн: парсер (с автоопределением формата) → генератор
+python3 "$PARSER" --ua "$SUB_UA" --remarks "$REMARKS" < "/tmp/sub_raw.txt" > "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE" || {
+    echo "  [X] Ошибка парсера подписки" >&2
+    rm -f "/tmp/sub_raw.txt"
     exit 1
-fi
+}
+
+python3 "$GENERATOR" --format unified --output "$CONFIG_JSON" < "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE" || {
+    echo "  [X] Ошибка генератора конфига" >&2
+    rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
+    exit 1
+}
+
+rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
 
 if [ ! -s "$CONFIG_JSON" ]; then
-    echo "  [X] Ошибка: не удалось создать config.json" >>"$LOG_FILE"
-    exit 1
+    die "Не удалось создать config.json"
 fi
 echo ""
 echo "[+] Геофайлы загружены, конфиг сгенерирован"
@@ -772,8 +718,7 @@ echo "14. Проверяем config.json на валидность..."
 if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
 	echo "  ✓ $CONFIG_JSON прошел проверку"
 else
-	echo "  [X] $CONFIG_JSON НЕ прошел проверку!"
-	exit 1
+	die "$CONFIG_JSON НЕ прошел проверку!"
 fi
 
 # =============================================
