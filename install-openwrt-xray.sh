@@ -577,9 +577,6 @@ start_service() {
         sleep 2
     done
 
-    # Сохраняем IP шлюза (нужен генератору для dns-in)
-    ip -4 addr show br-lan 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1 > /etc/xray/gateway_ip 2>/dev/null || true
-
     # Синхронизация времени (важно для TLS/REALITY)
     ntpd -q -p ru.pool.ntp.org 2>/dev/null || \
     ntpd -q -p time.google.com 2>/dev/null || \
