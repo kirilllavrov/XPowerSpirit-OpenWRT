@@ -253,12 +253,12 @@ uci commit dhcp
 echo "[+] Сеть настроена (изменения применятся после перезагрузки), IPv6 отключён"
 
 # =============================================
-# 5. Настраиваем гостевую сеть и лимиты скорости (если включена)
+# 5a. Настраиваем гостевую сеть и лимиты скорости (если включена)
 # =============================================
 if [ $GUEST_ENABLED -eq 1 ]; then
 	echo "5. Настройка Guest Network и SQM:"
 
-	# 5.1. Guest Bridge + Interface
+	# 5a.1. Guest Bridge + Interface
 	uci -q delete network.${GUEST_NET}_dev
 	uci set network.${GUEST_NET}_dev="device"
 	uci set network.${GUEST_NET}_dev.type="bridge"
@@ -276,7 +276,7 @@ if [ $GUEST_ENABLED -eq 1 ]; then
 	uci commit network
 	echo "  → Guest Bridge + Interface настроены: br-${GUEST_NET} (${GUEST_IP}/24)"
 
-	# 5.2. DHCP Guest
+	# 5a.2. DHCP Guest
 	uci -q delete dhcp.$GUEST_NET
 	uci set dhcp.$GUEST_NET="dhcp"
 	uci set dhcp.$GUEST_NET.interface="$GUEST_NET"
@@ -288,7 +288,7 @@ if [ $GUEST_ENABLED -eq 1 ]; then
 	uci commit dhcp
 	echo "  → DHCP для Guest настроен: $GUEST_NET"
 
-	# 5.3. Firewall Guest Zone + Rules
+	# 5a.3. Firewall Guest Zone + Rules
 	uci -q delete firewall.$GUEST_NET
 	uci set firewall.$GUEST_NET="zone"
 	uci set firewall.$GUEST_NET.name="$GUEST_NET"
@@ -300,7 +300,7 @@ if [ $GUEST_ENABLED -eq 1 ]; then
 	uci set firewall.$GUEST_NET.mtu_fix="1"
 	echo "  → Firewall зона для Guest создана: $GUEST_NET"
 
-	# 5.4 Firewall DNS
+	# 5a.4 Firewall DNS
 	uci -q delete firewall.${GUEST_NET}_dns
 	uci set firewall.${GUEST_NET}_dns="rule"
 	uci set firewall.${GUEST_NET}_dns.name="Allow-DNS-Guest"
@@ -310,7 +310,7 @@ if [ $GUEST_ENABLED -eq 1 ]; then
 	uci set firewall.${GUEST_NET}_dns.target="ACCEPT"
 	echo "  → Firewall правило для DNS создано: $GUEST_NET"
 
-	# 5.5 Firewall DHCP
+	# 5a.5 Firewall DHCP
 	uci -q delete firewall.${GUEST_NET}_dhcp
 	uci set firewall.${GUEST_NET}_dhcp="rule"
 	uci set firewall.${GUEST_NET}_dhcp.name="Allow-DHCP-Guest"
@@ -320,7 +320,7 @@ if [ $GUEST_ENABLED -eq 1 ]; then
 	uci set firewall.${GUEST_NET}_dhcp.target="ACCEPT"
 	echo "  → Firewall правило для DHCP создано: $GUEST_NET"
 
-	# 5.6 Forward to WAN
+	# 5a.6 Forward to WAN
 	uci -q delete firewall.${GUEST_NET}_wan
 	uci set firewall.${GUEST_NET}_wan="forwarding"
 	uci set firewall.${GUEST_NET}_wan.src="$GUEST_NET"
@@ -328,7 +328,7 @@ if [ $GUEST_ENABLED -eq 1 ]; then
 	uci commit firewall
 	echo "  → Firewall правило для доступа Guest в WAN создано: $GUEST_NET → wan"
 
-	# 5.7 Настраиваем SQM только для Guest
+	# 5a.7 Настраиваем SQM только для Guest
 	uci -q delete sqm.$GUEST_NET
 	uci set sqm.$GUEST_NET="queue"
 	uci set sqm.$GUEST_NET.interface="br-${GUEST_NET}"
