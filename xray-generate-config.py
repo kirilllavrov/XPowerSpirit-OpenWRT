@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
 Xray Config Generator for OpenWrt TProxy
-Поддерживает три входных формата:
-  --format unified - унифицированный JSON из xray-sub-parser.py (рекомендуемый)
-  --format vless   - старый режим: VLESS outbounds из xray-sub-parser.py
-  --format json    - старый режим: сырая JSON-подписка Happ/Sing-box/XPower
+
+Принимает унифицированный JSON из xray-sub-parser.py:
+  {"hole": bool, "outbounds": [...]}
 
 Специальная обработка "hole":
   Если в подписке обнаружен outbound с address="hole", генерируется DIRECT-конфиг
@@ -14,13 +13,11 @@ Xray Config Generator for OpenWrt TProxy
   Используется стратегия leastLoad с burstObservatory для выбора наиболее стабильного прокси.
 
 Настройки:
-  Читает /etc/xray/settings.json — единый конфигурационный файл:
-    - domain_whitelist: список доменов для приоритетного выбора сервера
+  Читает /etc/xray/settings.json — единый конфигурационный файл.
 """
 
 import json
 import sys
-import re
 import argparse
 import os
 
@@ -87,17 +84,6 @@ def log_error(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
-def normalize_tag(tag: str) -> str:
-    """Нормализует тег для использования в Xray"""
-    if not tag:
-        return "proxy"
-    tag = tag.replace(" ", "_")
-    tag = tag.replace("(", "").replace(")", "")
-    # Только буквы, цифры, дефис, подчёркивание
-    tag = re.sub(r"[^0-9A-Za-zА-Яа-яЁё_\-]", "", tag)
-    return tag or "proxy"
-
-
 def normalize_outbound(ob: dict) -> dict:
     """
     Дополняет outbound из подписки недостающими полями.
@@ -119,185 +105,6 @@ def normalize_outbound(ob: dict) -> dict:
     if "mux" not in ob:
         ob["mux"] = {}
     ob["mux"]["enabled"] = False
-    
-    return ob
-
-
-# ============================================
-#   ФУНКЦИИ ДЛЯ JSON ФОРМАТА (Happ/Sing-box/XPower)
-# ============================================
-
-def load_json_subscription() -> list:
-    """Загружает JSON-подписку из stdin (формат Happ/Sing-box/XPower)"""
-    try:
-        data = json.load(sys.stdin)
-        if isinstance(data, list):
-            return data
-        return [data]
-    except Exception as e:
-        log_error(f"Failed to parse JSON subscription: {e}")
-        return []
-
-
-def has_hole_in_subscription(sub_data: list) -> bool:
-    """
-    Проверяет, есть ли в подписке outbound с адресом 'hole'.
-    Это сигнал об окончании срока подписки.
-    """
-    for config in sub_data:
-        if "outbounds" not in config:
-            continue
-        for ob in config["outbounds"]:
-            try:
-                addr = ob.get("settings", {}).get("vnext", [{}])[0].get("address", "")
-                if addr == "hole":
-                    return True
-            except Exception:
-                pass
-    return False
-
-
-def extract_outbounds_from_subscription(sub_data: list, remarks_filter: str = '') -> list:
-    """
-    Извлекает все outbounds из JSON-подписки.
-    Пропускает служебные outbounds (freedom, blackhole, dns).
-    Нормализует теги и добавляет недостающие поля.
-    Если указан remarks_filter, выбирает только профиль с этим remarks.
-    """
-    all_outbounds = []
-    seen_tags = set()
-    found_profile = False
-    
-    for config in sub_data:
-        config_remarks = config.get("remarks", "")
-        
-        # Фильтрация по remarks
-        if remarks_filter:
-            if remarks_filter.lower() not in config_remarks.lower():
-                print(f"  → Пропускаем профиль: {config_remarks}", file=sys.stderr)
-                continue
-        
-        found_profile = True
-        print(f"  → Используем профиль: {config_remarks}", file=sys.stderr)
-        
-        if "outbounds" not in config:
-            continue
-        
-        for ob in config["outbounds"]:
-            # Пропускаем служебные outbounds
-            protocol = ob.get("protocol", "")
-            if protocol in ["freedom", "blackhole", "dns"]:
-                continue
-            
-            # Нормализуем тег
-            if "tag" not in ob or not ob["tag"]:
-                ob["tag"] = "proxy"
-            
-            # Дедупликация тегов
-            original_tag = ob["tag"]
-            tag = normalize_tag(original_tag)
-            counter = 2
-            while tag in seen_tags:
-                tag = f"{original_tag}-{counter}"
-                tag = normalize_tag(tag)
-                counter += 1
-            ob["tag"] = tag
-            seen_tags.add(tag)
-            
-            # Добавляем недостающие поля (sockopt, mux)
-            ob = normalize_outbound(ob)
-            
-            all_outbounds.append(ob)
-            print(f"  → Outbound: {tag} ({protocol})", file=sys.stderr)
-    
-    if remarks_filter and not found_profile:
-        print(f"  [X] Профиль с remarks '{remarks_filter}' не найден!", file=sys.stderr)
-        print(f"  → Доступные профили:", file=sys.stderr)
-        for config in sub_data:
-            config_remarks = config.get("remarks", "")
-            print(f"      - {config_remarks}", file=sys.stderr)
-    
-    return all_outbounds
-
-
-# ============================================
-#   ФУНКЦИИ ДЛЯ VLESS ФОРМАТА (через парсер)
-# ============================================
-
-def load_vless_outbounds() -> list:
-    """Загружает outbounds из stdin (формат от xray-sub-parser.py)"""
-    try:
-        data = json.load(sys.stdin)
-        if isinstance(data, dict):
-            return [data]
-        if isinstance(data, list):
-            return data
-    except Exception:
-        return []
-    return []
-
-
-def extract_address(ob):
-    try:
-        return ob["settings"]["vnext"][0]["address"]
-    except Exception:
-        return None
-
-
-def extract_id(ob):
-    try:
-        return ob["settings"]["vnext"][0]["users"][0]["id"]
-    except Exception:
-        return None
-
-
-def is_placeholder(ob):
-    addr = extract_address(ob)
-    uid = extract_id(ob)
-    port = None
-    try:
-        port = ob["settings"]["vnext"][0]["port"]
-    except Exception:
-        pass
-    return (
-        uid == "00000000-0000-0000-0000-000000000000"
-        or addr in ["0.0.0.0", "127.0.0.1", "hole"]
-        or str(port) == "1"
-    )
-
-
-def has_hole(servers):
-    for ob in servers:
-        if extract_address(ob) == "hole":
-            return True
-    return False
-
-
-def choose_best_server(servers):
-    if not servers:
-        return None
-    servers = [s for s in servers if not is_placeholder(s)]
-    if not servers:
-        return None
-    if DOMAIN_WHITELIST:
-        for ob in servers:
-            addr = extract_address(ob)
-            if addr in DOMAIN_WHITELIST:
-                return ob
-    return servers[0]
-
-
-def normalize_vless_outbound(ob: dict, chosen_tag: str) -> dict:
-    """Нормализует outbound из VLESS формата"""
-    if "tag" not in ob:
-        ob["tag"] = chosen_tag
-    
-    ss = ob.setdefault("streamSettings", {})
-    sockopt = ss.setdefault("sockopt", {})
-    sockopt["mark"] = 2
-    sockopt["tcpKeepAliveInterval"] = 30
-    sockopt["tcpNoDelay"] = True
-    ob.setdefault("mux", {"enabled": False})
     
     return ob
 
@@ -586,11 +393,7 @@ def build_burst_observatory(proxy_outbounds: list) -> dict:
 def parse_args():
     parser = argparse.ArgumentParser(description='Xray config generator for OpenWrt TProxy')
     parser.add_argument('--output', required=True, help='Output config file')
-    parser.add_argument('--format', choices=['json', 'vless', 'unified'], default='vless',
-                        help='Input format: unified (from xray-sub-parser --ua), '
-                             'json (raw Happ/Sing-box/XPower), vless (parsed VLESS outbounds)')
-    parser.add_argument('--remarks', default='', 
-                        help='Filter outbounds by remarks (substring, case-insensitive). Only for JSON format')
+    parser.add_argument('--format', default='unified', help=argparse.SUPPRESS)  # обратная совместимость, не используется
     return parser.parse_args()
 
 
@@ -602,86 +405,29 @@ def main():
     if DOMAIN_WHITELIST:
         print(f"  → Domain whitelist из settings.json: {', '.join(DOMAIN_WHITELIST)}", file=sys.stderr)
     
-    if args.format == 'unified':
-        # ========================================
-        # УНИФИЦИРОВАННЫЙ формат (из xray-sub-parser --ua)
-        # ========================================
-        print("  → Обработка унифицированной подписки", file=sys.stderr)
-        try:
-            data = json.load(sys.stdin)
-        except Exception as e:
-            log_error(f"Failed to parse unified input: {e}")
-            sys.exit(1)
-        
-        if data.get("hole", False):
-            print("  [!] Обнаружен сервер 'hole' (срок подписки истёк).", file=sys.stderr)
-            print("  [!] Включаем DIRECT-режим (весь трафик напрямую).", file=sys.stderr)
-            save_config(build_direct_config(), args.output)
-            return
-        
-        raw_outbounds = data.get("outbounds", [])
-        if not raw_outbounds:
-            log_error("No outbounds in unified input — switching to DIRECT")
-            save_config(build_direct_config(), args.output)
-            return
-        
-        proxy_outbounds = [normalize_outbound(ob) for ob in raw_outbounds]
-        cfg = build_proxy_config(proxy_outbounds)
-        print_proxy_summary(proxy_outbounds)
-        save_config(cfg, args.output)
+    print("  → Обработка унифицированной подписки", file=sys.stderr)
+    try:
+        data = json.load(sys.stdin)
+    except Exception as e:
+        log_error(f"Failed to parse unified input: {e}")
+        sys.exit(1)
     
-    elif args.format == 'json':
-        # ========================================
-        # JSON формат (Happ/Sing-box/XPower подписка)
-        # ========================================
-        print("  → Обработка JSON подписки", file=sys.stderr)
-        subscription = load_json_subscription()
-        if not subscription:
-            log_error("Empty or invalid JSON subscription")
-            sys.exit(1)
-        
-        if has_hole_in_subscription(subscription):
-            print("  [!] Обнаружен сервер 'hole' (срок подписки истёк).", file=sys.stderr)
-            print("  [!] Включаем DIRECT-режим (весь трафик напрямую).", file=sys.stderr)
-            save_config(build_direct_config(), args.output)
-            return
-        
-        proxy_outbounds = extract_outbounds_from_subscription(subscription, args.remarks)
-        if not proxy_outbounds:
-            log_error("No valid outbounds found in JSON subscription")
-            sys.exit(1)
-        
-        cfg = build_proxy_config(proxy_outbounds)
-        print_proxy_summary(proxy_outbounds)
-        save_config(cfg, args.output)
+    if data.get("hole", False):
+        print("  [!] Обнаружен сервер 'hole' (срок подписки истёк).", file=sys.stderr)
+        print("  [!] Включаем DIRECT-режим (весь трафик напрямую).", file=sys.stderr)
+        save_config(build_direct_config(), args.output)
+        return
     
-    else:
-        # ========================================
-        # VLESS формат (через xray-sub-parser.py)
-        # ========================================
-        print("  → Обработка VLESS формата", file=sys.stderr)
-        all_obs = load_vless_outbounds()
-        
-        if has_hole(all_obs):
-            print("[!] Найден сервер 'hole'. Включён DIRECT-конфиг.", file=sys.stderr)
-            save_config(build_direct_config(), args.output)
-            return
-        
-        chosen = choose_best_server(all_obs)
-        if chosen is None:
-            print("[!] Нет доступных серверов (только заглушки). Создан DIRECT-конфиг.", file=sys.stderr)
-            save_config(build_direct_config(), args.output)
-            return
-        
-        chosen_tag = chosen.get("tag") or "proxy"
-        chosen_tag = re.sub(r'[^\w\-]', '_', chosen_tag)[:64] or "proxy"
-        if "tag" not in chosen:
-            chosen["tag"] = chosen_tag
-        chosen = normalize_vless_outbound(chosen, chosen_tag)
-        
-        cfg = build_proxy_config([chosen])
-        print_proxy_summary([chosen])
-        save_config(cfg, args.output)
+    raw_outbounds = data.get("outbounds", [])
+    if not raw_outbounds:
+        log_error("No outbounds in unified input — switching to DIRECT")
+        save_config(build_direct_config(), args.output)
+        return
+    
+    proxy_outbounds = [normalize_outbound(ob) for ob in raw_outbounds]
+    cfg = build_proxy_config(proxy_outbounds)
+    print_proxy_summary(proxy_outbounds)
+    save_config(cfg, args.output)
 
 
 if __name__ == "__main__":
