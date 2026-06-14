@@ -21,6 +21,14 @@ else
     GUEST_IF="${GUEST_IF%% *}"
 fi
 
+# Автоопределение IoT интерфейса
+if ip link show br-iot >/dev/null 2>&1; then
+    IOT_IF="br-iot"
+else
+    IOT_IF=$(uci -q get network.iot.device || uci -q get network.iot.ifname || echo "")
+    IOT_IF="${IOT_IF%% *}"
+fi
+
 extract_server_ips() {
     python3 -c '
 import json, sys
@@ -85,6 +93,11 @@ setup_network() {
     # Гостевая сеть (если существует)
     if [ -n "$GUEST_IF" ] && ip link show "$GUEST_IF" >/dev/null 2>&1; then
         nft add rule inet fw4 xray_tproxy iifname "$GUEST_IF" return
+    fi
+
+    # IoT сеть (если существует)
+    if [ -n "$IOT_IF" ] && ip link show "$IOT_IF" >/dev/null 2>&1; then
+        nft add rule inet fw4 xray_tproxy iifname "$IOT_IF" return
     fi
 
     # Блокировка QUIC (UDP/443) — ДО TProxy, иначе пакет уйдёт в Xray до проверки

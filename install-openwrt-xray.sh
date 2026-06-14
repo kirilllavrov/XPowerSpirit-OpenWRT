@@ -39,6 +39,11 @@ GUEST_NET="guest"
 GUEST_IP="192.168.2.1"
 DL_GUEST="5120"
 UL_GUEST="5120"
+IOT_ENABLED=0
+IOT_NET="iot"
+IOT_IP="192.168.3.1"
+DL_IOT="10240"
+UL_IOT="10240"
 
 # =============================================
 #   ХЕЛПЕРЫ ДЛЯ ЕДИНОГО JSON-КОНФИГА
@@ -143,6 +148,10 @@ for arg in "$@"; do
 	--guest-ip=*) GUEST_IP="${arg#*=}" ;;
 	--guest-dl=*) DL_GUEST="${arg#*=}" ;;
 	--guest-ul=*) UL_GUEST="${arg#*=}" ;;
+	--iot=1) IOT_ENABLED=1 ;;
+	--iot-ip=*) IOT_IP="${arg#*=}" ;;
+	--iot-dl=*) DL_IOT="${arg#*=}" ;;
+	--iot-ul=*) UL_IOT="${arg#*=}" ;;
 	--sub=*) SUB_URL="${arg#*=}" ;;
 	--dwl=*) DWL_DOMAIN="${arg#*=}" ;;
 	*) echo "[!] Неизвестный аргумент: $arg" ;;
@@ -334,6 +343,99 @@ if [ $GUEST_ENABLED -eq 1 ]; then
 	echo "[+] Настройка Guest Network и SQM завершена (изменения применятся после перезагрузки)"
 else
 	echo "5. Пропускаем настройку гостевой сети (--guest=1 не указан)"
+fi
+
+# =============================================
+# 5b. Настраиваем сеть IoT (если включена)
+# =============================================
+if [ $IOT_ENABLED -eq 1 ]; then
+	echo "5b. Настройка IoT Network и SQM:"
+
+	# 5b.1. IoT Bridge + Interface
+	uci -q delete network.${IOT_NET}_dev
+	uci set network.${IOT_NET}_dev="device"
+	uci set network.${IOT_NET}_dev.type="bridge"
+	uci set network.${IOT_NET}_dev.name="br-${IOT_NET}"
+	uci set network.${IOT_NET}_dev.bridge_empty="1"
+	uci set network.${IOT_NET}_dev.mtu="1500"
+
+	uci -q delete network.$IOT_NET
+	uci set network.$IOT_NET="interface"
+	uci set network.$IOT_NET.proto="static"
+	uci set network.$IOT_NET.device="br-${IOT_NET}"
+	uci set network.$IOT_NET.ipaddr="$IOT_IP"
+	uci set network.$IOT_NET.netmask="255.255.255.0"
+	uci set network.$IOT_NET.force_link="1"
+	uci commit network
+	echo "  → IoT Bridge + Interface настроены: br-${IOT_NET} (${IOT_IP}/24)"
+
+	# 5b.2. DHCP IoT
+	uci -q delete dhcp.$IOT_NET
+	uci set dhcp.$IOT_NET="dhcp"
+	uci set dhcp.$IOT_NET.interface="$IOT_NET"
+	uci set dhcp.$IOT_NET.start="100"
+	uci set dhcp.$IOT_NET.limit="150"
+	uci set dhcp.$IOT_NET.leasetime="12h"
+	uci set dhcp.$IOT_NET.force="1"
+	uci set dhcp.$IOT_NET.ignore="0"
+	uci commit dhcp
+	echo "  → DHCP для IoT настроен: $IOT_NET"
+
+	# 5b.3. Firewall IoT Zone
+	uci -q delete firewall.$IOT_NET
+	uci set firewall.$IOT_NET="zone"
+	uci set firewall.$IOT_NET.name="$IOT_NET"
+	uci set firewall.$IOT_NET.network="$IOT_NET"
+	uci set firewall.$IOT_NET.input="REJECT"
+	uci set firewall.$IOT_NET.output="ACCEPT"
+	uci set firewall.$IOT_NET.forward="REJECT"
+	uci set firewall.$IOT_NET.masq="1"
+	uci set firewall.$IOT_NET.mtu_fix="1"
+	echo "  → Firewall зона для IoT создана: $IOT_NET"
+
+	# 5b.4 Firewall DNS
+	uci -q delete firewall.${IOT_NET}_dns
+	uci set firewall.${IOT_NET}_dns="rule"
+	uci set firewall.${IOT_NET}_dns.name="Allow-DNS-IoT"
+	uci set firewall.${IOT_NET}_dns.src="$IOT_NET"
+	uci set firewall.${IOT_NET}_dns.dest_port="53"
+	uci set firewall.${IOT_NET}_dns.proto="tcp udp"
+	uci set firewall.${IOT_NET}_dns.target="ACCEPT"
+	echo "  → Firewall правило для DNS создано: $IOT_NET"
+
+	# 5b.5 Firewall DHCP
+	uci -q delete firewall.${IOT_NET}_dhcp
+	uci set firewall.${IOT_NET}_dhcp="rule"
+	uci set firewall.${IOT_NET}_dhcp.name="Allow-DHCP-IoT"
+	uci set firewall.${IOT_NET}_dhcp.src="$IOT_NET"
+	uci set firewall.${IOT_NET}_dhcp.dest_port="67-68"
+	uci set firewall.${IOT_NET}_dhcp.proto="udp"
+	uci set firewall.${IOT_NET}_dhcp.target="ACCEPT"
+	echo "  → Firewall правило для DHCP создано: $IOT_NET"
+
+	# 5b.6 Forward to WAN
+	uci -q delete firewall.${IOT_NET}_wan
+	uci set firewall.${IOT_NET}_wan="forwarding"
+	uci set firewall.${IOT_NET}_wan.src="$IOT_NET"
+	uci set firewall.${IOT_NET}_wan.dest="wan"
+	uci commit firewall
+	echo "  → Firewall правило для доступа IoT в WAN создано: $IOT_NET → wan"
+
+	# 5b.7 SQM для IoT
+	uci -q delete sqm.$IOT_NET
+	uci set sqm.$IOT_NET="queue"
+	uci set sqm.$IOT_NET.interface="br-${IOT_NET}"
+	uci set sqm.$IOT_NET.download="$DL_IOT"
+	uci set sqm.$IOT_NET.upload="$UL_IOT"
+	uci set sqm.$IOT_NET.qdisc="cake"
+	uci set sqm.$IOT_NET.script="piece_of_cake.qos"
+	uci set sqm.$IOT_NET.enabled="1"
+	uci commit sqm
+	echo "  → SQM настроен для IoT: ${DL_IOT}kbps down / ${UL_IOT}kbps up"
+
+	echo "[+] Настройка IoT Network и SQM завершена (изменения применятся после перезагрузки)"
+else
+	echo "5b. Пропускаем настройку IoT сети (--iot=1 не указан)"
 fi
 
 # =============================================

@@ -18,6 +18,8 @@ HOME_SSID="Home-WiFi"
 HOME_PASS="HomeSecure123!"
 GUEST_SSID="Guest-WiFi"
 GUEST_PASS="GuestSecure123!"
+IOT_SSID="IoT-WiFi"
+IOT_PASS="IoTSecure123!"
 
 # Парсер аргументов
 for arg in "$@"; do
@@ -26,6 +28,8 @@ for arg in "$@"; do
 	--pass=*) HOME_PASS="${arg#*=}" ;;
 	--ssid-guest=*) GUEST_SSID="${arg#*=}" ;;
 	--pass-guest=*) GUEST_PASS="${arg#*=}" ;;
+	--ssid-iot=*) IOT_SSID="${arg#*=}" ;;
+	--pass-iot=*) IOT_PASS="${arg#*=}" ;;
 	esac
 done
 
@@ -40,8 +44,10 @@ validate_len() {
 
 validate_len "$HOME_SSID" 1 32
 validate_len "$GUEST_SSID" 1 32
+validate_len "$IOT_SSID" 1 32
 validate_len "$HOME_PASS" 8 63
 validate_len "$GUEST_PASS" 8 63
+validate_len "$IOT_PASS" 8 63
 
 # === Проверка существования гостевой сети ===
 GUEST_EXISTS=0
@@ -50,6 +56,15 @@ if uci -q get network.guest >/dev/null 2>&1; then
 	echo "[+] Обнаружена гостевая сеть (network.guest), будет настроен Guest Wi-Fi"
 else
 	echo "[-] Гостевая сеть не найдена (network.guest отсутствует), Guest Wi-Fi не будет настроен"
+fi
+
+# === Проверка существования IoT сети ===
+IOT_EXISTS=0
+if uci -q get network.iot >/dev/null 2>&1; then
+	IOT_EXISTS=1
+	echo "[+] Обнаружена IoT сеть (network.iot), будет настроен IoT Wi-Fi"
+else
+	echo "[-] IoT сеть не найдена (network.iot отсутствует), IoT Wi-Fi не будет настроен"
 fi
 
 # === Очистка ===
@@ -135,6 +150,26 @@ else
 	echo "Пропускаем настройку Guest Wi-Fi (нет сети guest в /etc/config/network)"
 fi
 
+# === IoT Wi-Fi (только если существует IoT сеть) ===
+if [ $IOT_EXISTS -eq 1 ]; then
+	echo "Настройка IoT Wi-Fi..."
+	for RADIO in $(uci show wireless | sed -n 's/^\(wireless\.\([^=]*\)\)=wifi-device.*/\2/p'); do
+		uci set wireless.iot_${RADIO}="wifi-iface"
+		uci set wireless.iot_${RADIO}.device="$RADIO"
+		uci set wireless.iot_${RADIO}.mode="ap"
+		uci set wireless.iot_${RADIO}.network="iot"
+		uci set wireless.iot_${RADIO}.ssid="$IOT_SSID"
+		uci set wireless.iot_${RADIO}.encryption="sae-mixed"
+		uci set wireless.iot_${RADIO}.key="$IOT_PASS"
+		uci set wireless.iot_${RADIO}.isolate="1"
+		uci set wireless.iot_${RADIO}.bridge_isolate="1"
+		uci set wireless.iot_${RADIO}.disabled="0"
+	done
+	uci commit wireless
+else
+	echo "Пропускаем настройку IoT Wi-Fi (нет сети iot в /etc/config/network)"
+fi
+
 echo "  → Применяем изменения..."
 wifi reload
 sleep 3
@@ -145,5 +180,10 @@ if [ $GUEST_EXISTS -eq 1 ]; then
 	echo "Guest : $GUEST_SSID"
 else
 	echo "Guest : не настроен"
+fi
+if [ $IOT_EXISTS -eq 1 ]; then
+	echo "IoT   : $IOT_SSID"
+else
+	echo "IoT   : не настроен"
 fi
 echo "Режим : WPA2 + WPA3 (sae-mixed) | PMF Required"
