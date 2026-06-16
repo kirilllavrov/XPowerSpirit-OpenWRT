@@ -4,3 +4,8 @@ __pycache__/
 Dockerfile
 docker-compose.yaml
 test/
+
+# APK packaging — артефакты сборки (ключи, build/, .apk)
+apk-packaging/keys/
+apk-packaging/build/
+apk-packaging/*.apk
