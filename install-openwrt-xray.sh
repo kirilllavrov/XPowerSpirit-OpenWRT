@@ -145,10 +145,12 @@ for arg in "$@"; do
 	--sub-ua=*) SUB_USER_AGENT="${arg#*=}" ;;
 	--remarks=*) REMARKS_FILTER="${arg#*=}" ;;
 	--guest=1) GUEST_ENABLED=1 ;;
+	--guest=0) GUEST_ENABLED=0 ;;
 	--guest-ip=*) GUEST_IP="${arg#*=}" ;;
 	--guest-dl=*) DL_GUEST="${arg#*=}" ;;
 	--guest-ul=*) UL_GUEST="${arg#*=}" ;;
 	--iot=1) IOT_ENABLED=1 ;;
+	--iot=0) IOT_ENABLED=0 ;;
 	--iot-ip=*) IOT_IP="${arg#*=}" ;;
 	--iot-dl=*) DL_IOT="${arg#*=}" ;;
 	--iot-ul=*) UL_IOT="${arg#*=}" ;;
@@ -336,9 +338,14 @@ if [ $GUEST_ENABLED -eq 1 ]; then
 	uci set sqm.$GUEST_NET.upload="$UL_GUEST"
 	uci set sqm.$GUEST_NET.qdisc="cake"
 	uci set sqm.$GUEST_NET.script="piece_of_cake.qos"
-	uci set sqm.$GUEST_NET.enabled="1"
+	if [ "$DL_GUEST" = "0" ] && [ "$UL_GUEST" = "0" ]; then
+		uci set sqm.$GUEST_NET.enabled="0"
+		echo "  → SQM отключён для Guest (dl=0, ul=0 — без ограничений)"
+	else
+		uci set sqm.$GUEST_NET.enabled="1"
+		echo "  → SQM настроен для Guest: ${DL_GUEST}kbps down / ${UL_GUEST}kbps up"
+	fi
 	uci commit sqm
-	echo "  → SQM настроен для Guest: ${DL_GUEST}kbps down / ${UL_GUEST}kbps up"
 
 	echo "[+] Настройка Guest Network и SQM завершена (изменения применятся после перезагрузки)"
 else
@@ -429,9 +436,14 @@ if [ $IOT_ENABLED -eq 1 ]; then
 	uci set sqm.$IOT_NET.upload="$UL_IOT"
 	uci set sqm.$IOT_NET.qdisc="cake"
 	uci set sqm.$IOT_NET.script="piece_of_cake.qos"
-	uci set sqm.$IOT_NET.enabled="1"
+	if [ "$DL_IOT" = "0" ] && [ "$UL_IOT" = "0" ]; then
+		uci set sqm.$IOT_NET.enabled="0"
+		echo "  → SQM отключён для IoT (dl=0, ul=0 — без ограничений)"
+	else
+		uci set sqm.$IOT_NET.enabled="1"
+		echo "  → SQM настроен для IoT: ${DL_IOT}kbps down / ${UL_IOT}kbps up"
+	fi
 	uci commit sqm
-	echo "  → SQM настроен для IoT: ${DL_IOT}kbps down / ${UL_IOT}kbps up"
 
 	echo "[+] Настройка IoT Network и SQM завершена (изменения применятся после перезагрузки)"
 else
