@@ -34,6 +34,7 @@ SUB_USER_AGENT=""
 SUB_URL=""
 REMARKS_FILTER=""
 DWL_DOMAIN=""
+LAN_IP="192.168.1.1"
 GUEST_ENABLED=0
 GUEST_NET="guest"
 GUEST_IP="192.168.2.1"
@@ -44,6 +45,7 @@ IOT_NET="iot"
 IOT_IP="192.168.3.1"
 DL_IOT="10240"
 UL_IOT="10240"
+
 
 # =============================================
 #   ХЕЛПЕРЫ ДЛЯ ЕДИНОГО JSON-КОНФИГА
@@ -154,6 +156,7 @@ for arg in "$@"; do
 	--iot-ip=*) IOT_IP="${arg#*=}" ;;
 	--iot-dl=*) DL_IOT="${arg#*=}" ;;
 	--iot-ul=*) UL_IOT="${arg#*=}" ;;
+	--lan-ip=*) LAN_IP="${arg#*=}" ;;
 	--sub=*) SUB_URL="${arg#*=}" ;;
 	--dwl=*) DWL_DOMAIN="${arg#*=}" ;;
 	*) echo "[!] Неизвестный аргумент: $arg" ;;
@@ -240,11 +243,15 @@ settings_set ".subscription.url" "$SUB_URL"
 echo "[+] settings.json сохранён: $SETTINGS_JSON"
 
 # =============================================
-# 4. Отключаем IPv6
+# 4. Настраиваем LAN и отключаем IPv6
 # =============================================
-echo "4. Отключаем IPv6..."
+echo "4. Настраиваем LAN (${LAN_IP}/24) и отключаем IPv6..."
 
+uci set network.lan.ipaddr="$LAN_IP"
+uci set network.lan.netmask="255.255.255.0"
 uci set network.lan.ipv6='0'
+uci set dhcp.lan.start="100"
+uci set dhcp.lan.limit="150"
 uci set network.wan.ipv6='0'
 uci set dhcp.lan.dhcpv6='disabled'
 uci set dhcp.lan.ra='disabled'
