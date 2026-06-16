@@ -1,0 +1,18 @@
+# APKBUILD для xray-status
+# Используется с Alpine abuild: abuild -r
+# Для OpenWrt — используй Makefile из этого же каталога.
+
+pkgname=xray-status
+pkgver=1.0.0
+pkgrel=0
+pkgdesc="Xray Status Dashboard — CLI-утилита для отображения статуса Xray TProxy на OpenWrt"
+url="https://github.com/kirilllavrov/XPowerSpirit-OpenWRT"
+arch="noarch"
+license="MIT"
+depends="python3 xray"
+source="xray-status.py"
+options="!check"
+
+package() {
+    install -Dm755 "$srcdir/xray-status.py" "$pkgdir/usr/bin/xray-status"
+}

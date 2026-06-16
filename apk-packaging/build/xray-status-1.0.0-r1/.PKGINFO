@@ -1,0 +1,9 @@
+pkgname = xray-status
+pkgver = 1.0.0-r1
+arch = noarch
+size = 17402
+pkgdesc = Xray Status Dashboard — CLI-утилита для отображения статуса Xray TProxy на OpenWrt
+url = https://github.com/kirilllavrov/XPowerSpirit-OpenWRT
+license = MIT
+depend = python3-light
+depend = xray-core
