@@ -67,21 +67,6 @@ CONFIG_DIR="/etc/xray"
 SETTINGS_JSON="$CONFIG_DIR/settings.json"
 CONFIG_JSON="$CONFIG_DIR/config.json"
 
-STATE_DIR="/etc/xray/state"
-TMP_DIR="/tmp/xray_update"
-
-GENERATOR="/usr/share/xray/xray-generate-config.py"
-PARSER="/usr/share/xray/xray-sub-parser.py"
-
-GEO_DIR="/usr/share/xray"
-GEOIP="$GEO_DIR/geoip.dat"
-GEOSITE="$GEO_DIR/geosite.dat"
-
-GEOIP_URL=$(settings_get ".geo.geoip_url")
-GEOSITE_URL=$(settings_get ".geo.geosite_url")
-
-mkdir -p "$STATE_DIR" "$TMP_DIR"
-
 # =============================================
 #   ХЕЛПЕРЫ ДЛЯ ЕДИНОГО JSON-КОНФИГА
 # =============================================
@@ -113,6 +98,21 @@ settings_set() {
     mv "${SETTINGS_JSON}.tmp" "$SETTINGS_JSON"
     chmod 600 "$SETTINGS_JSON"
 }
+
+STATE_DIR="/etc/xray/state"
+TMP_DIR="/tmp/xray_update"
+
+GENERATOR="/usr/share/xray/xray-generate-config.py"
+PARSER="/usr/share/xray/xray-sub-parser.py"
+
+GEO_DIR="/usr/share/xray"
+GEOIP="$GEO_DIR/geoip.dat"
+GEOSITE="$GEO_DIR/geosite.dat"
+
+GEOIP_URL=$(settings_get ".geo.geoip_url")
+GEOSITE_URL=$(settings_get ".geo.geosite_url")
+
+mkdir -p "$STATE_DIR" "$TMP_DIR"
 
 echo "===== $(date) =====" >>"$LOG"
 
