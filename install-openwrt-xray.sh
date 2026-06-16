@@ -231,9 +231,12 @@ fi
 settings_set ".subscription.url" "$SUB_URL"
 [ -n "$SUB_USER_AGENT" ] && settings_set ".subscription.user_agent" "$SUB_USER_AGENT"
 [ -n "$REMARKS_FILTER" ] && settings_set ".subscription.remarks_filter" "$REMARKS_FILTER"
-[ -n "$DWL_DOMAIN" ] && jq --arg d "$DWL_DOMAIN" \
-    'if .subscription.domain_whitelist | index($d) then . else .subscription.domain_whitelist += [$d] end' \
-    "$SETTINGS_JSON" > "${SETTINGS_JSON}.tmp" && mv "${SETTINGS_JSON}.tmp" "$SETTINGS_JSON"
+[ -n "$DWL_DOMAIN" ] && {
+    jq --arg d "$DWL_DOMAIN" \
+        'if .subscription.domain_whitelist | index($d) then . else .subscription.domain_whitelist += [$d] end' \
+        "$SETTINGS_JSON" > "${SETTINGS_JSON}.tmp" && mv "${SETTINGS_JSON}.tmp" "$SETTINGS_JSON"
+    chmod 600 "$SETTINGS_JSON"
+}
 echo "[+] settings.json сохранён: $SETTINGS_JSON"
 
 # =============================================
@@ -533,10 +536,9 @@ download_file "$ZIP_URL" "$ZIP_DEST" || die "Не удалось скачать 
 
 		LOCAL_SHA="$(sha256sum "$ZIP_DEST" | awk '{print $1}')"
 		if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-		die "SHA не совпадает! ожидалось: $REMOTE_SHA, получено: $LOCAL_SHA"
-
+			die "SHA не совпадает! ожидалось: $REMOTE_SHA, получено: $LOCAL_SHA"
+		fi
 		echo "$REMOTE_SHA" >"$SHA_FILE"
-	fi
 
 	unzip -q "$ZIP_DEST" -d "$TMP_DIR"
 
