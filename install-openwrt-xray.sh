@@ -544,6 +544,7 @@ download_file "$ZIP_URL" "$ZIP_DEST" || die "Не удалось скачать 
 	chmod 755 /usr/bin/xray
 
 	echo "[+] Xray установлен версии $LATEST_VERSION"
+	fi
 fi
 
 # =============================================
