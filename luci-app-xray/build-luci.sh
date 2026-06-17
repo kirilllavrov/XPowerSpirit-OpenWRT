@@ -26,7 +26,7 @@ mkdir -p "$PKG_DIR/usr/share/luci/menu.d"
 mkdir -p "$PKG_DIR/usr/share/rpcd/acl.d"
 mkdir -p "$PKG_DIR/usr/share/xray"
 
-cp "$SRC_DIR/htdocs/luci-static/resources/view/xray/status.js" "$PKG_DIR/www/luci-static/resources/view/xray/"
+cp "$SRC_DIR/htdocs/luci-static/resources/view/xray/"*.js "$PKG_DIR/www/luci-static/resources/view/xray/"
 cp "$SRC_DIR/root/usr/share/luci/menu.d/luci-app-xray.json" "$PKG_DIR/usr/share/luci/menu.d/"
 cp "$SRC_DIR/root/usr/share/rpcd/acl.d/luci-app-xray.json" "$PKG_DIR/usr/share/rpcd/acl.d/"
 cp "$SRC_DIR/root/usr/share/xray/rpc.sh" "$PKG_DIR/usr/share/xray/"

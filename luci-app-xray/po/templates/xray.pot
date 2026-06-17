@@ -94,3 +94,43 @@ msgstr ""
 
 msgid "CLI: xray-status --full  |  Package: luci-app-xray"
 msgstr ""
+
+#: htdocs/luci-static/resources/view/xray/settings.js
+msgid "Xray Subscription Settings"
+msgstr ""
+
+msgid "Configure subscription URL, User-Agent, and filtering options."
+msgstr ""
+
+msgid "Subscription URL"
+msgstr ""
+
+msgid "Full URL to the subscription endpoint (VLESS or JSON format)."
+msgstr ""
+
+msgid "User-Agent header sent with the subscription request. Use XPower/1.0 for JSON format, or leave default for Base64 VLESS."
+msgstr ""
+
+msgid "Remarks Filter"
+msgstr ""
+
+msgid "Optional: filter subscription profiles by remarks field (JSON format only)."
+msgstr ""
+
+msgid "Domain Whitelist"
+msgstr ""
+
+msgid "Domains that should always be routed through the proxy (one per line)."
+msgstr ""
+
+msgid "Device Identity"
+msgstr ""
+
+msgid "Hardware ID used for subscription authentication."
+msgstr ""
+
+msgid "Settings saved successfully!"
+msgstr ""
+
+msgid "Failed to save settings: "
+msgstr ""

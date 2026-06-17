@@ -1,13 +1,18 @@
 {
 	"luci-app-xray": {
-		"description": "Grant access to Xray status dashboard",
+		"description": "Grant access to Xray status dashboard and settings",
 		"read": {
 			"file": {
-				"/etc/xray/settings.json": ["read"],
+				"/etc/xray/settings.json": ["read", "write"],
 				"/etc/xray/config.json": ["read"]
 			},
 			"ubus": {
-				"file": ["read", "exec"]
+				"file": ["read", "exec", "write"]
+			}
+		},
+		"write": {
+			"file": {
+				"/etc/xray/settings.json": ["write"]
 			}
 		}
 	}

@@ -93,3 +93,42 @@ msgstr "XPowerSpirit Xray TProxy для OpenWrt"
 
 msgid "CLI: xray-status --full  |  Package: luci-app-xray"
 msgstr "CLI: xray-status --full  |  Пакет: luci-app-xray"
+
+msgid "Xray Subscription Settings"
+msgstr "Настройки подписки Xray"
+
+msgid "Configure subscription URL, User-Agent, and filtering options."
+msgstr "Настройка URL подписки, User-Agent и параметров фильтрации."
+
+msgid "Subscription URL"
+msgstr "URL подписки"
+
+msgid "Full URL to the subscription endpoint (VLESS or JSON format)."
+msgstr "Полный URL к подписке (VLESS или JSON формат)."
+
+msgid "User-Agent header sent with the subscription request. Use XPower/1.0 for JSON format, or leave default for Base64 VLESS."
+msgstr "Заголовок User-Agent для запроса подписки. XPower/1.0 для JSON-формата."
+
+msgid "Remarks Filter"
+msgstr "Фильтр remarks"
+
+msgid "Optional: filter subscription profiles by remarks field (JSON format only)."
+msgstr "Фильтр профилей по полю remarks (только для JSON-формата)."
+
+msgid "Domain Whitelist"
+msgstr "Белый список доменов"
+
+msgid "Domains that should always be routed through the proxy (one per line)."
+msgstr "Домены для обязательной маршрутизации через прокси (по одному на строку)."
+
+msgid "Device Identity"
+msgstr "Идентификация устройства"
+
+msgid "Hardware ID used for subscription authentication."
+msgstr "Аппаратный ID для аутентификации подписки."
+
+msgid "Settings saved successfully!"
+msgstr "Настройки сохранены!"
+
+msgid "Failed to save settings: "
+msgstr "Ошибка сохранения: "
