@@ -1,0 +1,96 @@
+msgid ""
+msgstr "Content-Type: text/plain; charset=UTF-8"
+
+#: htdocs/luci-static/resources/view/xray/status.js
+msgid "Xray TProxy Status"
+msgstr ""
+
+msgid "System"
+msgstr ""
+
+msgid "Device"
+msgstr ""
+
+msgid "OS"
+msgstr ""
+
+msgid "HWID"
+msgstr ""
+
+msgid "Subscription"
+msgstr ""
+
+msgid "URL"
+msgstr ""
+
+msgid "User-Agent"
+msgstr ""
+
+msgid "Proxies"
+msgstr ""
+
+msgid "none"
+msgstr ""
+
+msgid "Filter"
+msgstr ""
+
+msgid "Active: %d proxy servers"
+msgstr ""
+
+msgid "No proxy servers — DIRECT mode or subscription expired"
+msgstr ""
+
+msgid "Proxy Servers"
+msgstr ""
+
+msgid "Name"
+msgstr ""
+
+msgid "Address"
+msgstr ""
+
+msgid "Transport"
+msgstr ""
+
+msgid "No active proxy servers"
+msgstr ""
+
+msgid "Routing Rules"
+msgstr ""
+
+msgid "Rule"
+msgstr ""
+
+msgid "Value"
+msgstr ""
+
+msgid "DNS Strategy"
+msgstr ""
+
+msgid "Direct IPs"
+msgstr ""
+
+msgid "Direct Domains"
+msgstr ""
+
+msgid "Proxy Domains"
+msgstr ""
+
+msgid "Blocked"
+msgstr ""
+
+msgid "DoH Servers"
+msgstr ""
+
+msgid "Geo Data"
+msgstr ""
+
+msgid "Parameter"
+msgstr ""
+
+msgid "XPowerSpirit Xray TProxy for OpenWrt"
+msgstr ""
+
+msgid "CLI: xray-status --full  |  Package: luci-app-xray"
+msgstr ""

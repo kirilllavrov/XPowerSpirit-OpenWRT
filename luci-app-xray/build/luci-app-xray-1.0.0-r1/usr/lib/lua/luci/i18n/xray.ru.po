@@ -1,0 +1,95 @@
+msgid ""
+msgstr "Content-Type: text/plain; charset=UTF-8"
+
+msgid "Xray TProxy Status"
+msgstr "Статус Xray TProxy"
+
+msgid "System"
+msgstr "Система"
+
+msgid "Device"
+msgstr "Устройство"
+
+msgid "OS"
+msgstr "ОС"
+
+msgid "HWID"
+msgstr "HWID"
+
+msgid "Subscription"
+msgstr "Подписка"
+
+msgid "URL"
+msgstr "URL"
+
+msgid "User-Agent"
+msgstr "User-Agent"
+
+msgid "Proxies"
+msgstr "Прокси"
+
+msgid "none"
+msgstr "нет"
+
+msgid "Filter"
+msgstr "Фильтр"
+
+msgid "Active: %d proxy servers"
+msgstr "Активно: %d прокси-серверов"
+
+msgid "No proxy servers — DIRECT mode or subscription expired"
+msgstr "Нет прокси-серверов — режим DIRECT или подписка истекла"
+
+msgid "Proxy Servers"
+msgstr "Прокси-серверы"
+
+msgid "Name"
+msgstr "Имя"
+
+msgid "Address"
+msgstr "Адрес"
+
+msgid "Transport"
+msgstr "Транспорт"
+
+msgid "No active proxy servers"
+msgstr "Нет активных прокси-серверов"
+
+msgid "Routing Rules"
+msgstr "Правила маршрутизации"
+
+msgid "Rule"
+msgstr "Правило"
+
+msgid "Value"
+msgstr "Значение"
+
+msgid "DNS Strategy"
+msgstr "Стратегия DNS"
+
+msgid "Direct IPs"
+msgstr "Прямые IP"
+
+msgid "Direct Domains"
+msgstr "Прямые домены"
+
+msgid "Proxy Domains"
+msgstr "Прокси-домены"
+
+msgid "Blocked"
+msgstr "Блокировка"
+
+msgid "DoH Servers"
+msgstr "DoH-серверы"
+
+msgid "Geo Data"
+msgstr "Гео-данные"
+
+msgid "Parameter"
+msgstr "Параметр"
+
+msgid "XPowerSpirit Xray TProxy for OpenWrt"
+msgstr "XPowerSpirit Xray TProxy для OpenWrt"
+
+msgid "CLI: xray-status --full  |  Package: luci-app-xray"
+msgstr "CLI: xray-status --full  |  Пакет: luci-app-xray"

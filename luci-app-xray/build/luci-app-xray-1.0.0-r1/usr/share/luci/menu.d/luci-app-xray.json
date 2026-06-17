@@ -1,0 +1,10 @@
+{
+	"admin/services/xray": {
+		"title": "Xray Status",
+		"order": 90,
+		"action": {
+			"type": "view",
+			"path": "xray/status"
+		}
+	}
+}
