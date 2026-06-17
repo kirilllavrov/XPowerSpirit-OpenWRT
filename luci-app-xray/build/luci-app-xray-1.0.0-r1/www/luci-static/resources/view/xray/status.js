@@ -141,6 +141,21 @@ return view.extend({
 
 		// ─── Сборка страницы ───
 		return E('div', { 'class': 'cbi-map' }, [
+			// Табы навигации
+			E('div', { 'class': 'cbi-section', 'style': 'margin-bottom:10px' }, [
+				E('div', { 'class': 'cbi-tabmenu' }, [
+					E('span', { 'class': 'cbi-tab active', 'style': 'font-weight:bold;padding:8px 16px;background:#eee;border-radius:4px 4px 0 0' }, _('Status')),
+					E('a', {
+						'href': '#',
+						'class': 'cbi-tab',
+						'style': 'padding:8px 16px;color:#06c;text-decoration:none',
+						'click': ui.createHandlerFn(function(ev) {
+							window.location.href = L.url('admin/services/xray').replace(/\/status.*$/, '') + '/settings';
+						})
+					}, _('Settings'))
+				])
+			]),
+
 			// Заголовок
 			E('div', { 'class': 'cbi-section' }, [
 				E('h3', {}, _('Xray TProxy Status')),

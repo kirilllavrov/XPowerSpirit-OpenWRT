@@ -95,6 +95,13 @@ msgstr ""
 msgid "CLI: xray-status --full  |  Package: luci-app-xray"
 msgstr ""
 
+#: navigation tabs
+msgid "Status"
+msgstr ""
+
+msgid "Settings"
+msgstr ""
+
 #: htdocs/luci-static/resources/view/xray/settings.js
 msgid "Xray Subscription Settings"
 msgstr ""

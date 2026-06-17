@@ -7,12 +7,7 @@
 				"/etc/xray/config.json": ["read"]
 			},
 			"ubus": {
-				"file": ["read", "exec", "write"]
-			}
-		},
-		"write": {
-			"file": {
-				"/etc/xray/settings.json": ["write"]
+				"file": ["exec"]
 			}
 		}
 	}

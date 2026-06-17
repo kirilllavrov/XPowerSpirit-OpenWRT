@@ -1,27 +1,10 @@
 {
 	"admin/services/xray": {
-		"title": "Xray",
+		"title": "Xray Status",
 		"order": 90,
 		"action": {
-			"type": "firstchild"
-		},
-		"children": {
-			"status": {
-				"title": "Status",
-				"order": 10,
-				"action": {
-					"type": "view",
-					"path": "xray/status"
-				}
-			},
-			"settings": {
-				"title": "Settings",
-				"order": 20,
-				"action": {
-					"type": "view",
-					"path": "xray/settings"
-				}
-			}
+			"type": "view",
+			"path": "xray/status"
 		}
 	}
 }

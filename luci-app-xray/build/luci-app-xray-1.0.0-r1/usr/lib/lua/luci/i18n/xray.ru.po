@@ -94,6 +94,12 @@ msgstr "XPowerSpirit Xray TProxy для OpenWrt"
 msgid "CLI: xray-status --full  |  Package: luci-app-xray"
 msgstr "CLI: xray-status --full  |  Пакет: luci-app-xray"
 
+msgid "Status"
+msgstr "Статус"
+
+msgid "Settings"
+msgstr "Настройки"
+
 msgid "Xray Subscription Settings"
 msgstr "Настройки подписки Xray"
 
