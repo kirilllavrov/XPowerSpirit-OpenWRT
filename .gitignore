@@ -1,6 +1,3 @@
 __pycache__/
 .vscode/
-.dockerignore
-Dockerfile
-docker-compose.yaml
 test/
