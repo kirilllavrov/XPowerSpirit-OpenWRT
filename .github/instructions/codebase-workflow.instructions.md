@@ -9,12 +9,14 @@ applyTo: '**'
 ### Rules
 
 1. **Call `list_projects` FIRST** to discover the correct project name before using any tool.
-2. **Call `mcp_codebase-memo_get_architecture` next** — before writing code, editing files, or answering any question about the codebase.
+2. **Call `mcp_codebase-memo_get_architecture` next** — before writing code, editing files, or answering structural questions about the codebase.
 3. Use the returned context to make targeted, accurate changes.
-4. **Do NOT use** `grep_search`, `file_search`, `semantic_search`, or `read_file` for initial codebase exploration.
+4. For **structural code discovery** (символы, вызовы, архитектура) prefer Codebase Memory graph tools over grep/read_file. Конфиги, документацию (например `xray-config-links.md`), литералы и файлы вне графа или непокрытые им — читай обычным способом (`read_file`/grep): граф best-effort, не заменяет чтение.
 5. Re-query only if additional context is needed during implementation.
 
 Always use the project identifier returned by `list_projects` instead of guessing project names.
+
+> Канонический свод правил проекта (включая работу строго по официальной документации Xray) — в `AGENTS.md` (корень репозитория).
 
 ### Workflow
 
@@ -34,7 +36,6 @@ mcp_codebase-memo_get_code_snippet({ "project": "<display_name>", "qualified_nam
 
 ### Why
 
-- Pre-built index covers the entire codebase with relevance ranking.
-- Faster and more accurate than manual file search.
-- Prevents reading stale files or following ghost references.
-- Using `list_projects` avoids guessing project identifiers.
+- Graph-индекс помогает быстро находить структуру кода (символы, вызовы, архитектуру).
+- Индекс best-effort: он не заменяет чтение конфигов/документации и непокрытых файлов.
+- `list_projects` исключает угадывание имени проекта.

@@ -1,43 +1,40 @@
-## Codebase Memory MCP
+# Правила проекта — XPowerSpirit-OpenWRT
 
-**MANDATORY: use Codebase Memory MCP graph tools FIRST — before reading files or making code changes.**
+Общие правила для ИИ-агентов, работающих с этим репозиторием
+(VS Code Copilot, Claude Code, Zed, Cursor и др.).
 
-This rule applies to every request involving this codebase.
+## 1. Работа строго по официальной документации Xray / nftables
 
-Always call `list_projects` first when you do not already know the project name, then use the `display_name` or exact `name` returned by that tool.
+Этот проект собирает и правит конфигурацию Xray (`config.json`), правила nftables
+TProxy и парсеры подписок. Точность критична: выдуманный или устаревший параметр
+ломает работу роутера молча. **Никакой «отсебятины»** — только официальная документация.
 
-```json
-// Step 0 — discover project names
-mcp_codebase-memo_list_projects()
+- **Источник истины** — карта официальной документации `xray-config-links.md`
+  (в корне репозитория). Допустимы только официальные источники: xtls.github.io
+  (конфигурация Xray) и netfilter.org (nftables).
+- Любую Xray/nftables-задачу (config.json, inbounds/outbounds/routing/dns/balancer,
+  `update-nft.sh`, парсеры подписок, geoip/geosite) начинай с чтения `xray-config-links.md`.
+- Не знаешь, как правильно (поле, значение, синтаксис, транспорт, поведение) — **не угадывай**:
+  открой нужную официальную страницу из карты (web) и следуй ей дословно.
+- Если официальная документация недоступна или не покрывает случай — явно скажи,
+  что не уверен, и не выдумывай значение; предложи проверить вручную.
+- При нетривиальных решениях указывай, какой раздел документации применён.
 
-// Step 1 — use the project identifier returned above
-mcp_codebase-memo_get_architecture({ "project": "<display_name>" })
-```
+## 2. Codebase Memory MCP (граф кода)
 
-### Workflow
+Используй knowledge graph для **структурных** запросов по коду: что есть в кодебейсе,
+архитектура, определения, кто кого вызывает. Граф — best-effort: он не заменяет чтение
+конфигов, документации, литералов и участков, не покрытых индексом.
 
-1. Call `list_projects` to discover the correct project name.
-2. Call `get_architecture(project)` to understand the codebase structure.
-3. Use `search_graph` to find relevant symbols, `trace_call_path` for call chains.
-4. Use `get_code_snippet` to read specific function implementations.
-5. Only use `read_file` when you need exact raw content to edit a specific line.
+Рабочий процесс:
+1. `mcp_codebase-memo_list_projects()` — узнай точное имя проекта (не угадывай).
+2. `mcp_codebase-memo_get_architecture({ "project": "<имя>" })` — ориентация в структуре перед изменениями.
+3. `mcp_codebase-memo_search_graph({ "project": "<имя>", "query": "<тема>" })` / `name_pattern` — поиск символов, роутов, классов.
+4. `mcp_codebase-memo_trace_path({ "project": "<имя>", "function_name": "<fn>", "direction": "inbound|outbound", "depth": 3 })` — кто вызывает / что вызывает.
+5. `mcp_codebase-memo_get_code_snippet({ "project": "<имя>", "qualified_name": "<fn>" })` — точный исходник символа.
+6. `mcp_codebase-memo_check_index_coverage({ "project": "<имя>", "paths": [...], "scopes": [...] })` — перед доверием графу и для «отрицательных»/исчерпывающих утверждений.
+7. Конфиги, документацию и непокрытые графом строки читай обычным способом (`read_file`/grep).
 
-### Available Tools (14 MCP tools)
-
-**Indexing:**
-- `index_repository(repo_path)` — Index a repository into the knowledge graph
-- `list_projects` — List all indexed projects with node/edge counts
-- `delete_project(project)` — Remove a project and all its graph data
-- `index_status(project)` — Check indexing status
-
-**Querying:**
-- `search_graph(name_pattern, name_scope, label, file_pattern, exclude_file_pattern)` — Structured search by label, name/qualified_name, include/exclude file globs
-- `trace_call_path(function_name, direction, depth)` — BFS call chain traversal
-- `detect_changes(project)` — Map git diff to affected symbols + risk
-- `query_graph(query)` — Execute Cypher-like graph queries (read-only)
-- `get_graph_schema(project)` — Node/edge counts, relationship patterns
-- `get_code_snippet(qualified_name)` — Read source code for a function
-- `get_architecture(project)` — Codebase overview: languages, packages, routes, hotspots
-- `search_code(pattern, project)` — Grep-like text search within indexed files
-- `manage_adr(action)` — CRUD for Architecture Decision Records
-- `ingest_traces(traces)` — Ingest runtime traces to validate HTTP edges
+Администрирование индекса: `index_repository(repo_path)`, `index_status(project)`,
+`delete_project(project)`. Полный список инструментов и правила верификации — в скилле
+`codebase-memory`.
