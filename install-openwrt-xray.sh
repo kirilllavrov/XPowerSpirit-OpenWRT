@@ -18,13 +18,10 @@ die() {
 
 # Переменные
 REPO="https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main"
-# OpenWrt-пакеты (LuCI веб-интерфейс, CLI xray-status) — отдельный проект
-REPO_UI="https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-WebUI/main"
 GENERATOR="/usr/share/xray/xray-generate-config.py"
 PARSER="/usr/share/xray/xray-sub-parser.py"
 UPDATER="/usr/share/xray/update-xray.sh"
 NFT_UPDATER="/usr/share/xray/update-nft.sh"
-STATUS_TOOL="/usr/bin/xray-status"
 CONFIG_DIR="/etc/xray"
 CONFIG_JSON="$CONFIG_DIR/config.json"
 SETTINGS_JSON="$CONFIG_DIR/settings.json"
@@ -205,8 +202,6 @@ download_script "$REPO/xray-generate-config.py" "$GENERATOR"
 download_script "$REPO/xray-sub-parser.py" "$PARSER"
 download_script "$REPO/update-xray.sh" "$UPDATER"
 download_script "$REPO/update-nft.sh" "$NFT_UPDATER"
-# xray-status.py перенесён в проект XPowerSpirit-WebUI (CLI-дашборд)
-download_script "$REPO_UI/xray-status.py" "$STATUS_TOOL"
 
 echo "[+] Все скрипты загружены и готовы к использованию"
 

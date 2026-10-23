@@ -2,7 +2,7 @@
 
 Комплексное решение для настройки прокси-сервера Xray с TProxy на OpenWrt. Проект включает автоматическую установку Xray, настройку гостевой сети, управление подписками, генерацию конфигурации и автоматическое обновление.
 
-> **Связанные проекты:** OpenWrt-пакеты (LuCI веб-интерфейс + CLI `xray-status`) вынесены в отдельный репозиторий [XPowerSpirit-WebUI](https://github.com/kirilllavrov/XPowerSpirit-WebUI).
+> **Связанные проекты (не зависимость):** OpenWrt-пакеты (LuCI веб-интерфейс + CLI `xray-status`) живут в отдельном репозитории [XPowerSpirit-WebUI](https://github.com/kirilllavrov/XPowerSpirit-WebUI). Этот проект устанавливается и работает полностью без него.
 >
 > **Документация по конфигурации Xray:** [xray-config-reference.md](./xray-config-reference.md) — справочник по базовой конфигурации, сверенный с официальной русской документацией; [xray-config-links.md](./xray-config-links.md) — карта официальных ссылок (Xray, nftables).
 
@@ -174,7 +174,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 **Что делает:**
 
 1. **Настройка времени** — таймзона `Europe/Moscow` (MSK-3), синхронизация NTP (`ru.pool.ntp.org`, fallback `time.google.com`)
-2. **Загрузка скриптов** — скачивает `xray-generate-config.py`, `xray-sub-parser.py`, `update-xray.sh`, `update-nft.sh` в `/usr/share/xray/`, а CLI `xray-status.py` (из проекта `XPowerSpirit-WebUI`) — в `/usr/bin/xray-status`
+2. **Загрузка скриптов** — скачивает `xray-generate-config.py`, `xray-sub-parser.py`, `update-xray.sh`, `update-nft.sh` в `/usr/share/xray/`
 3. **Сохранение настроек** — записывает URL подписки, User-Agent, фильтр remarks, модель/версию ОС, HWID и домен в whitelist в единый JSON-файл `/etc/xray/settings.json` (файл инициализируется из `settings.default.json` в репозитории, если его ещё нет)
 4. **LAN и IPv6** — задаёт `--lan-ip` (по умолчанию `192.168.1.1/24`), диапазон DHCP `.100-.250`, отключает IPv6 на LAN/WAN, останавливает и отключает `odhcpd`
 5. **Гостевая сеть (опционально, `--guest=1`)**:
@@ -592,8 +592,6 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 ├── diagnose-xray-tproxy.sh   # НЕ устанавливается автоматически — скачивается вручную
 ├── geoip.dat             # Гео-база IP-адресов
 └── geosite.dat           # Гео-база доменов
-
-/usr/bin/xray-status      # CLI-дашборд из проекта XPowerSpirit-WebUI
 
 /etc/init.d/xray          # Init-скрипт для управления службой
 /etc/hotplug.d/iface/99-xray-autoupdate  # Автообновление при ifup wan
