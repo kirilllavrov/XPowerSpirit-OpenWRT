@@ -1,0 +1,9 @@
+# --- Локальные настройки редакторов и кэш инструментов ---
+# AI-агентские конфиги (AGENTS.md, .github/) и кэш MCP держим только локально
+.codebase-memory/
+.vscode/
+AGENTS.md
+.github/
+
+*.swp
+*.swo
