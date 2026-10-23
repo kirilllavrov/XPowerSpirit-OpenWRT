@@ -504,7 +504,7 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
 
 **Ключевые функции:**
 
-1. **Нормализация прокси-аутбаундов** — каждому outbound из подписки добавляется `streamSettings.sockopt` (`mark: 2`, `tcpNoDelay: true`, `tcpKeepAliveInterval: 30`) и отключается Mux (`mux.enabled: false`)
+1. **Нормализация прокси-аутбаундов** — каждому outbound из подписки добавляется `streamSettings.sockopt` (`mark: 2`, `tcpKeepAliveInterval: 30`) и отключается Mux (`mux.enabled: false`)
 
 2. **Балансировка (всегда, даже для одного прокси)**:
    - Все outbound-ы из подписки добавляются в конфиг
@@ -547,7 +547,7 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
    >
    > Это предотвращает ошибку `XTLS rejected UDP/443 traffic`
 
-6. **Stream settings прокси** — `mark: 2` (по нему nftables распознаёт пакеты Xray и не зацикливает их), `tcpNoDelay: true`, `tcpKeepAliveInterval: 30`; Mux отключён
+6. **Stream settings прокси** — `mark: 2` (по нему nftables распознаёт пакеты Xray и не зацикливает их), `tcpKeepAliveInterval: 30`; Mux отключён
 
 7. **Freedom (direct) outbound** — `tag: "direct"`, `domainStrategy: "UseIPv4"` для корректной работы в IPv4-only среде, `sockopt.mark: 2`
 

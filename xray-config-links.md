@@ -60,7 +60,7 @@ sockopt (tproxy, mark) и безопасность соединения.
 
 - https://xtls.github.io/config/transport.html — выбор сети (network) и её настроек
 - https://xtls.github.io/config/transports/finalmask.html
-- https://xtls.github.io/config/transports/sockopt.html — sockopt: tproxy, mark, tcpNoDelay, keepalive
+- https://xtls.github.io/config/transports/sockopt.html — sockopt: tproxy, mark, domainStrategy, keepalive
 - https://xtls.github.io/config/transports/reality.html — Reality: pbk/sid/spx/fp/SNI
 - https://xtls.github.io/config/transports/tls.html
 

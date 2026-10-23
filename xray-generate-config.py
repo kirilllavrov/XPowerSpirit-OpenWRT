@@ -87,7 +87,7 @@ def log_error(msg: str) -> None:
 def normalize_outbound(ob: dict) -> dict:
     """
     Дополняет outbound из подписки недостающими полями.
-    Добавляет sockopt (mark, tcpNoDelay, tcpKeepAliveInterval) и отключает mux.
+    Добавляет sockopt (mark, tcpKeepAliveInterval) и отключает mux.
     """
     # Убеждаемся, что streamSettings существует
     if "streamSettings" not in ob:
@@ -98,7 +98,6 @@ def normalize_outbound(ob: dict) -> dict:
         ob["streamSettings"]["sockopt"] = {}
     
     ob["streamSettings"]["sockopt"]["mark"] = 2
-    ob["streamSettings"]["sockopt"]["tcpNoDelay"] = True
     ob["streamSettings"]["sockopt"]["tcpKeepAliveInterval"] = 30
     
     # Отключаем mux (не нужен для TProxy)
@@ -206,7 +205,7 @@ def build_dns_outbound() -> dict:
             "rules": [
                 {
                     "action": "hijack",
-                    "qtype": "1,28"
+                    "qType": "1,28"
                 }
             ]
         }
@@ -218,8 +217,14 @@ def make_direct_outbound() -> dict:
     return {
         "protocol": "freedom",
         "tag": "direct",
-        "settings": {"domainStrategy": "UseIPv4"},
-        "streamSettings": {"sockopt": {"mark": 2, "tcpKeepAliveInterval": 30}}
+        "settings": {},
+        "streamSettings": {
+            "sockopt": {
+                "mark": 2,
+                "domainStrategy": "UseIPv4",
+                "tcpKeepAliveInterval": 30
+            }
+        }
     }
 
 

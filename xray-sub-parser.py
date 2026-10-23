@@ -213,6 +213,8 @@ def parse_vless_uri(uri: str, idx: int):
         if sni:
             reality["serverName"] = sni
         if pbk:
+            # Документированное имя поля — password; publicKey оставлен для старых ядер
+            reality["password"] = pbk
             reality["publicKey"] = pbk
         if sid:
             reality["shortId"] = sid
