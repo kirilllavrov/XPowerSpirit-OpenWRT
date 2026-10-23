@@ -43,6 +43,22 @@ ROUTING_CONFIG = {
         "doh.opendns.com",
         "dns.nextdns.io"
     ],
+    # Домены для проверки «какой у меня IP». Провайдеры и сервисы используют их
+    # для детекта VPN, поэтому они обязаны идти напрямую и показывать реальный IP.
+    "ip_check_domains": [
+        "domain:ifconfig.me",
+        "domain:ifconfig.co",
+        "domain:ipify.org",
+        "domain:ipinfo.io",
+        "domain:ip.sb",
+        "domain:ident.me",
+        "domain:ipapi.co",
+        "domain:ipwho.is",
+        "domain:checkip.amazonaws.com",
+        "domain:wtfismyip.com",
+        "domain:2ip.ru",
+        "domain:myip.ipip.net"
+    ],
     "block_domains": ["geosite:category-ads"],
     "direct_ips": ["geoip:ru", "geoip:private"],
     "direct_domains": [
@@ -287,6 +303,13 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
             "type": "field",
             "inboundTag": ["dns-local"],
             "outboundTag": "dns-out"
+        },
+        # Проверочные домены IP — всегда напрямую и раньше всех остальных правил:
+        # иначе провайдер/сервис увидит IP прокси и определит VPN
+        {
+            "type": "field",
+            "domain": ROUTING_CONFIG["ip_check_domains"],
+            "outboundTag": "direct"
         },
         # Ловим DNS через DoH, которые прошли мимо dnsmasq (от браузера)
         {

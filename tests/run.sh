@@ -150,6 +150,24 @@ sys.exit(0 if 'balancers' not in c.get('routing', {}) and tags == ['direct', 'bl
 python3 "$GENERATOR" --output "$TMP/config2.json" <"$TMP/unified.json" 2>/dev/null
 assert_rc "$?" 0 "генератор: унифицированный вход"
 
+assert_py "
+import json, sys
+c = json.load(open(sys.argv[1]))
+rules = c['routing']['rules']
+idx = next((i for i, r in enumerate(rules)
+            if any('ifconfig.me' in d for d in r.get('domain', []))), None)
+if idx is None:
+    sys.exit(1)
+# правило проверки IP должно стоять раньше блокировок и балансировщика
+if any(r.get('outboundTag') == 'block' for r in rules[:idx]):
+    sys.exit(1)
+if any('balancerTag' in r for r in rules[:idx]):
+    sys.exit(1)
+domains = rules[idx]['domain']
+sys.exit(0 if rules[idx]['outboundTag'] == 'direct'
+         and 'domain:ifconfig.me' in domains and 'domain:ipify.org' in domains else 1)" \
+    "$TMP/config2.json" "генератор: ip_check_domains → direct раньше block/balancer"
+
 # ------------------------------------------------- определение архитектуры
 
 # Функция живёт внутри установщика — извлекаем её для проверки

@@ -584,11 +584,15 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
   серверам подписки, RSS Xray ~64 МБ против ~10 МБ на малом конфиге. На роутере с 128 МБ
   памяти и лимитом «одно устройство» это заметно; помогает фильтр `--remarks` (например,
   «Германия» → 1 узел, конфиг 5.4 КБ вместо 147 КБ).
-* **`geosite:category-cdn-ru` из сборки проекта перехватывает не-RU сервисы.** При
-  `direct_domains = [geosite:category-cdn-ru]` запросы к `ifconfig.me` и `api.ipify.org`
-  уходят direct, тогда как `github.com`, `google.com`, `youtube.com`, `cloudflare.com` — в прокси.
-  Проверка по категориям показала, что виновата именно эта категория, а не `category-ru` или
-  `category-mobile`.
+* **Проверочные домены IP должны идти напрямую — и это теперь отдельная категория.**
+  В подписке/геобазе `ifconfig.me` и `api.ipify.org` попадали в `direct` случайно, через
+  `geosite:category-cdn-ru` (проверка по категориям: `category-browser`, `category-mobile`,
+  `category-ru`, `private` → прокси, `category-cdn-ru` → direct). Такое поведение верное по
+  смыслу (иначе провайдер увидит IP прокси и определит VPN), но держалось на побочном эффекте
+  чужой категории, которая меняется вместе с геобазой. Добавлено явное поле
+  `routing.ip_check_domains` и правило `direct`, стоящее **раньше** блокировок и всех прочих
+  правил: `ifconfig.me`, `ifconfig.co`, `ipify.org`, `ipinfo.io`, `ip.sb`, `ident.me`,
+  `ipapi.co`, `ipwho.is`, `checkip.amazonaws.com`, `wtfismyip.com`, `2ip.ru`, `myip.ipip.net`.
 
 ### Проверено на aarch64 (OpenWrt 25.12 armsr/armv8 в QEMU)
 

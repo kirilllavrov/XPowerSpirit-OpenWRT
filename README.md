@@ -567,16 +567,17 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
 
 5. **Правила маршрутизации** (порядок важен, правила собираются из `settings.json → routing`):
    1. `inboundTag: ["dns-local"]` → `dns-out` (hijack во встроенный DNS)
-   2. `doh_domains` → `direct` (чтобы DNS-запросы не уходили в прокси)
-   3. `block_domains` (`geosite:category-ads`) → `block`
-   4. NTP (порт 123/UDP) → `direct`
-   5. QUIC (UDP/443) → `block` (VLESS+XTLS не поддерживает UDP)
-   6. `direct_ips` (`geoip:ru`, `geoip:private`) → `direct`
-   7. `direct_domains` (`geosite:private`, `category-browser`, `category-cdn-ru`, `category-mobile`, `category-ru`) → `direct`
-   8. `proxy_domains` (`geosite:category-streaming`, `geosite:category-games`) → `balancer`
-   9. `network: "tcp,udp"` → `balancer`
-   
-   В DIRECT-режиме правила 1–7 остаются, а вместо 8–9 добавляется одно: `network: "tcp,udp"` → `direct`.
+   2. `ip_check_domains` (`ifconfig.me`, `api.ipify.org`, `2ip.ru`, …) → `direct` — раньше всех остальных правил, чтобы сервисы проверки IP видели реальный адрес провайдера, а не прокси
+   3. `doh_domains` → `direct` (чтобы DNS-запросы не уходили в прокси)
+   4. `block_domains` (`geosite:category-ads`) → `block`
+   5. NTP (порт 123/UDP) → `direct`
+   6. QUIC (UDP/443) → `block` (VLESS+XTLS не поддерживает UDP)
+   7. `direct_ips` (`geoip:ru`, `geoip:private`) → `direct`
+   8. `direct_domains` (`geosite:private`, `category-browser`, `category-cdn-ru`, `category-mobile`, `category-ru`) → `direct`
+   9. `proxy_domains` (`geosite:category-streaming`, `geosite:category-games`) → `balancer`
+   10. `network: "tcp,udp"` → `balancer`
+
+   В DIRECT-режиме правила 1–8 остаются, а вместо 9–10 добавляется одно: `network: "tcp,udp"` → `direct`.
 
    > **Важно:** QUIC/UDP-443 блокируется на двух уровнях:
    > 1. В nftables (до Xray) — только с LAN-интерфейса
@@ -675,6 +676,20 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
     "block_domains": [
       "geosite:category-ads"
     ],
+    "ip_check_domains": [
+      "domain:ifconfig.me",
+      "domain:ifconfig.co",
+      "domain:ipify.org",
+      "domain:ipinfo.io",
+      "domain:ip.sb",
+      "domain:ident.me",
+      "domain:ipapi.co",
+      "domain:ipwho.is",
+      "domain:checkip.amazonaws.com",
+      "domain:wtfismyip.com",
+      "domain:2ip.ru",
+      "domain:myip.ipip.net"
+    ],
     "direct_ips": [
       "geoip:ru",
       "geoip:private"
@@ -713,6 +728,7 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 | `routing.domainStrategy` | string | Стратегия маршрутизации (по умолчанию `IPOnDemand`) |
 | `routing.doh_domains` | array | DoH-домены → direct (защита от DNS-петель) |
 | `routing.block_domains` | array | Домены для блокировки (реклама) |
+| `routing.ip_check_domains` | array | Домены проверки IP → direct: провайдеры используют их для детекта VPN, поэтому они должны показывать реальный адрес |
 | `routing.direct_ips` | array | IP-адреса напрямую (РФ + локальные) |
 | `routing.direct_domains` | array | Домены напрямую (geosite-категории РФ) |
 | `routing.proxy_domains` | array | Домены через прокси (стриминг, игры) |
@@ -828,6 +844,18 @@ jq '.routing.proxy_domains += ["domain:youtube.com"]' \
 jq '.routing.block_domains += ["domain:doubleclick.net"]' \
     /etc/xray/settings.json > /tmp/settings.tmp && mv /tmp/settings.tmp /etc/xray/settings.json
 ```
+
+**Добавить свой домен проверки IP (должен идти напрямую):**
+
+```bash
+jq '.routing.ip_check_domains += ["domain:myip.example.com"]' \
+    /etc/xray/settings.json > /tmp/settings.tmp && mv /tmp/settings.tmp /etc/xray/settings.json
+```
+
+> Список `ip_check_domains` применяется **раньше** правил блокировки и всего остального:
+> сервисы проверки IP (`ifconfig.me`, `api.ipify.org`, `2ip.ru` и подобные) иначе увидят
+> адрес прокси, и провайдер определит VPN. Проверить: `curl -s https://api.ipify.org`
+> должен вернуть адрес провайдера, а не узла подписки.
 
 **Изменить стратегию маршрутизации:**
 
