@@ -16,6 +16,8 @@ Xray Config Generator for OpenWrt TProxy
   Читает /etc/xray/settings.json — единый конфигурационный файл.
 """
 
+from __future__ import annotations
+
 import json
 import sys
 import argparse

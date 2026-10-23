@@ -99,6 +99,29 @@
 - Минимум 20 MB свободного места в `/tmp` и 10 MB в `/`
 - Поддержка nftables TProxy в ядре (`kmod-nft-tproxy`, `kmod-nft-socket`)
 
+### Поддерживаемые архитектуры
+
+Платформа Xray определяется по `DISTRIB_ARCH` из `/etc/openwrt_release`, при его отсутствии — по `uname -m`:
+
+| `DISTRIB_ARCH` | Архитектура устройства | Ассет Xray |
+|---|---|---|
+| `x86_64` | x86-64 | `Xray-linux-64.zip` |
+| `i386`, `i486`, `i586`, `i686` | x86-32 | `Xray-linux-32.zip` |
+| `aarch64_*` | ARM64 (Cortex-A53/A72, MT7981/MT7986, IPQ807x…) | `Xray-linux-arm64-v8a.zip` |
+| `arm_cortex-a5/a7/a8/a9/a15/a53/a72/a76*` | ARMv7 | `Xray-linux-arm32-v7a.zip` |
+| `arm_arm1176*` | ARMv6 (BCM2835 и подобные) | `Xray-linux-arm32-v6.zip` |
+| `arm_xscale*`, `arm_arm926*`, `arm_arm1136*`, `arm_fa526*` | ARMv5 | `Xray-linux-arm32-v5.zip` |
+| `mips_*` | MIPS big-endian (ath79 и др.) | `Xray-linux-mips32.zip` |
+| `mipsel_*` | MIPS little-endian (MT7620/7621, ramips) | `Xray-linux-mips32le.zip` |
+| `mips64_*` / `mips64el_*` | MIPS64 | `Xray-linux-mips64.zip` / `mips64le` |
+| `riscv64_*`, `loongarch64_*` | RISC-V / LoongArch | `Xray-linux-riscv64.zip` / `loong64` |
+
+Неизвестная архитектура — установка останавливается с сообщением, а не подставляет x86-64.
+`update-xray.sh` в этом случае не трогает уже установленный бинарь.
+
+> Важно: `uname -m` отдаёт `mips` и для big-endian, и для little-endian MIPS, поэтому определять
+> архитектуру по нему нельзя — используется `DISTRIB_ARCH`.
+
 ### Программные зависимости
 
 Скрипт установки **не устанавливает пакеты** — их нужно поставить заранее (`opkg install` или `apk add`):

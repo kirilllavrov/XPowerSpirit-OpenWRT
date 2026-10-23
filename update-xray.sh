@@ -100,6 +100,62 @@ settings_set() {
     chmod 600 "$SETTINGS_JSON"
 }
 
+# Определение суффикса релизного ZIP Xray под архитектуру устройства.
+# DISTRIB_ARCH из /etc/openwrt_release надёжнее uname: uname -m отдаёт "mips"
+# и для big-endian, и для little-endian MIPS, а armv6l/armv5l не отличить от armv7l.
+# XRAY_RELEASE_FILE переопределяется в тестах.
+XRAY_RELEASE_FILE="${XRAY_RELEASE_FILE:-/etc/openwrt_release}"
+
+detect_xray_machine() {
+    local os_arch=""
+    if [ -f "$XRAY_RELEASE_FILE" ]; then
+        os_arch=$(. "$XRAY_RELEASE_FILE" 2>/dev/null; echo "$DISTRIB_ARCH")
+    fi
+    case "$os_arch" in
+    aarch64*) echo "arm64-v8a" ;;
+    arm_arm1176*) echo "arm32-v6" ;;
+    arm_arm926* | arm_arm1136* | arm_xscale* | arm_fa526*) echo "arm32-v5" ;;
+    arm_*) echo "arm32-v7a" ;;
+    mips64el_*) echo "mips64le" ;;
+    mips64_*) echo "mips64" ;;
+    mipsel_*) echo "mips32le" ;;
+    mips_*) echo "mips32" ;;
+    riscv64*) echo "riscv64" ;;
+    loongarch64*) echo "loong64" ;;
+    powerpc64le*) echo "ppc64le" ;;
+    powerpc64*) echo "ppc64" ;;
+    s390x*) echo "s390x" ;;
+    i386 | i486 | i586 | i686) echo "32" ;;
+    x86_64) echo "64" ;;
+    esac
+}
+
+# Итоговое имя платформы; пустая строка — архитектура не поддерживается
+resolve_xray_machine() {
+    local m
+    m=$(detect_xray_machine)
+    if [ -z "$m" ]; then
+        case "$(uname -m)" in
+        x86_64 | amd64) m="64" ;;
+        i?86) m="32" ;;
+        aarch64 | arm64) m="arm64-v8a" ;;
+        armv8l | armv7l) m="arm32-v7a" ;;
+        armv6l) m="arm32-v6" ;;
+        armv5l | armv5tel) m="arm32-v5" ;;
+        mipsel) m="mips32le" ;;
+        mips) m="mips32" ;;
+        mips64el) m="mips64le" ;;
+        mips64) m="mips64" ;;
+        riscv64) m="riscv64" ;;
+        loongarch64) m="loong64" ;;
+        ppc64le) m="ppc64le" ;;
+        ppc64) m="ppc64" ;;
+        s390x) m="s390x" ;;
+        esac
+    fi
+    echo "$m"
+}
+
 STATE_DIR="/etc/xray/state"
 TMP_DIR="/tmp/xray_update"
 
@@ -195,19 +251,20 @@ else
         CURRENT_VERSION=$(/usr/bin/xray version 2>/dev/null | head -1 | awk '{print $2}')
     fi
 
-    ARCH=$(uname -m)
-    case "$ARCH" in
-    x86_64 | amd64) MACHINE="64" ;;
-    aarch64) MACHINE="arm64-v8a" ;;
-    armv7l) MACHINE="arm32-v7a" ;;
-    *) MACHINE="64" ;;
-    esac
+    MACHINE=$(resolve_xray_machine)
+    if [ -z "$MACHINE" ]; then
+        # Без своего бинаря не трогаем установленный: иначе рабочий xray заменится
+        echo "[!] Архитектура $(uname -m) не поддерживается релизами Xray — обновление бинаря пропущено" >>"$LOG"
+        MACHINE=""
+    fi
 
     ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/Xray-linux-${MACHINE}.zip"
     ZIP_DEST="$TMP_DIR/xray.zip"
     SHA_FILE="$STATE_DIR/xray.zip.sha256sum"
 
-    if fetch_url "${ZIP_URL}.dgst" "$STATE_DIR/xray.dgst"; then
+    if [ -z "$MACHINE" ]; then
+        :
+    elif fetch_url "${ZIP_URL}.dgst" "$STATE_DIR/xray.dgst"; then
         REMOTE_SHA=$(extract_sha256 "$STATE_DIR/xray.dgst")
 
         if [ -n "$REMOTE_SHA" ]; then

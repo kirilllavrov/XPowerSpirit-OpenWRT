@@ -150,6 +150,45 @@ sys.exit(0 if 'balancers' not in c.get('routing', {}) and tags == ['direct', 'bl
 python3 "$GENERATOR" --output "$TMP/config2.json" <"$TMP/unified.json" 2>/dev/null
 assert_rc "$?" 0 "генератор: унифицированный вход"
 
+# ------------------------------------------------- определение архитектуры
+
+# Функция живёт внутри установщика — извлекаем её для проверки
+sed -n '/^# Определение суффикса релизного ZIP/,/^# Парсер аргументов/p' \
+    "$ROOT/install-openwrt-xray.sh" >"$TMP/arch_fn.sh"
+
+check_arch() { # ожидаемое  DISTRIB_ARCH
+    printf "DISTRIB_ARCH='%s'\n" "$2" >"$TMP/fake_release"
+    got=$(XRAY_RELEASE_FILE="$TMP/fake_release" sh -c '. "$1"; detect_xray_machine' _ "$TMP/arch_fn.sh")
+    if [ "$got" = "$1" ]; then
+        ok "архитектура $2 → $got"
+    else
+        fail "архитектура $2: ожидалось '$1', получено '$got'"
+    fi
+}
+
+check_arch arm64-v8a  aarch64_cortex-a53
+check_arch arm32-v7a  arm_cortex-a7_neon-vfpv4
+check_arch arm32-v7a  arm_cortex-a15_neon-vfpv4
+check_arch arm32-v6   arm_arm1176jzf-s_vfp
+check_arch arm32-v5   arm_xscale
+check_arch mips32     mips_24kc
+check_arch mips32le   mipsel_24kc
+check_arch mips64     mips64_octeonplus
+check_arch mips64le   mips64el_mips64r2
+check_arch riscv64    riscv64_riscv64
+check_arch loong64    loongarch64_generic
+check_arch 64         x86_64
+check_arch 32         i386
+
+# Неизвестная архитектура не должна молча превращаться в x86-64
+printf "DISTRIB_ARCH='sparc_v9'\n" >"$TMP/fake_release"
+got=$(XRAY_RELEASE_FILE="$TMP/fake_release" sh -c '. "$1"; detect_xray_machine' _ "$TMP/arch_fn.sh")
+if [ -z "$got" ]; then
+    ok "неизвестная архитектура даёт пустой результат (установщик падает, а не ставит x86-64)"
+else
+    fail "неизвестная архитектура вернула '$got' вместо пустого значения"
+fi
+
 # ------------------------------------------------------- валидация ядром
 
 if [ -n "$XRAY_BIN" ] && [ -n "$ASSET_DIR" ]; then

@@ -12,6 +12,8 @@ Xray Subscription Parser
 Совместимость:
   Без --ua — поведение не меняется (Base64 VLESS, вывод JSON-массива outbounds).
 """
+from __future__ import annotations
+
 import sys
 import base64
 import json
