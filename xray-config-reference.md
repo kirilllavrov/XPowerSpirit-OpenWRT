@@ -526,28 +526,35 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 
 | Использование | Где в проекте | Как в документации |
 |---|---|---|
-| `log.loglevel: "none"` + файлы access/error | [xray-generate-config.py](./xray-generate-config.py#L120) | `access`/`error`/`loglevel` — подтверждено |
-| `dns` c `hosts`, `queryStrategy`, `serveStale`, `serveExpiredTTL`, `disableFallbackIfMatch`, `enableParallelQuery` | [xray-generate-config.py](./xray-generate-config.py#L124) | подтверждено |
+| `log.loglevel: "none"` + файлы access/error; каталог создают установщик и `init.d` | [xray-generate-config.py](./xray-generate-config.py#L119), [install-openwrt-xray.sh](./install-openwrt-xray.sh#L172) | `access`/`error`/`loglevel` — подтверждено; сам ядро каталог не создаёт |
+| `dns` c `hosts`, `queryStrategy`, `serveStale`, `serveExpiredTTL`, `disableFallbackIfMatch`, `enableParallelQuery` | [xray-generate-config.py](./xray-generate-config.py#L123) | подтверждено |
 | `servers` в режиме `https+local://` (DOHL) + `domains`, `expectedIPs`, `skipFallback` | там же | подтверждено; DOHL не проходит routing |
-| `routing.domainStrategy: "IPOnDemand"`, правила `domain`/`ip`/`port`/`network`/`inboundTag` | [build_rules](./xray-generate-config.py#L270) | подтверждено |
-| `balancers[].selector` + `leastLoad` + `fallbackTag` | [build_balancer](./xray-generate-config.py#L347) | подтверждено; `selector` **префиксный** |
-| `burstObservatory.pingConfig` (`destination`, `GET`, `1m`, `10`, `15s`) | [build_burst_observatory](./xray-generate-config.py#L364) | подтверждено; предупреждение о перехвате TProxy |
-| inbound `tunnel` + `sockopt.tproxy` + `sniffing.routeOnly` | [base_config](./xray-generate-config.py#L116) | подтверждено (в проекте `protocol` указан как `dokodemo-door` — см. п. 4 ниже) |
-| `blackhole` c `response.type: "http"` | [make_block_outbound](./xray-generate-config.py#L226) | подтверждено |
-| DNS-outbound с `action: "hijack"` | [build_dns_outbound](./xray-generate-config.py#L200) | подтверждено, но ключ должен быть `qType` |
+| `routing.domainStrategy: "IPOnDemand"`, правила `domain`/`ip`/`port`/`network`/`inboundTag` | [build_rules](./xray-generate-config.py#L275) | подтверждено |
+| `balancers[].selector` + `leastLoad` + `fallbackTag`; теги прокси с префиксом `proxy-` | [build_balancer](./xray-generate-config.py#L352), [proxy_tag](./xray-sub-parser.py#L54) | подтверждено; `selector` и `subjectSelector` **префиксные** |
+| `burstObservatory.pingConfig` (`destination`, `GET`, `1m`, `10`, `15s`) | [build_burst_observatory](./xray-generate-config.py#L369) | подтверждено; предупреждение о перехвате TProxy |
+| inbound `tunnel` (в конфиге — `dokodemo-door`) + `sockopt.tproxy` + `sniffing.routeOnly` | [base_config](./xray-generate-config.py#L115) | подтверждено; `dokodemo-door` — прежнее имя протокола |
+| `blackhole` c `response.type: "http"` | [make_block_outbound](./xray-generate-config.py#L231) | подтверждено |
+| DNS-outbound: `action: "hijack"`, `qType: "1,28"` | [build_dns_outbound](./xray-generate-config.py#L199) | подтверждено |
+| Freedom: `sockopt.domainStrategy: "UseIPv4"` | [make_direct_outbound](./xray-generate-config.py#L215) | подтверждено |
+| REALITY: `password` (+ `publicKey` для старых ядер) | [parse_vless_uri](./xray-sub-parser.py#L243) | подтверждено; `publicKey` — прежнее имя |
 
-### Расхождения, которые нужно помнить при правках
+### Исправлено при сверке (2026-10-23)
 
-1. **Каталог журналов.** Xray не создаёт каталог для `log.access`/`log.error`; отсутствие
-   `/tmp/log` приводит к отказу старта (проверено на 26.10.21). Скрипты проекта этот каталог не создают.
-2. **`settings.domainStrategy` у Freedom** — недокументированное устаревшее поле; при запуске
-   Xray выдаёт предупреждение и переносит значение в `sockopt.domainStrategy`.
-3. **`sockopt.tcpNoDelay`** — недокументированное поле, молча игнорируется ядром.
-4. **`protocol: "dokodemo-door"`** — в документации протокол называется `tunnel`.
-5. **`realitySettings.publicKey`** — документированное имя `password`; `publicKey` принимается как совместимое.
-6. **`network` вместо `method`** — легаси-вид; валидатор принимает, новые примеры документации используют `method`.
-7. **`qtype` вместо `qType`** — работает из-за нечувствительности разбора JSON в Go, но это не документированное написание.
-8. **`xhttpSettings`** — проект генерирует `path`, `host`, `mode`, `extra`; официального описания полей нет.
+1. `sockopt.tcpNoDelay` удалён — поля нет в SockoptObject, ядро его игнорировало.
+2. `freedom.settings.domainStrategy` → `sockopt.domainStrategy` — предупреждение ядра исчезло.
+3. `qtype` → `qType` — документированное написание ключа.
+4. REALITY `publicKey` → `password` (+ переходный алиас).
+5. Парсер возвращает код 2 вместо пустого результата: сбой разбора больше не превращается в DIRECT-конфиг.
+6. Все теги прокси получают префикс `proxy-`: префиксное сопоставление `selector`/`subjectSelector` больше не может захватить `direct`/`block`/`dns-out`.
+7. `/tmp/log` создаётся установщиком, `init.d` и `update-xray.sh` — иначе Xray не стартовал.
+8. `update-nft.sh` завершается с ошибкой, если не определён LAN-интерфейс или ключевые правила не применились; bypass DNS-IP берётся из `config.json`.
+
+### Остаётся осознанно (документацией не подтверждено)
+
+1. **`protocol: "dokodemo-door"`** — работает как совместимое имя; в документации протокол называется `tunnel`.
+2. **`network` вместо `method`** — легаси-вид `streamSettings`; валидатор принимает, новые примеры документации используют `method`.
+3. **`xhttpSettings`** — проект генерирует `path`, `host`, `mode`, `extra`; официального описания полей нет (страница XHTTP — статья).
+4. **`settings.vnext[]`** у VLESS — документирован плоский вид `settings.address/port/id/...`; `vnext` принимается как совместимый.
 
 При любой правке конфигурации: сначала подтвердить поле по первоисточнику, затем менять код,
-затем проверить `xray run -test -config` и только после этого считать изменение рабочим.
+затем `./tests/run.sh` (включая `xray run -test`) и только после этого считать изменение рабочим.

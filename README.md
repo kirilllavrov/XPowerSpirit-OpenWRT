@@ -81,7 +81,7 @@
 2. **Трафик самого роутера** → цепочка `output` (fw4) → `jump xray_output`: пакет помечается `meta mark set 1` и через policy routing (таблица 100) возвращается в `prerouting`, где попадает под TProxy
 3. **nftables**: bypass локальных адресов, DNS-резолверов, DHCP, IP прокси-серверов; полный bypass интерфейсов `br-guest` и `br-iot`; блокировка QUIC (UDP/443) с LAN **до** TProxy; остальное — `tproxy ip to 127.0.0.1:12345` c `meta mark set 0x1`
 4. **Защита от петель**: Xray-аутбаунды ставят `sockopt.mark = 2`, а обе цепочки начинаются с `meta mark 2 return`
-5. **Xray TProxy** (`dokodemo-door`, `tproxy`, сниффинг http/tls в режиме `routeOnly`): прозрачно перехватывает трафик; DNS от dnsmasq (`127.0.0.1:5353`) уходит в встроенный DNS (DoH)
+5. **Xray TProxy** (inbound `tunnel`, он же `dokodemo-door`, `tproxy`, сниффинг http/tls в режиме `routeOnly`): прозрачно перехватывает трафик; DNS от dnsmasq (`127.0.0.1:5353`) уходит в встроенный DNS (DoH)
 6. **Маршрутизация**:
    - `geoip:ru`, `geoip:private` → напрямую (`direct`)
    - `geosite:private`, `geosite:category-browser`, `geosite:category-cdn-ru`, `geosite:category-mobile`, `geosite:category-ru` → напрямую
@@ -323,7 +323,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 **Алгоритм:**
 
 1. **Автоопределение интерфейсов** — `br-lan` (fallback: `network.lan`), `br-guest` (fallback: `network.guest`), `br-iot` (fallback: `network.iot`)
-2. **Извлечение IP серверов** — Python-парсер `config.json` собирает `vnext[].address` из всех outbound-ов, пропуская `hole`, `0.0.0.0`, `127.0.0.1` и имена без точки
+2. **Извлечение IP серверов и DNS** — Python-парсер `config.json` собирает `vnext[].address` из всех outbound-ов (пропуская `hole`, `0.0.0.0`, `127.0.0.1` и имена без точки) и IP из `dns.hosts`/`dns.servers`; при неудачном применении правил скрипт завершается с ошибкой
 3. **Policy Routing** (идемпотентно — старые правила удаляются):
    - `ip rule add fwmark 1 table 100`
    - `ip route add local 0.0.0.0/0 dev lo table 100`
@@ -407,7 +407,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 
 - None (без шифрования)
 - TLS (с SNI, ALPN, fingerprint, allowInsecure)
-- Reality (с publicKey, shortId, spiderX)
+- Reality (с `password` — он же `publicKey` в старых ядрах, shortId, spiderX)
 
 **Аргументы CLI:**
 
@@ -423,7 +423,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 **Функции:**
 
 1. **Логирование** — ошибки пишутся в syslog (ident: `xray-parser`) и stderr
-2. **Нормализация тегов** — очистка названий серверов от спецсимволов, замена пробелов на `_`; для JSON-подписок дубликаты тегов получают суффикс `-2`, `-3`, …
+2. **Нормализация тегов** — очистка названий серверов от спецсимволов, замена пробелов на `_`; для JSON-подписок дубликаты тегов получают суффикс `-2`, `-3`, …. Все теги прокси получают префикс `proxy-`: `selector` балансировщика и `subjectSelector` observatory сопоставляются **по префиксу**, поэтому тег вида `d` иначе подтянул бы служебные `direct`/`dns-out`
 3. **Загрузка URL** — автоматическое скачивание, если входные данные — HTTP(S) URL (с проверкой на HTML-ошибку)
 4. **Base64-декодирование** — умное определение (URL-safe, с/без padding), нужно ли декодировать
 5. **Парсинг query-параметров**:
@@ -432,7 +432,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
    - `pbk`, `sid`, `spx` (Reality)
    - `path`, `host`, `serviceName`, `mode`, `extra` (транспорт)
 6. **Фильтрация заглушек** — пропускаются outbound-ы с `address` = `0.0.0.0` / `127.0.0.1` / `hole`, `port` = 1, UUID `00000000-0000-0000-0000-000000000000`; служебные `freedom`/`blackhole`/`dns` из JSON-подписки тоже пропускаются
-7. **Признак `hole`** — если в подписке найден сервер с `address = "hole"`, в результат пишется `"hole": true` (генератор после этого собирает DIRECT-конфиг)
+7. **Признак `hole`** — если в подписке найден сервер с `address = "hole"` (в `settings.vnext[0].address` или в `settings.address` для `freedom`), в результат пишется `"hole": true` (генератор после этого собирает DIRECT-конфиг)
 
 **Входные данные:** Чтение из stdin (URL подписки, base64-строка или JSON)
 
@@ -440,6 +440,14 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 
 - с `--ua` — унифицированный объект `{"hole": bool, "outbounds": [...]}`
 - без `--ua` (устаревший режим) — JSON-массив outbound-ов
+
+**Коды возврата (режим `--ua`):**
+
+| Код | Значение |
+|-----|----------|
+| `0` | разбор успешен, в том числе при `hole` |
+| `2` | серверов не найдено и `hole` нет: формат не совпал с User-Agent, фильтр `--remarks` ничего не нашёл или все серверы оказались заглушками. Вызывающая сторона оставляет прежний `config.json` |
+| `1` | ошибка входа (пустые данные, не удалось скачать подписку, не декодируется Base64) |
 
 **Пример использования:**
 
@@ -472,7 +480,8 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
         "security": "reality",
         "realitySettings": {
           "serverName": "example.com",
-          "publicKey": "...",
+          "password": "...",   // документированное имя; publicKey — прежнее
+          "publicKey": "...",  // оставлено для совместимости
           "shortId": "...",
           "spiderX": "...",
           "fingerprint": "chrome"
@@ -525,8 +534,8 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
      - `hosts`: DoH-домены закреплены за IP (`common.dot.dns.yandex.net` → `77.88.8.1/8.8`, `cloudflare-dns.com` → `1.0.0.1/1.1.1.1`, `dns.nextdns.io` → `45.90.28.0/45.90.30.0`)
      - `servers`: Yandex DoH для `geosite:category-ru` (`expectedIPs: geoip:ru`, `skipFallback`), Cloudflare DoH, NextDNS DoH
    - **Inbound:**
-     - `tproxy-in`: `dokodemo-door`, `0.0.0.0:12345`, `allowedNetwork: tcp,udp`, `followRedirect: true`, `sockopt.tproxy: "tproxy"`, сниффинг `http`/`tls` с `routeOnly: true`
-     - `dns-local`: `dokodemo-door`, `127.0.0.1:5353`, `tcp,udp` — приём DNS от dnsmasq
+     - `tproxy-in`: `dokodemo-door` (документированное имя протокола — `tunnel`), `0.0.0.0:12345`, `allowedNetwork: tcp,udp`, `followRedirect: true`, `sockopt.tproxy: "tproxy"`, сниффинг `http`/`tls` с `routeOnly: true`
+     - `dns-local`: `dokodemo-door` (`tunnel`), `127.0.0.1:5353`, `tcp,udp` — приём DNS от dnsmasq
 
 5. **Правила маршрутизации** (порядок важен, правила собираются из `settings.json → routing`):
    1. `inboundTag: ["dns-local"]` → `dns-out` (hijack во встроенный DNS)
@@ -549,13 +558,15 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
 
 6. **Stream settings прокси** — `mark: 2` (по нему nftables распознаёт пакеты Xray и не зацикливает их), `tcpKeepAliveInterval: 30`; Mux отключён
 
-7. **Freedom (direct) outbound** — `tag: "direct"`, `domainStrategy: "UseIPv4"` для корректной работы в IPv4-only среде, `sockopt.mark: 2`
+   > Транспорт задаётся полем `network` (`tcp`/`ws`/`grpc`/`http`/`xhttp`). В актуальной документации Xray его заменило поле `method`; `network` принимается ядром как совместимый вид. Поля `xhttpSettings` (`path`, `host`, `mode`, `extra`) в документации не описаны.
+
+7. **Freedom (direct) outbound** — `tag: "direct"`, `sockopt.domainStrategy: "UseIPv4"` для корректной работы в IPv4-only среде, `sockopt.mark: 2`
 
 8. **Blackhole (block) outbound** — `tag: "block"`, `response.type: "http"`: возвращает HTTP 403 вместо глухого закрытия соединения, чтобы браузер сразу показывал ошибку, а не висел в таймауте
 
-9. **DNS outbound** — `tag: "dns-out"`, протокол `dns`, правило `hijack` для `qtype 1,28`
+9. **DNS outbound** — `tag: "dns-out"`, протокол `dns`, правило `hijack` для `qType` `1,28`
 
-**Режим без серверов:** если парсер отфильтровал все сервера как заглушки (или вернул `hole`), создаётся DIRECT-конфиг.
+**Режим без серверов:** DIRECT-конфиг создаётся только по явному сигналу `"hole": true`. Если парсер вернул ошибку (код 2), установщик и `update-xray.sh` прежний конфиг не меняют — DIRECT-режим больше не включается из-за сбоя разбора.
 
 **Примеры использования:**
 
@@ -596,12 +607,13 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 /etc/init.d/xray          # Init-скрипт для управления службой
 /etc/hotplug.d/iface/99-xray-autoupdate  # Автообновление при ifup wan
 
-/tmp/log/
+/tmp/log/                # создаётся установщиком и init.d (Xray не создаёт каталог сам)
 ├── xray-access.log       # Логи доступа Xray (ротация при > 512 KB)
 ├── xray-error.log        # Логи ошибок Xray (ротация при > 256 KB)
-├── xray-update.log       # Логи обновлений (ротация при > 256 KB)
-├── xray_install.log      # Логи установки
-└── setup-wifi.log        # Логи настройки Wi-Fi
+└── xray-update.log       # Логи обновлений и cron-прогонов (ротация при > 256 KB)
+
+/tmp/xray_install.log     # Логи установки
+/tmp/setup-wifi.log       # Логи настройки Wi-Fi
 ```
 
 ### settings.json — единый конфигурационный файл
@@ -799,6 +811,20 @@ jq '.routing.domainStrategy = "IPIfNonMatch"' \
 > Поддерживаемые форматы: `"domain:example.com"`, `"geosite:category-ru"`, `"geoip:ru"`, `"geoip:private"`, `"ext:custom.dat:tag"`.
 
 После любых изменений перегенерируйте конфиг: `/usr/share/xray/update-xray.sh`.
+
+---
+
+### Прогон тестов без устройства
+
+Проверяет парсер и генератор на синтетических фикстурах: коды возврата, режим `hole`,
+фильтр `remarks`, префиксы тегов и отсутствие коллизий с `direct`/`block`/`dns-out`.
+Если доступен бинарь `xray`, дополнительно валидирует сгенерированные конфиги.
+
+```bash
+XRAY_BIN=/usr/bin/xray XRAY_LOCATION_ASSET=/usr/share/xray ./tests/run.sh
+```
+
+Без `XRAY_BIN` проверки ядром пропускаются, остальные выполняются всегда.
 
 ---
 
