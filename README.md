@@ -78,7 +78,7 @@
 ### Поток трафика
 
 1. **Клиент LAN** → трафик попадает в цепочку `prerouting` (fw4) → `jump xray_tproxy`
-2. **Трафик самого роутера** → цепочка `output` (fw4) → `jump xray_output`: пакет помечается `meta mark set 1` и через policy routing (таблица 100) возвращается в `prerouting`, где попадает под TProxy
+2. **Трафик самого роутера** → отдельная таблица `inet xray_self` с цепочкой `type route hook output priority mangle`: пакет помечается `meta mark set 1` и через policy routing (таблица 100) возвращается в `prerouting`, где попадает под TProxy. Тип цепочки `route` обязателен — в цепочке `type filter` (как `fw4 output`) mark не влияет на маршрутизацию
 3. **nftables**: bypass локальных адресов, DNS-резолверов, DHCP, IP прокси-серверов; полный bypass интерфейсов `br-guest` и `br-iot`; блокировка QUIC (UDP/443) с LAN **до** TProxy; остальное — `tproxy ip to 127.0.0.1:12345` c `meta mark set 0x1`
 4. **Защита от петель**: Xray-аутбаунды ставят `sockopt.mark = 2`, а обе цепочки начинаются с `meta mark 2 return`
 5. **Xray TProxy** (inbound `tunnel`, он же `dokodemo-door`, `tproxy`, сниффинг http/tls в режиме `routeOnly`): прозрачно перехватывает трафик; DNS от dnsmasq (`127.0.0.1:5353`) уходит в встроенный DNS (DoH)
@@ -327,7 +327,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 3. **Policy Routing** (идемпотентно — старые правила удаляются):
    - `ip rule add fwmark 1 table 100`
    - `ip route add local 0.0.0.0/0 dev lo table 100`
-4. **Создание/очистка цепочек** `inet fw4 xray_tproxy` (вызов из `prerouting`) и `inet fw4 xray_output` (вызов из `output`); при повторном запуске цепочки очищаются (`flush`), jump-правила не дублируются
+4. **Создание/очистка цепочек** `inet fw4 xray_tproxy` (вызов из `prerouting`) и таблицы `inet xray_self` (`type route hook output priority mangle`); при повторном запуске цепочка `xray_tproxy` очищается (`flush`), jump-правило не дублируется, таблица `xray_self` пересоздаётся. Устаревшая схема с `fw4 xray_output` удаляется автоматически
 
 5. **PREROUTING (`xray_tproxy`)** — порядок правил важен:
    - `meta mark 2 return` — защита от петель (Xray-аутбаунды маркируют свои пакеты `mark = 2`)
@@ -338,9 +338,9 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
    - Bypass `br-guest` и `br-iot` (если интерфейсы существуют) — их трафик не проксируется
    - **Блокировка QUIC** — `iifname <LAN> udp dport 443 drop` (до TProxy)
    - **TProxy для LAN** — `iifname <LAN>` TCP/UDP → `tproxy ip to 127.0.0.1:12345 meta mark set 0x1 accept`
-   - **TProxy для трафика роутера** — правила без `iifname` для пакетов с `meta mark 0x1`, пришедших из `xray_output`
+   - **TProxy для трафика роутера** — правила без `iifname` для пакетов с `meta mark 0x1`, возвращённых из `xray_self` через таблицу 100
 
-6. **OUTPUT (`xray_output`)** — трафик самого роутера:
+6. **OUTPUT (`inet xray_self`, `type route hook output priority mangle`)** — трафик самого роутера:
    - `meta mark 2 return`
    - Те же bypass-правила (локальные сети, DNS, DHCP, IP прокси-серверов)
    - `meta l4proto tcp/udp meta mark set 1` — маркировка, по которой пакет через policy routing возвращается в `prerouting` и попадает под TProxy
@@ -363,7 +363,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 | 2 | Порты | Слушается ли порт 12345 (`ss -tuln`); для TProxy отсутствие в `ss` — норма |
 | 3 | Конфигурация | Наличие `"tproxy": "tproxy"` в inbound и `"mark": 2` в sockopt (loop prevention) |
 | 4 | nftables `xray_tproxy` | Наличие цепочки, `jump` из `prerouting`, bypass DNS (53) — только предупреждение, т.к. отдельного правила `dport 53` нет, bypass серверов, TProxy-правила, блокировка QUIC |
-| 5 | nftables `xray_output` | Наличие цепочки, `meta mark 2 return`, маркировка `meta mark set 1` (трафик роутера) |
+| 5 | nftables `xray_self` | Цепочка с `type route hook output priority mangle`, `meta mark 2 return`, маркировка `meta mark set 1` (трафик роутера); наличие устаревшей `fw4 xray_output` даёт предупреждение |
 | 6 | Маршрутизация | `ip rule` с `fwmark 0x1 lookup 100`, в таблице 100 — `local default` |
 | 7 | dnsmasq | Перенаправление на `127.0.0.1#5353` |
 | 8 | Логи Xray | Последние 3 строки из `/tmp/log/xray-error.log` |
@@ -842,7 +842,7 @@ XRAY_BIN=/usr/bin/xray XRAY_LOCATION_ASSET=/usr/share/xray ./tests/run.sh
 
    ```bash
    nft list chain inet fw4 xray_tproxy
-   nft list chain inet fw4 xray_output
+   nft list chain inet xray_self output
    ```
 
    DNS-запросы клиентов адресованы роутеру и отсекаются правилом `ip daddr { …, 192.168.0.0/16, … } return`; отдельного правила `dport 53` нет. Убедитесь, что в цепочке есть `meta mark 2 return` (защита от петель) и правила `tproxy ip to 127.0.0.1:12345`.

@@ -13,9 +13,9 @@ else
     LAN_IF="${LAN_IF%% *}"
 fi
 
-if [ -z "$LAN_IF" ]; then
-    logger -t update-nft "LAN interface not detected — TProxy rules not applied"
-    echo "[X] Не удалось определить LAN-интерфейс (br-lan): правила TProxy не применены" >&2
+if [ -z "$LAN_IF" ] || ! ip link show "$LAN_IF" >/dev/null 2>&1; then
+    logger -t update-nft "LAN interface '$LAN_IF' does not exist — TProxy rules not applied"
+    echo "[X] LAN-интерфейс '${LAN_IF:-<пусто>}' не существует: правила TProxy не применены" >&2
     exit 1
 fi
 
@@ -84,7 +84,12 @@ except:
 }
 
 setup_network() {
-    DNS_SET=$(extract_dns_ips | paste -sd, -)
+    # busybox в OpenWrt не имеет paste — собираем список вручную
+    DNS_SET=$(extract_dns_ips | tr '\n' ',')
+    DNS_SET=${DNS_SET%,}
+    if [ -z "$DNS_SET" ]; then
+        logger -t update-nft "DNS bypass list is empty — check dns.hosts/servers in config.json"
+    fi
 
     # Policy routing
     while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
@@ -100,13 +105,13 @@ setup_network() {
         nft flush chain inet fw4 xray_tproxy
     fi
 
-    # Создаём цепочку xray_output (OUTPUT — для проксирования трафика самого роутера)
-    if ! nft list chain inet fw4 xray_output 2>/dev/null | grep -q "chain xray_output"; then
-        nft add chain inet fw4 xray_output
-        nft add rule inet fw4 output jump xray_output
-    else
-        nft flush chain inet fw4 xray_output
-    fi
+    # Убираем устаревшую интеграцию: jump из fw4 output в xray_output.
+    # Цепочка fw4 имеет type filter — mark, выставленный там, не влияет на
+    # маршрутизацию, поэтому трафик роутера шёл мимо прокси.
+    _h=$(nft -a list chain inet fw4 output 2>/dev/null | grep 'jump xray_output' | sed 's/.*handle //' | head -1)
+    [ -n "$_h" ] && nft delete rule inet fw4 output handle "$_h" 2>/dev/null
+    nft flush chain inet fw4 xray_output 2>/dev/null
+    nft delete chain inet fw4 xray_output 2>/dev/null
 
     # ========== PREROUTING (xray_tproxy) ==========
 
@@ -151,28 +156,35 @@ setup_network() {
     nft add rule inet fw4 xray_tproxy meta mark 0x1 meta l4proto tcp tproxy ip to 127.0.0.1:12345 accept
     nft add rule inet fw4 xray_tproxy meta mark 0x1 meta l4proto udp tproxy ip to 127.0.0.1:12345 accept
 
-    # ========== OUTPUT (xray_output — трафик самого роутера) ==========
+    # ========== OUTPUT (трафик самого роутера) ==========
+    # Отдельная таблица с type route hook output priority mangle — как в официальном
+    # руководстве по TProxy. В цепочке fw4 (type filter) mark не влияет на
+    # маршрутизацию, и трафик роутера уходил мимо прокси.
+    nft delete table inet xray_self 2>/dev/null
+    nft add table inet xray_self
+    nft "add chain inet xray_self output { type route hook output priority mangle; policy accept; }"
 
     # Loop prevention: пакеты с mark 2 (от Xray outbound) — пропускаем, не трогаем
-    nft add rule inet fw4 xray_output meta mark 2 return
+    nft add rule inet xray_self output meta mark 2 return
 
     # Базовые bypass (локальные сети)
-    nft add rule inet fw4 xray_output ip daddr { 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } return
+    nft add rule inet xray_self output ip daddr { 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } return
     if [ -n "$DNS_SET" ]; then
-        nft add rule inet fw4 xray_output ip daddr { $DNS_SET } return
+        nft add rule inet xray_self output ip daddr { $DNS_SET } return
     fi
-    nft add rule inet fw4 xray_output udp dport { 67, 68 } return
+    nft add rule inet xray_self output udp dport { 67, 68 } return
 
     # Bypass для прокси-серверов
     for ip in $(extract_server_ips); do
         if echo "$ip" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
-            nft add rule inet fw4 xray_output ip daddr $ip return
+            nft add rule inet xray_self output ip daddr $ip return
         fi
     done
 
-    # Помечаем mark 1 для перенаправления через PREROUTING → TProxy
-    nft add rule inet fw4 xray_output meta l4proto tcp meta mark set 1
-    nft add rule inet fw4 xray_output meta l4proto udp meta mark set 1
+    # Помечаем mark 1: правило fwmark 1 → table 100 (local default dev lo)
+    # возвращает пакет в prerouting, где его ловит TProxy
+    nft add rule inet xray_self output meta l4proto tcp meta mark set 1
+    nft add rule inet xray_self output meta l4proto udp meta mark set 1
 
     # Проверяем, что ключевые правила реально применились: иначе init.d сочтёт
     # правила готовыми и запустит Xray без TProxy (прокси молча не работает)
@@ -187,6 +199,26 @@ setup_network() {
     if ! echo "$_chain" | grep -qE "mark (0x0*2|2) return"; then
         logger -t update-nft "Loop prevention rule missing (mark 2 return)"
         echo "[X] В цепочке xray_tproxy нет защиты от петель (mark 2 return)" >&2
+        exit 1
+    fi
+    if [ -n "$DNS_SET" ]; then
+        _dns_first=${DNS_SET%%,*}
+        if ! echo "$_chain" | grep -qF "$_dns_first"; then
+            logger -t update-nft "DNS bypass rule missing ($_dns_first)"
+            echo "[X] В цепочке xray_tproxy нет bypass для DNS-серверов ($_dns_first)" >&2
+            exit 1
+        fi
+    fi
+
+    _self=$(nft list chain inet xray_self output 2>/dev/null)
+    if ! echo "$_self" | grep -q "mark set 0x00000001"; then
+        logger -t update-nft "Self-traffic chain incomplete: mark rule missing"
+        echo "[X] В цепочке xray_self нет правила маркировки (mark set 1)" >&2
+        exit 1
+    fi
+    if ! echo "$_self" | grep -qE "type route hook output priority mangle"; then
+        logger -t update-nft "Self-traffic chain has wrong type/hook — router traffic will bypass proxy"
+        echo "[X] Цепочка xray_self должна быть type route hook output priority mangle" >&2
         exit 1
     fi
 

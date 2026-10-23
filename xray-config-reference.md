@@ -538,6 +538,26 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 | Freedom: `sockopt.domainStrategy: "UseIPv4"` | [make_direct_outbound](./xray-generate-config.py#L215) | подтверждено |
 | REALITY: `password` (+ `publicKey` для старых ядер) | [parse_vless_uri](./xray-sub-parser.py#L243) | подтверждено; `publicKey` — прежнее имя |
 
+### Проверено на живом стенде (OpenWrt 25.12 в контейнере)
+
+Стенд: OpenWrt 25.12 (procd, fw4), два клиента — LAN и сам роутер, настоящий VLESS-сервер.
+Подтверждено: установка проходит целиком, после перезагрузки Xray стартует сам, TProxy
+проксирует и LAN, и трафик роутера, DNS через встроенный модуль работает, `hole` уводит
+в DIRECT, сбой разбора подписки оставляет прежний конфиг.
+
+Найдено и исправлено на стенде:
+
+* **Трафик роутера не проксировался.** Цепочка `fw4 output` имеет `type filter`, mark в ней
+  не влияет на маршрутизацию. По официальному руководству TProxy
+  (<https://xtls.github.io/ru/document/level-2/tproxy.html>) нужна отдельная цепочка
+  `type route hook output priority mangle` — она теперь и используется (`inet xray_self`).
+* `paste` отсутствует в busybox OpenWrt — bypass-DNS собирался пустым и правило не добавлялось;
+  заменено на `tr` + проверка правила после применения.
+* Guard `LAN_IF` был нерабочим (`|| echo "br-lan"` всегда давал непустое имя) — теперь проверяется
+  существование интерфейса через `ip link show`.
+* Диагностика давала ложные `FAIL`/`WARN` на формате вывода nft (`meta mark 0x00000002`)
+  и на имени таблицы в `ip rule` (`lookup xray` вместо `lookup 100`).
+
 ### Исправлено при сверке (2026-10-23)
 
 1. `sockopt.tcpNoDelay` удалён — поля нет в SockoptObject, ядро его игнорировало.

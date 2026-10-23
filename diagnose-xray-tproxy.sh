@@ -67,28 +67,35 @@ else
     _fail "Цепочка inet fw4 xray_tproxy отсутствует!"
 fi
 
-# 5. OUTPUT chain (xray_output) — для трафика самого роутера
-printf "\n[5] nftables OUTPUT (inet fw4 xray_output):\n"
-OUTPUT_CHAIN=$(nft list chain inet fw4 xray_output 2>/dev/null)
-if [ -n "$OUTPUT_CHAIN" ]; then
-    _ok "Цепочка inet fw4 xray_output загружена"
+# 5. OUTPUT: трафик самого роутера (отдельная таблица type route)
+printf "\n[5] nftables OUTPUT (inet xray_self):\n"
+SELF_CHAIN=$(nft list chain inet xray_self output 2>/dev/null)
+if [ -n "$SELF_CHAIN" ]; then
+    if echo "$SELF_CHAIN" | grep -qE "type route hook output priority mangle"; then
+        _ok "Цепочка xray_self: type route hook output priority mangle"
+    else
+        _fail "Цепочка xray_self есть, но без type route — mark не повлияет на маршрутизацию"
+    fi
 
-    # Loop prevention
-    echo "$OUTPUT_CHAIN" | grep -q "meta mark 2 return" && \
+    echo "$SELF_CHAIN" | grep -qE "meta mark (0x0*2|2) return" && \
         _ok "Loop prevention (mark 2 return) настроена" || \
         _warn "Loop prevention (mark 2 return) не найдена"
 
-    # Маркировка для TProxy
-    echo "$OUTPUT_CHAIN" | grep -q "meta mark set 1" && \
+    echo "$SELF_CHAIN" | grep -qE "mark set (0x0*1|0x00000001|1)$" && \
         _ok "Маркировка трафика роутера (mark 1) настроена" || \
         _warn "Маркировка трафика роутера не найдена"
 else
-    _warn "Цепочка xray_output отсутствует (трафик роутера не проксируется)"
+    _warn "Таблица inet xray_self отсутствует (трафик роутера не проксируется)"
+fi
+
+# Устаревшая схема через fw4 output (type filter) не работает — предупреждаем, если осталась
+if nft list chain inet fw4 xray_output >/dev/null 2>&1; then
+    _warn "Найдена устаревшая цепочка fw4 xray_output — перезапусти update-nft.sh"
 fi
 
 # 6. Routing
 printf "\n[6] Policy Routing:\n"
-ip -4 rule show | grep -q "fwmark 0x1 lookup 100" && _ok "ip rule fwmark 1 → table 100" || _fail "ip rule отсутствует"
+ip rule show 2>/dev/null | grep -qE "fwmark (0x1|1) lookup (100|xray)" && _ok "ip rule fwmark 1 → table 100" || _fail "ip rule отсутствует"
 ip route show table 100 2>/dev/null | grep -q "local default" && _ok "Таблица 100: local default dev lo" || _fail "Таблица 100 неверна"
 
 # 7. dnsmasq → Xray DNS (порт 5353)

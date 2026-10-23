@@ -652,11 +652,12 @@ stop_service() {
         | grep 'jump xray_output' | sed 's/.*handle //' | head -1)
     [ -n "$_handle" ] && nft delete rule inet fw4 output handle "$_handle" 2>/dev/null
 
-    # Чистим цепочки
+    # Чистим цепочки и таблицу само-маршрутизации (type route)
     nft flush chain inet fw4 xray_tproxy 2>/dev/null
     nft delete chain inet fw4 xray_tproxy 2>/dev/null
     nft flush chain inet fw4 xray_output 2>/dev/null
     nft delete chain inet fw4 xray_output 2>/dev/null
+    nft delete table inet xray_self 2>/dev/null
 
     while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
     ip route flush table 100 2>/dev/null
