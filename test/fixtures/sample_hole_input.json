@@ -1,0 +1,12 @@
+{
+  "hole": true,
+  "outbounds": [
+    {
+      "tag": "HOLE_SIGNAL",
+      "protocol": "freedom",
+      "settings": {
+        "address": "hole"
+      }
+    }
+  ]
+}
