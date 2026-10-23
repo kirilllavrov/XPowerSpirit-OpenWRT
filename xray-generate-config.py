@@ -343,7 +343,8 @@ def geoip_has_category(category: str) -> bool:
             data = f.read()
     except OSError:
         return False
-    return category.lower().encode() in data
+    # в geoip.dat коды категорий хранятся в верхнем регистре (RU, PRIVATE)
+    return category.upper().encode() in data or category.lower().encode() in data
 
 
 def bs_categories_missing() -> list:

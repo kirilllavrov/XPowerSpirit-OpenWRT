@@ -170,6 +170,59 @@ if any((r.get('outboundTag') == 'block' or 'balancerTag' in r)
 sys.exit(0 if rules[idx]['outboundTag'] == 'direct' else 1)" \
     "$TMP/config_ipcheck.json" "генератор: geosite:category-ipcheck → direct раньше block/balancer"
 
+# Категория проверки IP должна работать в ОБОИХ режимах: в bs-профиле
+# direct_domains не используется, поэтому правило вынесено отдельно
+mkdir -p "$TMP/asset2"
+python3 - "$TMP/asset2" <<'PY2'
+import sys, pathlib
+
+def varint(n):
+    out = b""
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        out += bytes([b | 0x80]) if n else bytes([b])
+        if not n:
+            return out
+
+def ld(f, p):
+    return varint((f << 3) | 2) + varint(len(p)) + p
+
+def en(f, v):
+    return varint((f << 3) | 0) + varint(v)
+
+def entry(code, payloads):
+    return ld(1, ld(1, code.encode()) + b"".join(ld(2, x) for x in payloads) + ld(4, code.encode()))
+
+d = pathlib.Path(sys.argv[1])
+site = lambda v: en(1, 2) + ld(2, v.encode())
+cats = {
+    "CATEGORY-IPCHECK": ["ifconfig.me"], "CATEGORY-ADS": ["ads.example"],
+    "PRIVATE": ["localhost"], "CATEGORY-BROWSER": ["b.example"],
+    "CATEGORY-CDN-RU": ["c.example"], "CATEGORY-MOBILE": ["m.example"],
+    "CATEGORY-RU": ["r.example"], "CATEGORY-STREAMING": ["s.example"],
+    "CATEGORY-GAMES": ["g.example"], "CATEGORY-WHITELIST": ["gosuslugi.ru"],
+}
+(d / "geosite.dat").write_bytes(b"".join(entry(c, [site(v) for v in vals]) for c, vals in cats.items()))
+# коды в geoip.dat тоже в верхнем регистре
+net = lambda a, m: ld(1, a.encode()) + en(2, m)
+(d / "geoip.dat").write_bytes(
+    entry("WHITELIST", [net("5.255.255.0", 24)]) + entry("RU", [net("5.0.0.0", 8)])
+    + entry("PRIVATE", [net("10.0.0.0", 8)]))
+PY2
+
+for mode in normal bs; do
+    XRAY_LOCATION_ASSET="$TMP/asset2" python3 "$GENERATOR" --mode "$mode" \
+        --output "$TMP/config_$mode.json" <"$TMP/unified.json" 2>/dev/null
+    assert_rc "$?" 0 "генератор: режим $mode собирается (категории в геофайлах найдены)"
+    assert_py "
+import json, sys
+rules = json.load(open(sys.argv[1]))['routing']['rules']
+sys.exit(0 if any('geosite:category-ipcheck' in d
+                  for r in rules for d in r.get('domain', [])) else 1)" \
+        "$TMP/config_$mode.json" "генератор: в режиме $mode ipcheck → direct"
+done
+
 # Без категории в геофайлах правило не генерируется (иначе конфиг невалиден)
 XRAY_LOCATION_ASSET="$TMP" python3 "$GENERATOR" --output "$TMP/config_nocat.json" \
     <"$TMP/unified.json" 2>/dev/null
