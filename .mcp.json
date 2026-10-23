@@ -1,0 +1,12 @@
+{
+	"mcpServers": {
+		"codebase-memo": {
+			"type": "stdio",
+			"command": "/home/lavrov/.local/bin/codebase-memory-mcp",
+			"args": [],
+			"tools": [
+				"*"
+			]
+		}
+	}
+}
