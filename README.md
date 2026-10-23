@@ -3,6 +3,8 @@
 Комплексное решение для настройки прокси-сервера Xray с TProxy на OpenWrt. Проект включает автоматическую установку Xray, настройку гостевой сети, управление подписками, генерацию конфигурации и автоматическое обновление.
 
 > **Связанные проекты:** OpenWrt-пакеты (LuCI веб-интерфейс + CLI `xray-status`) вынесены в отдельный репозиторий [XPowerSpirit-WebUI](https://github.com/kirilllavrov/XPowerSpirit-WebUI).
+>
+> **Документация по конфигурации Xray:** [xray-config-reference.md](./xray-config-reference.md) — справочник по базовой конфигурации, сверенный с официальной русской документацией; [xray-config-links.md](./xray-config-links.md) — карта официальных ссылок (Xray, nftables).
 
 ## 📋 Содержание
 
