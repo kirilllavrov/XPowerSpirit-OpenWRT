@@ -18,9 +18,12 @@
   - [setup-wifi-network.sh](#setup-wifi-networksh)
   - [update-xray.sh](#update-xraysh)
   - [update-nft.sh](#update-nftsh)
+  - [xray-mode-watchdog.sh](#xray-mode-watchdogsh)
+  - [bs-probe.py](#bs-probepy)
   - [diagnose-xray-tproxy.sh](#diagnose-xray-tproxysh)
   - [xray-sub-parser.py](#xray-sub-parserpy)
   - [xray-generate-config.py](#xray-generate-configpy)
+- [Режим белых списков (БС)](#-режим-белых-списков-бс)
 - [Структура файлов](#-структура-файлов)
 - [Примеры использования](#-примеры-использования)
 - [Troubleshooting](#-troubleshooting)
@@ -35,6 +38,7 @@
 - **Балансировка** — все серверы подписки идут через `balancer` (стратегия `leastLoad`) с `burstObservatory`, fallback — `direct`
 - **Умная маршрутизация** — гео-базы RU/private напрямую, блокировка рекламы и QUIC, DoH-домены в обход прокси
 - **Автообновление** — ежедневное обновление Xray, geoip/geosite и конфигурации по расписанию (cron)
+- **Режим белых списков (БС)** — сторож определяет ограничения мобильного оператора и переключает профиль: БС-ресурсы напрямую, всё остальное — через прокси
 - **Hotplug-обновление** — автоматическое обновление после восстановления WAN-соединения
 - **Безопасность WiFi** — WPA2+WPA3 (sae-mixed, PMF optional), изоляция клиентов гостевой/IoT сетей
 - **Гостевая и IoT сети** — изолированные сегменты с ограничением скорости (SQM)
@@ -202,7 +206,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 **Что делает:**
 
 1. **Настройка времени** — таймзона `Europe/Moscow` (MSK-3), синхронизация NTP (`ru.pool.ntp.org`, fallback `time.google.com`)
-2. **Загрузка скриптов** — скачивает `xray-generate-config.py`, `xray-sub-parser.py`, `update-xray.sh`, `update-nft.sh` в `/usr/share/xray/`
+2. **Загрузка скриптов** — скачивает `xray-generate-config.py`, `xray-sub-parser.py`, `update-xray.sh`, `update-nft.sh`, `bs-probe.py`, `xray-mode-watchdog.sh` в `/usr/share/xray/`
 3. **Сохранение настроек** — записывает URL подписки, User-Agent, фильтр remarks, модель/версию ОС, HWID и домен в whitelist в единый JSON-файл `/etc/xray/settings.json` (файл инициализируется из `settings.default.json` в репозитории, если его ещё нет)
 4. **LAN и IPv6** — задаёт `--lan-ip` (по умолчанию `192.168.1.1/24`), диапазон DHCP `.100-.250`, отключает IPv6 на LAN/WAN, останавливает и отключает `odhcpd`
 5. **Гостевая сеть (опционально, `--guest=1`)**:
@@ -318,9 +322,13 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
    ```bash
    curl (User-Agent + x-hwid + X-Ver-Os/X-Device-Model/X-Device-Os) → sub.txt
    xray-sub-parser.py --ua <UA> [--remarks <фильтр>] → {"hole":…, "outbounds":[…]}
-   xray-generate-config.py --format unified --output config.json
-   xray run -test -config config.json
+   xray-generate-config.py --mode normal --output config.normal.json
+   xray-generate-config.py --mode bs     --output config.bs.json
+   xray run -test -config <каждый профиль>
+   копия активного профиля (по /etc/xray/state/mode) → config.json
    ```
+
+   **Профилей два:** `config.normal.json` (обычная маршрутизация) и `config.bs.json` (белые списки оператора). Если категорий БС нет в геофайлах, генератор возвращает код 3 и bs-профиль не обновляется — остаётся прежний.
 
    **Формат подписки определяется по User-Agent** (см. [xray-sub-parser.py](#xray-sub-parserpy)):
    - `*happ*`, `*singbox*`, `*karing*`, `*sfa*`, `*sfi*`, `*sfm*`, `*sft*`, `*xpower*` → **JSON** (Happ/Sing-box/XPower)
@@ -328,7 +336,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 
    Фильтр профилей (`--remarks`) берётся из `settings.json → subscription.remarks_filter` и применяется только к JSON-подпискам.
 
-   Новый конфиг устанавливается только после успешной проверки `xray run -test`.
+   Каждый профиль устанавливается только после успешной проверки `xray run -test`.
 
 7. **Пересборка nftables** — вызывает `update-nft.sh` (ошибка только логируется, Xray не останавливается)
 8. **Перезапуск Xray** — перезапускает `/etc/init.d/xray` с новым конфигом
@@ -376,6 +384,43 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 7. **Завершение** — запись в syslog (`logger -t update-nft`)
 
 > Явного правила bypass для порта 53 нет: DNS-запросы клиентов адресованы роутеру (`192.168.0.0/16`) и отсекаются bypass-правилом локальных адресов, а внешние резолверы исключены списком IP.
+
+---
+
+### xray-mode-watchdog.sh
+
+**Назначение:** определение режима сети (обычный / белые списки оператора) и переключение профиля Xray.
+
+**Как работает:**
+
+1. Санитарная проверка: процесс `xray`, цепочка `xray_tproxy`, наличие `config.json`. Если чего-то нет — перезапуск Xray, а не смена режима (сломанный прокси — это не БС).
+2. Запуск `bs-probe.py --json`: пробы идут с `SO_MARK=2`, поэтому пакеты обходят TProxy (`meta mark 2 return`). Иначе проверка gstatic шла бы через прокси и всегда показывала «доступно».
+3. Гистерезис: переход в `bs` — после `bs.confirmations` подтверждений подряд (по умолчанию 3), возврат — после `bs.back_confirmations` (2), не чаще `bs.min_dwell` (600 с). Состояние `unknown` (не прошло ничего) не переключает ничего.
+4. Переключение: копия профиля → `xray run -test` → атомарная замена `config.json` → запись `/etc/xray/state/mode` → `/etc/init.d/xray restart`. Неудачный `run -test` оставляет прежний профиль.
+5. Блокировка `flock` общая с `update-xray.sh`: апдейт и переключение не пересекаются.
+
+**Управление:**
+
+```bash
+/etc/init.d/xray-mode start|stop|enable   # procd-сервис (START=86, после xray)
+/usr/share/xray/xray-mode-watchdog.sh --once          # один цикл (отладка)
+/usr/share/xray/xray-mode-watchdog.sh --force bs      # принудительно
+/usr/share/xray/xray-mode-watchdog.sh --reset         # сбросить счётчики
+```
+
+**Логирование:** `/tmp/log/xray-mode.log` (ротация при > 256 KB), состояние счётчиков — `/etc/xray/state/watchdog`.
+
+---
+
+### bs-probe.py
+
+**Назначение:** проверка доступности для определения режима.
+
+- Пробы: `http://connectivitycheck.gstatic.com/generate_204` (внешняя) и `ya.ru` / `vk.com` по TLS (БС). Набор и таймауты настраиваются в `settings.json → bs.probe_external / bs.probe_bs`.
+- `SO_MARK=2` на сокете — обход TProxy. `--no-mark` — для тестов без root.
+- TLS-проба делает настоящий handshake с реальным SNI — именно по нему фильтрует оператор.
+- Коды возврата: `0` — `normal`, `1` — `bs`, `2` — `unknown` (нет ни внешней сети, ни БС-ресурсов).
+- `--dns-server 77.88.8.8` — резолвить пробы напрямую, не через dnsmasq/Xray.
 
 ---
 
@@ -533,6 +578,7 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
 | Аргумент | Описание |
 |----------|----------|
 | `--output=PATH` | Путь к создаваемому конфигу (обязателен) |
+| `--mode=normal\|bs` | `normal` — обычная маршрутизация (по умолчанию), `bs` — белые списки оператора |
 | `--format=unified` | Для обратной совместимости; значение игнорируется (формат всегда унифицированный) |
 
 > Аргументов выбора формата (`--format vless` / `--format json`), выбора сервера и `--remarks` **нет**: формат подписки определяет парсер, фильтр remarks передаётся парсеру. Выбор сервера не выполняется — все прокси из подписки попадают в балансировщик.
@@ -549,7 +595,8 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
      (`selector`/`subjectSelector` сопоставляются с тегами outbound-ов **по префиксу** — по
      xtls.github.io/config/routing.html, xtls.github.io/config/observatory.html)
    - **burstObservatory** на корневом уровне: `subjectSelector` = все прокси, `pingConfig` = `http://connectivitycheck.gstatic.com/generate_204`, `interval 1m`, `sampling 10`, `timeout 15s`, `httpMethod GET`
-   - `leastLoad` выбирает outbound по данным observatory; если выбрать не удалось, используется `fallbackTag` → `direct`
+   - `leastLoad` выбирает outbound по данным observatory; если выбрать не удалось, используется `fallbackTag`
+   - Балансировщиков **два**: `balancer` для трафика (`fallbackTag` — `direct` в `normal` и `block` в `bs`) и `balancer-dns` для DNS-запросов (`fallbackTag: direct` всегда — на старте у observatory ещё нет данных)
 
 3. **Режим "hole" (DIRECT-конфиг)**:
    - Если парсер вернул `"hole": true` или пустой список outbound-ов — генерируется конфиг без прокси
@@ -559,25 +606,25 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
 4. **Базовая конфигурация:**
    - **Логирование:** `loglevel: "none"`, access/error логи в `/tmp/log/`
    - **DNS** (tag `dns-inbuilt`): `queryStrategy: "UseIPv4"`, `serveStale`, `serveExpiredTTL: 600`, `enableParallelQuery`, `disableFallbackIfMatch`
-     - `hosts`: DoH-домены закреплены за IP (`common.dot.dns.yandex.net` → `77.88.8.1/8.8`, `cloudflare-dns.com` → `1.0.0.1/1.1.1.1`, `dns.nextdns.io` → `45.90.28.0/45.90.30.0`)
-     - `servers`: Yandex DoH для `geosite:category-ru` (`expectedIPs: geoip:ru`, `skipFallback`), Cloudflare DoH, NextDNS DoH
+     - `hosts`: DoH-домены закреплены за IP (`common.dot.dns.yandex.net` → `77.88.8.1/8.8`, `cloudflare-dns.com` → `1.0.0.1/1.1.1.1`, `dns.google`, `dns.nextdns.io`) — нужно, чтобы небыло петли при резолве самого DoH-сервера
+     - `servers`: три записи: (1) Яндекс DoH в режиме `https+local://` для RU-доменов (`expectedIPs: geoip:ru`) в `normal` или для БС-доменов в `bs`; (2) DoH `https://` через прокси — для всего остального; (3) Яндекс DoH напрямую — аварийный, когда прокси недоступен
+     - `+local`-схемы в routing **не попадают**, обычный `https://` — попадает с `inboundTag: dns-inbuilt` и уходит в `balancer-dns`
    - **Inbound:**
      - `tproxy-in`: `dokodemo-door` (документированное имя протокола — `tunnel`), `0.0.0.0:12345`, `allowedNetwork: tcp,udp`, `followRedirect: true`, `sockopt.tproxy: "tproxy"`, сниффинг `http`/`tls` с `routeOnly: true`
      - `dns-local`: `dokodemo-door` (`tunnel`), `127.0.0.1:5353`, `tcp,udp` — приём DNS от dnsmasq
 
 5. **Правила маршрутизации** (порядок важен, правила собираются из `settings.json → routing`):
    1. `inboundTag: ["dns-local"]` → `dns-out` (hijack во встроенный DNS)
-   2. `geosite:category-ipcheck` → `direct` — раньше всех остальных правил, чтобы сервисы проверки IP видели реальный адрес провайдера, а не прокси. Домены живут в `geosite.dat` (категория `category-ipcheck`), в `settings.json` их нет
-   3. `doh_domains` → `direct` (чтобы DNS-запросы не уходили в прокси)
-   4. `block_domains` (`geosite:category-ads`) → `block`
+   2. `inboundTag: ["dns-inbuilt"]` → `balancer-dns` — non-local DNS (наш DoH через прокси). Правило стоит до всех `domain`-правил, иначе домен DoH-сервера уйдёт в `direct` и запрос попадёт в блокировку
+   3. `geosite:category-ipcheck` → `direct` — раньше остальных, чтобы сервисы проверки IP видели реальный адрес провайдера, а не прокси
+   4. `block_domains` (`geosite:category-ads`) → `block` — в любом режиме
    5. NTP (порт 123/UDP) → `direct`
    6. QUIC (UDP/443) → `block` (VLESS+XTLS не поддерживает UDP)
-   7. `direct_ips` (`geoip:ru`, `geoip:private`) → `direct`
-   8. `direct_domains` (`geosite:private`, `category-browser`, `category-cdn-ru`, `category-mobile`, `category-ru`) → `direct`
-   9. `proxy_domains` (`geosite:category-streaming`, `geosite:category-games`) → `balancer`
-   10. `network: "tcp,udp"` → `balancer`
+   7. **_только `bs`_**: `bs_domains` (`geosite:category-whitelist`) → `direct`, `bs_ips` (`geoip:whitelist`) → `direct`
+   8. **_только `normal`_**: `direct_ips` (`geoip:ru`, `geoip:private`) → `direct`; `direct_domains` (`geosite:private`, `category-browser`, `category-cdn-ru`, `category-mobile`, `category-ru`) → `direct`; `proxy_domains` (`category-streaming`, `category-games`) → `balancer`
+   9. `network: "tcp,udp"` → `balancer` — всё остальное в прокси (в `bs` это буквально весь не-БС трафик)
 
-   В DIRECT-режиме правила 1–8 остаются, а вместо 9–10 добавляется одно: `network: "tcp,udp"` → `direct`.
+   В DIRECT-режиме (`hole`) правила 1 и 3–6 остаются, а вместо 9 добавляется `network: "tcp,udp"` → `direct`.
 
    > **Важно:** QUIC/UDP-443 блокируется на двух уровнях:
    > 1. В nftables (до Xray) — только с LAN-интерфейса
@@ -611,13 +658,74 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 
 ---
 
+## 🛡 Режим белых списков (БС)
+
+При ограничениях мобильного интернета оператор пропускает только ресурсы из «белого списка». Проект различает два состояния и держит два готовых профиля:
+
+| Состояние | Когда | Маршрутизация | DNS |
+|---|---|---|---|
+| `normal` | внешняя проба проходит | RU/private — напрямую, остальное — `balancer` | RU-домены — Яндекс DoH напрямую, зарубежные — DoH через прокси |
+| `bs` | внешняя недоступна, БС-ресурсы доступны | БС-домены и БС-адреса — напрямую, **всё остальное — в прокси** | БС-домены — Яндекс DoH напрямую, остальное — DoH через прокси |
+
+Общее для обоих режимов: `category-ads` блокируется всегда, QUIC (UDP/443) блокируется на уровне nft и в Xray, `category-ipcheck` всегда идёт напрямую.
+
+### Категории геофайлов
+
+БС-списки — обычные категории тех же `geosite.dat`/`geoip.dat`:
+
+| Файл | Категория | Содержимое |
+|---|---|---|
+| `geosite.dat` | `geosite:category-whitelist` | домены БС |
+| `geoip.dat` | `geoip:whitelist` | IP-адреса БС |
+
+Домены и адреса физически живут в разных файлах — одной категорией их не объединить. Имена переопределяются в `settings.json → routing.bs_domains / bs_ips`.
+
+Если категорий нет в геофайлах, генератор **не собирает** bs-профиль (код возврата 3) и пишет об этом в лог; устройство продолжает работать в `normal`.
+
+### Как это работает в рантайме
+
+```mermaid
+flowchart LR
+    P[bs-probe.py<br/>SO_MARK=2] --> W[xray-mode-watchdog.sh]
+    W -->|гистерезис + min_dwell| S[/etc/xray/state/mode/]
+    S --> A[config.json + restart]
+    N[config.normal.json] --> A
+    B[config.bs.json] --> A
+```
+
+- Профили готовит `update-xray.sh` (cron 02:30 и hotplug) или установщик; сторож только переключает их.
+- В БС-режиме прокси используется только для того, что оператор не пропускает. Если ни один сервер подписки не жив, `leastLoad` не найдёт узлов и `fallbackTag: block` закроет соединения сразу, а не по таймауту.
+- DNS БС-доменов резолвит Яндекс напрямую (`https+local://`, routing не проходит) — прокси не тратится. DNS остального идёт через туннель, потому что Яндекс может не отдавать адреса заблокированных зарубежных сервисов.
+- Для DNS используется отдельный балансировщик `balancer-dns` с `fallbackTag: direct`: сразу после старта у `observatory` ещё нет данных, и без этого резолв упирался бы в `block`.
+
+### Проверка и ручное управление
+
+```bash
+cat /etc/xray/state/mode                 # normal | bs
+python3 /usr/share/xray/bs-probe.py      # state=... (mark 2)
+tail -20 /tmp/log/xray-mode.log          # решения сторожа
+/usr/share/xray/xray-mode-watchdog.sh --force normal
+```
+
+### Ограничения
+
+- Смена профиля = рестарт Xray: текущие соединения рвутся (~1 с).
+- QUIC блокируется и для БС-доменов (nft-правило стоит до TProxy): приложения на HTTP/3 откатятся на TCP; сервис, работающий **только** по QUIC, в этой схеме не заработает.
+- Проверка по TCP/TLS не гарантирует работу туннеля: сервер может быть доступен, но отклонять авторизацию. Это ловит `burstObservatory`.
+
+---
+
 ## 📁 Структура файлов
 
 ```
 /etc/xray/
 ├── settings.json         # 🔥 ЕДИНЫЙ конфигурационный файл (см. ниже)
-├── config.json           # Активная конфигурация Xray (генерируется автоматически)
+├── config.json           # Активная конфигурация Xray (копия выбранного профиля)
+├── config.normal.json    # Профиль: обычная маршрутизация
+├── config.bs.json        # Профиль: белые списки оператора (если категории есть в геофайлах)
 └── state/
+    ├── mode              # normal | bs (переключает сторож)
+    ├── watchdog          # счётчики подтверждений и время последнего переключения
     ├── xray.zip.sha256sum
     ├── xray.dgst
     ├── geoip.dat.sha256sum
@@ -628,18 +736,22 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 ├── xray-sub-parser.py
 ├── update-xray.sh
 ├── update-nft.sh
+├── bs-probe.py           # пробы доступности (SO_MARK=2, мимо TProxy)
+├── xray-mode-watchdog.sh # сторож режима normal/bs
 ├── net-check.sh          # Скрипт проверки интернета для LED (создаётся setup-led-status.sh)
 ├── diagnose-xray-tproxy.sh   # НЕ устанавливается автоматически — скачивается вручную
-├── geoip.dat             # Гео-база IP-адресов
-└── geosite.dat           # Гео-база доменов
+├── geoip.dat             # Гео-база IP-адресов (включая geoip:whitelist)
+└── geosite.dat           # Гео-база доменов (включая geosite:category-whitelist)
 
 /etc/init.d/xray          # Init-скрипт для управления службой
+/etc/init.d/xray-mode     # Init-скрипт сторожа режима БС
 /etc/hotplug.d/iface/99-xray-autoupdate  # Автообновление при ifup wan
 
 /tmp/log/                # создаётся установщиком и init.d (Xray не создаёт каталог сам)
 ├── xray-access.log       # Логи доступа Xray (ротация при > 512 KB)
 ├── xray-error.log        # Логи ошибок Xray (ротация при > 256 KB)
-└── xray-update.log       # Логи обновлений и cron-прогонов (ротация при > 256 KB)
+├── xray-update.log       # Логи обновлений и cron-прогонов (ротация при > 256 KB)
+└── xray-mode.log         # Решения сторожа режима (ротация при > 256 KB)
 
 /tmp/xray_install.log     # Логи установки
 /tmp/setup-wifi.log       # Логи настройки Wi-Fi
@@ -665,14 +777,6 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
   "ver_os": "25.12.4",
   "routing": {
     "domainStrategy": "IPOnDemand",
-    "doh_domains": [
-      "common.dot.dns.yandex.net",
-      "cloudflare-dns.com",
-      "dns.google",
-      "dns.quad9.net",
-      "doh.opendns.com",
-      "dns.nextdns.io"
-    ],
     "block_domains": [
       "geosite:category-ads"
     ],
@@ -690,6 +794,31 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
     "proxy_domains": [
       "geosite:category-streaming",
       "geosite:category-games"
+    ],
+    "bs_domains": [
+      "geosite:category-whitelist"
+    ],
+    "bs_ips": [
+      "geoip:whitelist"
+    ],
+    "dns_direct_address": "https+local://common.dot.dns.yandex.net/dns-query",
+    "dns_proxy_address": "https://cloudflare-dns.com/dns-query",
+    "dns_hosts": {
+      "common.dot.dns.yandex.net": ["77.88.8.1", "77.88.8.8"],
+      "cloudflare-dns.com": ["1.0.0.1", "1.1.1.1"],
+      "dns.google": ["8.8.8.8", "8.8.4.4"],
+      "dns.nextdns.io": ["45.90.28.0", "45.90.30.0"]
+    }
+  },
+  "bs": {
+    "interval": 60,
+    "confirmations": 3,
+    "back_confirmations": 2,
+    "min_dwell": 600,
+    "probe_external": [ { "host": "connectivitycheck.gstatic.com", "port": 80, "path": "/generate_204", "tls": false } ],
+    "probe_bs": [
+      { "host": "ya.ru", "port": 443, "path": "/", "tls": true },
+      { "host": "vk.com", "port": 443, "path": "/", "tls": true }
     ]
   },
   "geo": {
@@ -953,6 +1082,13 @@ curl -s -L -H "User-Agent: $SUB_UA" -H "x-hwid: $HWID" "$SUB_URL" | \
 ```
 
 В `/tmp/debug.json` ожидается объект `{"hole": …, "outbounds": […]}`. Если `outbounds` пуст — проверьте формат подписки: при несовпадении формата парсер пишет в stderr `Failed to parse JSON subscription` (см. определение формата по User-Agent).
+
+### Режим БС не переключается
+
+1. Проверьте, что профиль собран: `ls -l /etc/xray/config.bs.json`. Если файла нет — в геофайлах нет категорий `geosite:category-whitelist` / `geoip:whitelist`; пересоберите `geosite.dat`/`geoip.dat` и запустите `/usr/share/xray/update-xray.sh`.
+2. Проверьте пробы вручную: `python3 /usr/share/xray/bs-probe.py` — должно быть `state=bs` (внешняя недоступна, `ya.ru`/`vk.com` доступны). Если все пробы падают — сеть не поднята или проба не обходит TProxy (нет правила `meta mark 2 return` в nft).
+3. Смотрите решения сторожа: `tail -20 /tmp/log/xray-mode.log`; текущий режим — `cat /etc/xray/state/mode`; счётчики — `/etc/xray/state/watchdog`.
+4. Принудительно: `/usr/share/xray/xray-mode-watchdog.sh --force bs` (и `--force normal` для возврата). Если профиль не проходит `xray run -test`, сторож останется в прежнем режиме — причина будет в логе.
 
 ### Geo-файлы не загружаются
 

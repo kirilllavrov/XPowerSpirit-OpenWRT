@@ -162,9 +162,10 @@ idx = next((i for i, r in enumerate(rules)
             if any('category-ipcheck' in d for d in r.get('domain', []))), None)
 if idx is None:
     sys.exit(1)
-if any(r.get('outboundTag') == 'block' for r in rules[:idx]):
-    sys.exit(1)
-if any('balancerTag' in r for r in rules[:idx]):
+# Правила с inboundTag видят только DNS-запросы встроенного резолвера
+# и не могут перехватить обычный трафик к сервисам проверки IP.
+if any((r.get('outboundTag') == 'block' or 'balancerTag' in r)
+       and 'inboundTag' not in r for r in rules[:idx]):
     sys.exit(1)
 sys.exit(0 if rules[idx]['outboundTag'] == 'direct' else 1)" \
     "$TMP/config_ipcheck.json" "генератор: geosite:category-ipcheck → direct раньше block/balancer"
@@ -178,6 +179,101 @@ rules = json.load(open(sys.argv[1]))['routing']['rules']
 sys.exit(0 if not any('category-ipcheck' in d
                       for r in rules for d in r.get('domain', [])) else 1)" \
     "$TMP/config_nocat.json" "генератор: без категории правило пропускается, конфиг валиден"
+
+# -------------------------------------------- режимы normal / bs (белые списки)
+
+python3 "$GENERATOR" --mode normal --output "$TMP/cfg_normal.json" <"$TMP/unified.json" 2>/dev/null
+assert_rc "$?" 0 "normal: профиль собран"
+
+assert_py "
+import json, sys
+c = json.load(open(sys.argv[1]))
+b = {x['tag']: x['fallbackTag'] for x in c['routing']['balancers']}
+domains = [d for r in c['routing']['rules'] for d in (r.get('domain') or [])]
+sys.exit(0 if b.get('balancer') == 'direct' and b.get('balancer-dns') == 'direct'
+         and 'geosite:category-whitelist' not in domains else 1)" \
+    "$TMP/cfg_normal.json" "normal: без БС-правил, fallback балансировщика direct"
+
+# Без категорий в геофайлах bs-профиль собирать нельзя — отказ с кодом 3
+python3 "$GENERATOR" --mode bs --output "$TMP/cfg_bs_none.json" <"$TMP/unified.json" 2>"$TMP/e_bs"
+assert_rc "$?" 3 "bs: отказ, если категорий БС нет в геофайлах"
+
+# Фальшивые геофайлы с нужными категориями
+mkdir -p "$TMP/assets"
+printf 'CATEGORY-WHITELIST CATEGORY-ADS CATEGORY-IPCHECK geolocation-!cn' >"$TMP/assets/geosite.dat"
+printf 'whitelist ru private cn ir' >"$TMP/assets/geoip.dat"
+
+XRAY_LOCATION_ASSET="$TMP/assets" python3 "$GENERATOR" --mode bs --output "$TMP/cfg_bs.json" \
+    <"$TMP/unified.json" 2>/dev/null
+assert_rc "$?" 0 "bs: профиль собран при наличии категорий"
+
+assert_py "
+import json, sys
+c = json.load(open(sys.argv[1]))
+b = {x['tag']: x['fallbackTag'] for x in c['routing']['balancers']}
+rules = c['routing']['rules']
+bs_dom = [i for i, r in enumerate(rules)
+          if r.get('domain') == ['geosite:category-whitelist'] and r.get('outboundTag') == 'direct']
+bs_ip = [i for i, r in enumerate(rules)
+         if r.get('ip') == ['geoip:whitelist'] and r.get('outboundTag') == 'direct']
+catch = rules[-1]
+sys.exit(0 if b.get('balancer') == 'block' and b.get('balancer-dns') == 'direct'
+         and bs_dom and bs_ip and catch.get('balancerTag') == 'balancer'
+         and bs_dom[0] < len(rules) - 1 else 1)" \
+    "$TMP/cfg_bs.json" "bs: БС-домены и адреса -> direct, остальное -> balancer"
+
+assert_py "
+import json, sys
+rules = json.load(open(sys.argv[1]))['routing']['rules']
+dns_rule = [i for i, r in enumerate(rules) if r.get('inboundTag') == ['dns-inbuilt']]
+first_domain = min(i for i, r in enumerate(rules) if 'domain' in r)
+sys.exit(0 if dns_rule and dns_rule[0] < first_domain else 1)" \
+    "$TMP/cfg_bs.json" "bs: правило dns-inbuilt раньше domain-правил"
+
+assert_py "
+import json, sys
+c = json.load(open(sys.argv[1]))
+s = c['dns']['servers']
+sys.exit(0 if len(s) == 3
+         and s[0]['address'].startswith('https+local://')
+         and s[0].get('domains') == ['geosite:category-whitelist']
+         and 'expectedIPs' not in s[0]
+         and s[1]['address'].startswith('https://')
+         and c['dns']['disableFallbackIfMatch'] is False else 1)" \
+    "$TMP/cfg_bs.json" "bs: DNS БС-доменов напрямую, остального — через прокси"
+
+# ------------------------------------------------------------- bs-probe.py
+
+PROBE="$ROOT/bs-probe.py"
+mkdir -p "$TMP/www"
+echo ok >"$TMP/www/index.html"
+cat >"$TMP/probe_settings.json" <<'JSON'
+{"bs":{"probe_external":[{"host":"127.0.0.1","port":18080,"path":"/","tls":false}],
+       "probe_bs":[{"host":"127.0.0.1","port":18081,"path":"/","tls":false}]}}
+JSON
+
+run_probe() {
+    BS_PROBE_SETTINGS="$TMP/probe_settings.json" python3 "$PROBE" --no-mark --timeout 1 "$@" >/dev/null 2>&1
+}
+
+python3 -m http.server 18080 --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 &
+SRV=$!
+sleep 1
+run_probe
+assert_rc "$?" 0 "bs-probe: внешняя проба прошла -> normal"
+kill "$SRV" 2>/dev/null
+wait "$SRV" 2>/dev/null
+
+python3 -m http.server 18081 --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 &
+SRV=$!
+sleep 1
+run_probe
+assert_rc "$?" 1 "bs-probe: внешняя недоступна, БС доступна -> bs"
+kill "$SRV" 2>/dev/null
+wait "$SRV" 2>/dev/null
+
+run_probe
+assert_rc "$?" 2 "bs-probe: ничего не доступно -> unknown"
 
 # ------------------------------------------------- определение архитектуры
 

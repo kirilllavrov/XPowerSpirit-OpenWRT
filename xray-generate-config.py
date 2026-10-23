@@ -40,14 +40,6 @@ IP_CHECK_GEOSITE = "geosite:category-ipcheck"
 # Правила роутинга по умолчанию (переопределяются из settings.json → routing)
 ROUTING_CONFIG = {
     "domainStrategy": "IPOnDemand",
-    "doh_domains": [
-        "common.dot.dns.yandex.net",
-        "cloudflare-dns.com",
-        "dns.google",
-        "dns.quad9.net",
-        "doh.opendns.com",
-        "dns.nextdns.io"
-    ],
     "block_domains": ["geosite:category-ads"],
     "direct_ips": ["geoip:ru", "geoip:private"],
     "direct_domains": [
@@ -60,7 +52,21 @@ ROUTING_CONFIG = {
     "proxy_domains": [
         "geosite:category-streaming",
         "geosite:category-games"
-    ]
+    ],
+    # Белые списки (БС) операторов РФ — отдельные категории тех же геофайлов.
+    # Домены живут в geosite.dat, адреса — в geoip.dat; это разные категории.
+    "bs_domains": ["geosite:category-whitelist"],
+    "bs_ips": ["geoip:whitelist"],
+    # DNS: БС/RU-домены резолвит Яндекс напрямую (DOHL, routing не проходит),
+    # всё остальное — DoH через прокси (входит в routing с inboundTag=dns-inbuilt).
+    "dns_direct_address": "https+local://common.dot.dns.yandex.net/dns-query",
+    "dns_proxy_address": "https://cloudflare-dns.com/dns-query",
+    "dns_hosts": {
+        "common.dot.dns.yandex.net": ["77.88.8.1", "77.88.8.8"],
+        "cloudflare-dns.com": ["1.0.0.1", "1.1.1.1"],
+        "dns.google": ["8.8.8.8", "8.8.4.4"],
+        "dns.nextdns.io": ["45.90.28.0", "45.90.30.0"]
+    }
 }
 
 
@@ -119,7 +125,65 @@ def normalize_outbound(ob: dict) -> dict:
 #   БАЗОВАЯ КОНФИГУРАЦИЯ
 # ============================================
 
-def base_config() -> dict:
+def build_dns(mode: str = "normal", has_proxy: bool = False) -> dict:
+    """
+    Встроенный DNS.
+
+    Первый сервер обслуживает домены, которые резолвятся напрямую (DOHL — в routing
+    не попадает): в normal это российские домены, в bs — белый список оператора.
+    Остальное резолвится DoH через прокси: такой запрос входит в routing с
+    inboundTag=dns-inbuilt и правилом уходит в balancer-dns. Причина: Яндекс может
+    не отдавать адреса заблокированных зарубежных сервисов, а из туннеля ответ
+    приходит корректный.
+
+    Последний сервер — аварийный прямой Яндекс на случай, когда прокси недоступен.
+    """
+    if mode == "bs":
+        # expectedIPs здесь нельзя: в списке БС могут быть зарубежные домены
+        direct = {
+            "address": ROUTING_CONFIG["dns_direct_address"],
+            "domains": ROUTING_CONFIG["bs_domains"],
+            "skipFallback": True,
+            "timeoutMs": 2000
+        }
+    else:
+        direct = {
+            "address": ROUTING_CONFIG["dns_direct_address"],
+            "domains": ["geosite:category-ru"],
+            "expectedIPs": ["geoip:ru"],
+            "skipFallback": True,
+            "timeoutMs": 2000
+        }
+
+    servers = [direct]
+    if has_proxy:
+        servers.append({
+            "address": ROUTING_CONFIG["dns_proxy_address"],
+            "skipFallback": True,
+            "timeoutMs": 2500
+        })
+    servers.append({
+        "address": ROUTING_CONFIG["dns_direct_address"],
+        "timeoutMs": 2000
+    })
+
+    return {
+        "tag": "dns-inbuilt",
+        "queryStrategy": "UseIPv4",
+        "disableCache": False,
+        "serveStale": True,
+        "serveExpiredTTL": 600,
+        "disableFallback": False,
+        # В bs fallback нужен: если Яндекс не отдаст адрес домена из белого списка,
+        # запрос должен уйти следующему серверу (через прокси).
+        "disableFallbackIfMatch": mode != "bs",
+        "enableParallelQuery": True,
+        "hosts": dict(ROUTING_CONFIG["dns_hosts"]),
+        "servers": servers
+    }
+
+
+def base_config(mode: str = "normal", has_proxy: bool = False) -> dict:
     """Возвращает базовую конфигурацию Xray с TProxy и DNS"""
     return {
         "log": {
@@ -127,37 +191,7 @@ def base_config() -> dict:
             "access": "/tmp/log/xray-access.log",
             "error": "/tmp/log/xray-error.log"
         },
-        "dns": {
-            "tag": "dns-inbuilt",
-            "queryStrategy": "UseIPv4",
-            "disableCache": False,
-            "serveStale": True,
-            "serveExpiredTTL": 600,
-            "disableFallback": False,
-            "disableFallbackIfMatch": True,
-            "enableParallelQuery": True,
-            "hosts": {
-                "common.dot.dns.yandex.net": ["77.88.8.1", "77.88.8.8"],
-                "cloudflare-dns.com": ["1.0.0.1", "1.1.1.1"],
-                "dns.nextdns.io": ["45.90.28.0", "45.90.30.0"]
-            },
-            "servers": [
-                {
-                    "address": "https+local://common.dot.dns.yandex.net/dns-query",
-                    "domains": ["geosite:category-ru"],
-                    "expectedIPs": ["geoip:ru"],
-                    "skipFallback": True
-                },
-                {
-                    "address": "https+local://cloudflare-dns.com/dns-query",
-                    "skipFallback": False
-                },
-                {
-                    "address": "https+local://dns.nextdns.io",
-                    "skipFallback": False
-                }
-            ]
-        },
+        "dns": build_dns(mode, has_proxy),
         "inbounds": [
             {
                 "tag": "tproxy-in",
@@ -192,13 +226,18 @@ def base_config() -> dict:
     }
 
 
-def build_direct_config() -> dict:
-    """Создаёт DIRECT-конфиг (без прокси) для режима 'hole'"""
-    cfg = base_config()
+def build_direct_config(mode: str = "normal") -> dict:
+    """
+    Создаёт DIRECT-конфиг (без прокси) для режима 'hole'.
+
+    DNS здесь всегда normal-вариант: в DIRECT-режиме весь трафик идёт напрямую,
+    и категории белого списка не нужны (их может не быть в геофайлах).
+    """
+    cfg = base_config("normal", has_proxy=False)
     cfg["outbounds"] = [make_direct_outbound(), make_block_outbound(), build_dns_outbound()]
     cfg["routing"] = {
         "domainStrategy": ROUTING_CONFIG["domainStrategy"],
-        "rules": build_rules([], direct_mode=True)
+        "rules": build_rules([], mode=mode, direct_mode=True)
     }
     return cfg
 
@@ -251,25 +290,26 @@ def save_config(cfg: dict, output: str) -> None:
     print(f"  ✓ Конфиг сохранён: {output}", file=sys.stderr)
 
 
-def build_proxy_config(proxy_outbounds: list) -> dict:
+def build_proxy_config(proxy_outbounds: list, mode: str = "normal") -> dict:
     """
     Собирает полный конфиг с прокси, burstObservatory, balancer и routing.
-    Используется всеми форматами (unified, json, vless).
+    mode="normal" — обычная маршрутизация, mode="bs" — белые списки оператора.
     """
-    cfg = base_config()
+    cfg = base_config(mode, has_proxy=True)
     cfg["outbounds"] = proxy_outbounds + [make_direct_outbound(), make_block_outbound(), build_dns_outbound()]
     cfg.update(build_burst_observatory(proxy_outbounds))
     routing = {
         "domainStrategy": ROUTING_CONFIG["domainStrategy"],
-        "rules": build_rules(proxy_outbounds),
-        "balancers": [build_balancer(proxy_outbounds)]
+        "rules": build_rules(proxy_outbounds, mode=mode),
+        "balancers": build_balancers(proxy_outbounds, mode)
     }
     cfg["routing"] = routing
     return cfg
 
 
-def print_proxy_summary(proxy_outbounds: list) -> None:
+def print_proxy_summary(proxy_outbounds: list, mode: str = "normal") -> None:
     """Выводит сводку о количестве прокси и балансировщике"""
+    print(f"  → Режим: {mode}", file=sys.stderr)
     print(f"  ✓ Сгенерировано {len(proxy_outbounds)} прокси", file=sys.stderr)
     if len(proxy_outbounds) > 1:
         print(f"  ✓ Балансировщик: {len(proxy_outbounds)} серверов (leastLoad)", file=sys.stderr)
@@ -295,6 +335,33 @@ def geosite_has_category(category: str) -> bool:
     return category.upper().encode() in data or category.lower().encode() in data
 
 
+def geoip_has_category(category: str) -> bool:
+    """Есть ли категория в geoip.dat (проверка до генерации bs-профиля)."""
+    asset_dir = os.environ.get("XRAY_LOCATION_ASSET", "/usr/share/xray")
+    try:
+        with open(os.path.join(asset_dir, "geoip.dat"), "rb") as f:
+            data = f.read()
+    except OSError:
+        return False
+    return category.lower().encode() in data
+
+
+def bs_categories_missing() -> list:
+    """
+    Категории белого списка, которых нет в геофайлах.
+    Неизвестная категория делает конфиг невалидным, поэтому bs-профиль
+    в этом случае не собирается (выход с кодом 3).
+    """
+    missing = []
+    for item in ROUTING_CONFIG["bs_domains"]:
+        if item.startswith("geosite:") and not geosite_has_category(item.split(":", 1)[1]):
+            missing.append(item)
+    for item in ROUTING_CONFIG["bs_ips"]:
+        if item.startswith("geoip:") and not geoip_has_category(item.split(":", 1)[1]):
+            missing.append(item)
+    return missing
+
+
 def ip_check_geosite_available() -> bool:
     """Правило проверки IP включаем только если категория реально есть в geosite.dat"""
     if geosite_has_category(IP_CHECK_GEOSITE.split(":", 1)[1]):
@@ -307,12 +374,13 @@ def ip_check_geosite_available() -> bool:
     return False
 
 
-def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
+def build_rules(proxy_outbounds: list, mode: str = "normal", direct_mode: bool = False) -> list:
     """
     Строит правила маршрутизации.
-    Использует настройки из settings.json → routing (либо дефолты).
-    Если несколько прокси, использует балансировщик.
-    Если один прокси, использует прямой outboundTag.
+
+    mode="normal": RU/private — напрямую, стриминг/игры и всё остальное — в балансировщик.
+    mode="bs": домены и адреса из белого списка — напрямую, всё остальное — в балансировщик
+    (т.е. в прокси). Реклама и QUIC блокируются в обоих режимах.
     """
     rules = [
         # Клиентский DNS (от dnsmasq) → dns-out (hijack → dns-inbuilt)
@@ -322,6 +390,16 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
             "outboundTag": "dns-out"
         }
     ]
+
+    # Non-local DNS (наш DoH через прокси) входит в routing с inboundTag = dns.tag.
+    # Правило обязано стоять раньше любых domain-правил, иначе домен DoH-сервера
+    # (cloudflare-dns.com) может попасть под direct и запрос уйдёт в блокировку.
+    if not direct_mode and proxy_outbounds:
+        rules.append({
+            "type": "field",
+            "inboundTag": ["dns-inbuilt"],
+            "balancerTag": "balancer-dns"
+        })
 
     # Домены проверки IP — всегда напрямую и раньше остальных правил:
     # иначе провайдер/сервис увидит IP прокси и определит VPN
@@ -333,13 +411,7 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
         })
 
     rules += [
-        # Ловим DNS через DoH, которые прошли мимо dnsmasq (от браузера)
-        {
-            "type": "field",
-            "domain": ROUTING_CONFIG["doh_domains"],
-            "outboundTag": "direct"
-        },
-        # Блокировка рекламы
+        # Блокировка рекламы — всегда, в любом режиме
         {
             "type": "field",
             "domain": ROUTING_CONFIG["block_domains"],
@@ -359,28 +431,45 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
             "network": "udp",
             "outboundTag": "block"
         },
+    ]
+
+    if mode == "bs":
+        # Белые списки оператора: домены и адреса — напрямую, прокси не тратится.
+        # Домены приходят из sniffing (SNI/Host), поэтому работают и без DNS-резолва.
+        rules.append({
+            "type": "field",
+            "domain": ROUTING_CONFIG["bs_domains"],
+            "outboundTag": "direct"
+        })
+        rules.append({
+            "type": "field",
+            "ip": ROUTING_CONFIG["bs_ips"],
+            "outboundTag": "direct"
+        })
+    else:
         # Локальные и российские IP — напрямую
-        {
+        rules.append({
             "type": "field",
             "ip": ROUTING_CONFIG["direct_ips"],
             "outboundTag": "direct"
-        },
+        })
         # Локальные и российские домены — напрямую
-        {
+        rules.append({
             "type": "field",
             "domain": ROUTING_CONFIG["direct_domains"],
             "outboundTag": "direct"
-        },
-    ]
-    
+        })
+
     if not direct_mode and proxy_outbounds:
         # Всегда через balancer — даже для одного прокси (observatory следит, fallback на direct)
-        rules.append({
-            "type": "field",
-            "domain": ROUTING_CONFIG["proxy_domains"],
-            "balancerTag": "balancer"
-        })
-        
+        if mode != "bs":
+            rules.append({
+                "type": "field",
+                "domain": ROUTING_CONFIG["proxy_domains"],
+                "balancerTag": "balancer"
+            })
+
+        # Всё остальное — в прокси.
         rules.append({
             "type": "field",
             "network": "tcp,udp",
@@ -392,25 +481,33 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
             "network": "tcp,udp",
             "outboundTag": "direct"
         })
-    
+
     return rules
 
 
-def build_balancer(proxy_outbounds: list) -> dict:
+def build_balancers(proxy_outbounds: list, mode: str = "normal") -> list:
     """
-    Создаёт конфигурацию балансировщика для нескольких прокси (leastLoad).    
-    leastLoad выбирает наиболее стабильные серверы на основе данных burstObservatory.    
-    Если все серверы не проходят — fallback на direct.
+    Балансировщики. Их всегда два:
+      balancer     — трафик; в bs fallbackTag=block (быстрый отказ, когда живых узлов нет),
+                     в normal — direct (как раньше);
+      balancer-dns — DNS-запросы; fallbackTag=direct, чтобы на старте,
+                     пока у observatory нет данных, резолв не упирался в blackhole.
     """
     selector = [ob["tag"] for ob in proxy_outbounds]
-    return {
-        "tag": "balancer",
-        "selector": selector,
-        "strategy": {
-            "type": "leastLoad",
+    return [
+        {
+            "tag": "balancer",
+            "selector": selector,
+            "strategy": {"type": "leastLoad"},
+            "fallbackTag": "block" if mode == "bs" else "direct"
         },
-        "fallbackTag": "direct"
-    }
+        {
+            "tag": "balancer-dns",
+            "selector": selector,
+            "strategy": {"type": "leastLoad"},
+            "fallbackTag": "direct"
+        }
+    ]
 
 
 def build_burst_observatory(proxy_outbounds: list) -> dict:
@@ -445,19 +542,22 @@ def build_burst_observatory(proxy_outbounds: list) -> dict:
 def parse_args():
     parser = argparse.ArgumentParser(description='Xray config generator for OpenWrt TProxy')
     parser.add_argument('--output', required=True, help='Output config file')
+    parser.add_argument('--mode', default='normal', choices=['normal', 'bs'],
+                        help='normal — обычная маршрутизация, bs — белые списки оператора')
     parser.add_argument('--format', default='unified', help=argparse.SUPPRESS)  # обратная совместимость, не используется
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    mode = args.mode
     
     # Загружаем настройки из единого JSON-конфига
     load_settings()
     if DOMAIN_WHITELIST:
         print(f"  → Domain whitelist из settings.json: {', '.join(DOMAIN_WHITELIST)}", file=sys.stderr)
     
-    print("  → Обработка унифицированной подписки", file=sys.stderr)
+    print(f"  → Обработка унифицированной подписки (режим: {mode})", file=sys.stderr)
     try:
         data = json.load(sys.stdin)
     except Exception as e:
@@ -467,23 +567,32 @@ def main():
     if data.get("hole", False):
         print("  [!] Обнаружен сервер 'hole' (срок подписки истёк).", file=sys.stderr)
         print("  [!] Включаем DIRECT-режим (весь трафик напрямую).", file=sys.stderr)
-        save_config(build_direct_config(), args.output)
+        save_config(build_direct_config(mode), args.output)
         return
     
     raw_outbounds = data.get("outbounds", [])
     if not raw_outbounds:
         log_error("No outbounds in unified input — switching to DIRECT")
-        save_config(build_direct_config(), args.output)
+        save_config(build_direct_config(mode), args.output)
         return
-    
+
+    # Категории белого списка должны существовать в геофайлах: неизвестная категория
+    # делает конфиг невалидным, поэтому такой профиль не устанавливаем (код 3).
+    if mode == "bs":
+        missing = bs_categories_missing()
+        if missing:
+            log_error(f"В геофайлах нет категорий: {', '.join(missing)}")
+            log_error("Пересоберите geosite.dat/geoip.dat — bs-профиль не собран")
+            sys.exit(3)
+
     # loopback возвращает трафик в маршрутизацию — в балансировщике он недопустим
     raw_outbounds = [
         ob for ob in raw_outbounds
         if ob.get("protocol") not in ("freedom", "blackhole", "dns", "loopback")
     ]
     proxy_outbounds = [normalize_outbound(ob) for ob in raw_outbounds]
-    cfg = build_proxy_config(proxy_outbounds)
-    print_proxy_summary(proxy_outbounds)
+    cfg = build_proxy_config(proxy_outbounds, mode=mode)
+    print_proxy_summary(proxy_outbounds, mode)
     save_config(cfg, args.output)
 
 

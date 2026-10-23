@@ -103,6 +103,38 @@ printf "\n[7] DNS Forwarding (dnsmasq → Xray:5353):\n"
 uci show dhcp.@dnsmasq[0].server 2>/dev/null | grep -q "127.0.0.1#5353" && \
     _ok "dnsmasq → 127.0.0.1:5353" || _fail "dnsmasq НЕ настроен на Xray DNS (5353)"
 
+# 7b. Режим БС (normal / bs)
+printf "\n[7b] Режим маршрутизации (БС):\n"
+MODE_FILE="/etc/xray/state/mode"
+if [ -f "$MODE_FILE" ]; then
+    MODE=$(cat "$MODE_FILE" 2>/dev/null)
+    case "$MODE" in
+    normal | bs) _ok "Активный режим: $MODE" ;;
+    *) _warn "Неизвестное значение в $MODE_FILE: '$MODE'" ;;
+    esac
+    if [ -s "/etc/xray/config.$MODE.json" ]; then
+        _ok "Профиль config.$MODE.json на месте"
+        cmp -s "/etc/xray/config.$MODE.json" "$CFG" && \
+            _ok "config.json соответствует активному профилю" || \
+            _warn "config.json расходится с профилем $MODE (проверь update-xray.sh)"
+    else
+        _warn "Профиль config.$MODE.json отсутствует"
+    fi
+else
+    _warn "Нет $MODE_FILE — сторож режима не запускался"
+fi
+if jq -e 'any(.routing.rules[]?; (.inboundTag // []) == ["dns-inbuilt"])' "$CFG" >/dev/null 2>&1; then
+    _ok "DNS через прокси: правило dns-inbuilt присутствует"
+else
+    _warn "Правила dns-inbuilt нет — DNS резолвится только напрямую"
+fi
+/etc/init.d/xray-mode enabled >/dev/null 2>&1 && \
+    _ok "Сторож режима включён (xray-mode)" || \
+    _warn "Сторож режима не включён: /etc/init.d/xray-mode enable"
+if [ -s /tmp/log/xray-mode.log ]; then
+    tail -2 /tmp/log/xray-mode.log | while read -r line; do printf "  → %s\n" "$line"; done
+fi
+
 # 8. Ошибки Xray
 printf "\n[8] Ошибки Xray:\n"
 if [ -s /tmp/log/xray-error.log ]; then

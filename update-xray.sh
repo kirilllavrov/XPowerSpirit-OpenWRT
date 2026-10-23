@@ -67,7 +67,6 @@ fetch_url() {
 CONFIG_DIR="/etc/xray"
 SETTINGS_JSON="$CONFIG_DIR/settings.json"
 CONFIG_JSON="$CONFIG_DIR/config.json"
-
 # =============================================
 #   ХЕЛПЕРЫ ДЛЯ ЕДИНОГО JSON-КОНФИГА
 # =============================================
@@ -159,6 +158,12 @@ resolve_xray_machine() {
 STATE_DIR="/etc/xray/state"
 TMP_DIR="/tmp/xray_update"
 
+# Профили маршрутизации: normal — обычный, bs — белые списки оператора.
+# Активный копируется в CONFIG_JSON сторожем или этим скриптом.
+MODE_FILE="$STATE_DIR/mode"
+CONFIG_NORMAL="$CONFIG_DIR/config.normal.json"
+CONFIG_BS="$CONFIG_DIR/config.bs.json"
+
 GENERATOR="/usr/share/xray/xray-generate-config.py"
 PARSER="/usr/share/xray/xray-sub-parser.py"
 
@@ -178,6 +183,33 @@ extract_sha256() {
         sed 's/.*= *//' |
         tr -cd '0-9a-fA-F' |
         cut -c1-64
+}
+
+# Добавляет значение в settings.json, если пути ещё нет (миграция старых установок)
+ensure_setting() {
+    local key="$1"
+    local json="$2"
+    local present
+    present=$(jq -r "$key | if . == null then empty else \"set\" end" "$SETTINGS_JSON" 2>/dev/null)
+    [ -n "$present" ] && return 0
+    if jq --argjson v "$json" "$key = \$v" "$SETTINGS_JSON" >"${SETTINGS_JSON}.tmp" 2>/dev/null; then
+        mv "${SETTINGS_JSON}.tmp" "$SETTINGS_JSON"
+        chmod 600 "$SETTINGS_JSON"
+        echo "  → settings.json: добавлено $key = $json" >>"$LOG"
+    else
+        rm -f "${SETTINGS_JSON}.tmp"
+        echo "[!] Не удалось добавить $key в settings.json" >>"$LOG"
+    fi
+}
+
+migrate_settings() {
+    ensure_setting ".routing.bs_domains" '["geosite:category-whitelist"]'
+    ensure_setting ".routing.bs_ips" '["geoip:whitelist"]'
+    ensure_setting ".bs.interval" '60'
+    ensure_setting ".bs.confirmations" '3'
+    ensure_setting ".bs.back_confirmations" '2'
+    ensure_setting ".bs.min_dwell" '600'
+    [ -f "$MODE_FILE" ] || echo "normal" >"$MODE_FILE"
 }
 
 # =============================================
@@ -209,6 +241,9 @@ fi
 # ============================
 
 [ -f "$SETTINGS_JSON" ] || die "Нет $SETTINGS_JSON"
+
+# Миграция настроек старых установок (bs.*, категории белого списка)
+migrate_settings
 
 HWID="$(settings_get ".hwid")"
 [ -z "$HWID" ] && die "HWID пуст в settings.json"
@@ -390,16 +425,31 @@ if curl -fsS -L \
         PARSE_RC=$?
 
         if [ "$PARSE_RC" -eq 0 ]; then
-            if python3 "$GENERATOR" --format unified --output "$TMP_DIR/config.json" < "$TMP_DIR/parsed.json" 2>>"$LOG"; then
-                if xray run -test -config "$TMP_DIR/config.json" >>"$LOG" 2>&1; then
-                    mv "$TMP_DIR/config.json" "$CONFIG_JSON"
-                    echo "[+] Новый config.json установлен" >>"$LOG"
+            # Один разбор подписки → два профиля: обычный и режим белых списков
+            if python3 "$GENERATOR" --mode normal --output "$TMP_DIR/config.normal.json" < "$TMP_DIR/parsed.json" 2>>"$LOG"; then
+                if xray run -test -config "$TMP_DIR/config.normal.json" >>"$LOG" 2>&1; then
+                    mv "$TMP_DIR/config.normal.json" "$CONFIG_NORMAL"
+                    echo "[+] config.normal.json обновлён" >>"$LOG"
                 else
-                    echo "[X] Новый config.json невалиден" >>"$LOG"
-                    xray run -test -config "$TMP_DIR/config.json" 2>>"$LOG"
+                    echo "[X] config.normal.json невалиден — прежний нормальный профиль сохранён" >>"$LOG"
                 fi
             else
-                echo "[X] Ошибка генератора конфига" >>"$LOG"
+                echo "[X] Ошибка генератора (normal)" >>"$LOG"
+            fi
+
+            python3 "$GENERATOR" --mode bs --output "$TMP_DIR/config.bs.json" < "$TMP_DIR/parsed.json" 2>>"$LOG"
+            BS_RC=$?
+            if [ "$BS_RC" -eq 0 ]; then
+                if xray run -test -config "$TMP_DIR/config.bs.json" >>"$LOG" 2>&1; then
+                    mv "$TMP_DIR/config.bs.json" "$CONFIG_BS"
+                    echo "[+] config.bs.json обновлён" >>"$LOG"
+                else
+                    echo "[X] config.bs.json невалиден — прежний bs-профиль сохранён" >>"$LOG"
+                fi
+            elif [ "$BS_RC" -eq 3 ]; then
+                echo "[!] В геофайлах нет категорий БС — bs-профиль не обновлён" >>"$LOG"
+            else
+                echo "[X] Ошибка генератора (bs), код $BS_RC — прежний bs-профиль сохранён" >>"$LOG"
             fi
         elif [ "$PARSE_RC" -eq 2 ]; then
             echo "[X] Парсер не нашёл серверов и не увидел hole-сигнал — прежний config.json сохранён" >>"$LOG"
@@ -412,7 +462,27 @@ else
 fi
 
 # Очистка временных файлов
-rm -f "$TMP_DIR/sub.txt" "$TMP_DIR/parsed.json" "$TMP_DIR/config.json"
+rm -f "$TMP_DIR/sub.txt" "$TMP_DIR/parsed.json" "$TMP_DIR/config.normal.json" "$TMP_DIR/config.bs.json"
+
+# ============================
+#   Выбор активного профиля
+# ============================
+
+MODE=$(cat "$MODE_FILE" 2>/dev/null || echo normal)
+case "$MODE" in
+bs) ACTIVE_PROFILE="$CONFIG_BS" ;;
+*)
+    MODE="normal"
+    ACTIVE_PROFILE="$CONFIG_NORMAL"
+    ;;
+esac
+
+if [ -s "$ACTIVE_PROFILE" ]; then
+    cp "$ACTIVE_PROFILE" "$CONFIG_JSON"
+    echo "[+] Активный профиль: $MODE ($ACTIVE_PROFILE)" >>"$LOG"
+else
+    echo "[X] Профиль $ACTIVE_PROFILE отсутствует — активный config.json не обновлён" >>"$LOG"
+fi
 
 # ============================
 #   Финальная проверка config.json

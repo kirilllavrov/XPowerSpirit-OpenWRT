@@ -22,12 +22,17 @@ GENERATOR="/usr/share/xray/xray-generate-config.py"
 PARSER="/usr/share/xray/xray-sub-parser.py"
 UPDATER="/usr/share/xray/update-xray.sh"
 NFT_UPDATER="/usr/share/xray/update-nft.sh"
+PROBE="/usr/share/xray/bs-probe.py"
+WATCHDOG="/usr/share/xray/xray-mode-watchdog.sh"
 CONFIG_DIR="/etc/xray"
 CONFIG_JSON="$CONFIG_DIR/config.json"
+CONFIG_NORMAL="$CONFIG_DIR/config.normal.json"
+CONFIG_BS="$CONFIG_DIR/config.bs.json"
 SETTINGS_JSON="$CONFIG_DIR/settings.json"
 TMP_DIR="/tmp/xray_install"
 GEO_DIR="/usr/share/xray"
 STATE_DIR="/etc/xray/state"
+MODE_FILE="$STATE_DIR/mode"
 
 # Значения из CLI (если не указаны — берутся из settings.default.json)
 SUB_USER_AGENT=""
@@ -235,6 +240,9 @@ if [ ! -f "$SETTINGS_JSON" ]; then
     echo "  ✓ settings.json инициализирован"
 fi
 
+# Режим маршрутизации по умолчанию — обычный (не БС)
+echo "normal" >"$MODE_FILE"
+
 # =============================================
 # 1. Устанавливаем Timezone и синхронизируем время
 # =============================================
@@ -258,6 +266,8 @@ download_script "$REPO/xray-generate-config.py" "$GENERATOR"
 download_script "$REPO/xray-sub-parser.py" "$PARSER"
 download_script "$REPO/update-xray.sh" "$UPDATER"
 download_script "$REPO/update-nft.sh" "$NFT_UPDATER"
+download_script "$REPO/bs-probe.py" "$PROBE"
+download_script "$REPO/xray-mode-watchdog.sh" "$WATCHDOG"
 
 echo "[+] Все скрипты загружены и готовы к использованию"
 
@@ -728,6 +738,39 @@ chmod +x /etc/init.d/xray
 echo "[+] init.d для Xray создан и включён"
 
 # =============================================
+# 8b. Сторож режима белых списков (БС)
+# =============================================
+echo "8b. Создаём init.d для сторожа режима БС..."
+
+cat >/etc/init.d/xray-mode <<'MODEEOF'
+#!/bin/sh /etc/rc.common
+# Сторож режима БС: опрашивает доступность напрямую (SO_MARK=2, мимо TProxy)
+# и переключает профиль: config.normal.json ↔ config.bs.json
+
+USE_PROCD=1
+START=86
+STOP=05
+
+start_service() {
+    procd_open_instance "watchdog"
+    procd_set_param command /usr/share/xray/xray-mode-watchdog.sh
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_set_param respawn 3600 5 5
+    procd_close_instance
+}
+
+service_triggers() {
+    procd_add_reload_trigger "xray-mode"
+}
+MODEEOF
+
+chmod +x /etc/init.d/xray-mode
+/etc/init.d/xray-mode enable
+
+echo "[+] init.d для сторожа создан и включён"
+
+# =============================================
 # 9. Настраиваем routing
 # =============================================
 echo "9. Настраиваем routing..."
@@ -837,13 +880,27 @@ elif [ "$PARSE_RC" -ne 0 ]; then
     exit 1
 fi
 
-python3 "$GENERATOR" --format unified --output "$CONFIG_JSON" < "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE" || {
-    echo "  [X] Ошибка генератора конфига" >&2
+python3 "$GENERATOR" --mode normal --output "/tmp/config.normal.json" < "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE" || {
+    echo "  [X] Ошибка генератора конфига (normal)" >&2
     rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
     exit 1
 }
+mv "/tmp/config.normal.json" "$CONFIG_NORMAL"
 
-rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json"
+# bs-профиль собираем отдельно: при отсутствии категорий в геофайлах он
+# недоступен, но установка продолжается — работает normal-режим.
+python3 "$GENERATOR" --mode bs --output "/tmp/config.bs.json" < "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE"
+BS_RC=$?
+if [ "$BS_RC" -eq 0 ]; then
+    mv "/tmp/config.bs.json" "$CONFIG_BS"
+    echo "  ✓ config.bs.json собран"
+else
+    rm -f "$CONFIG_BS"
+    echo "  [!] bs-профиль не собран (код $BS_RC): в геофайлах нет категорий БС" >&2
+fi
+
+cp "$CONFIG_NORMAL" "$CONFIG_JSON"
+rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json" "/tmp/config.bs.json"
 
 if [ ! -s "$CONFIG_JSON" ]; then
     die "Не удалось создать config.json"
@@ -888,6 +945,8 @@ fi
 for i in 1 2 3 4 5 6 7; do
     sleep 5
     if curl -fs --max-time 3 https://www.google.com/gen_204 >/dev/null; then
+        # Сеть поднялась — сбрасываем накопленные подтверждения БС
+        /usr/share/xray/xray-mode-watchdog.sh --reset >/dev/null 2>&1
         /usr/share/xray/update-xray.sh &
         exit 0
     fi
@@ -905,6 +964,18 @@ if xray run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
 	echo "  ✓ $CONFIG_JSON прошел проверку"
 else
 	die "$CONFIG_JSON НЕ прошел проверку!"
+fi
+
+if [ -s "$CONFIG_BS" ]; then
+	if xray run -test -config "$CONFIG_BS" >/dev/null 2>&1; then
+		echo "  ✓ $CONFIG_BS прошел проверку"
+	else
+		# Не валим установку: без bs-профиля работает normal-режим
+		rm -f "$CONFIG_BS"
+		echo "  [!] $CONFIG_BS невалиден — файл удалён, режим БС недоступен"
+	fi
+else
+	echo "  [-] $CONFIG_BS отсутствует — режим БС недоступен"
 fi
 
 # =============================================
