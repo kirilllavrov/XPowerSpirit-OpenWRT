@@ -769,11 +769,19 @@ download_file "$SUB_URL" "/tmp/sub_raw.txt" "x-hwid: $HWID" || die "Не уда�
 head -n 1 "/tmp/sub_raw.txt" 2>/dev/null | grep -qi "<html\|<!DOCTYPE" && die "Подписка вернула HTML, а не данные"
 
 # Единый пайплайн: парсер (с автоопределением формата) → генератор
-python3 "$PARSER" --ua "$SUB_UA" --remarks "$REMARKS" < "/tmp/sub_raw.txt" > "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE" || {
-    echo "  [X] Ошибка парсера подписки" >&2
+python3 "$PARSER" --ua "$SUB_UA" --remarks "$REMARKS" < "/tmp/sub_raw.txt" > "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE"
+PARSE_RC=$?
+
+if [ "$PARSE_RC" -eq 2 ]; then
+    echo "  [X] В подписке не найдено ни одного сервера: не тот формат (--sub-ua), пустой фильтр --remarks" >&2
+    echo "      или все серверы оказались заглушками. DIRECT-конфиг в этом случае не создаётся." >&2
     rm -f "/tmp/sub_raw.txt"
     exit 1
-}
+elif [ "$PARSE_RC" -ne 0 ]; then
+    echo "  [X] Ошибка парсера подписки (код $PARSE_RC)" >&2
+    rm -f "/tmp/sub_raw.txt"
+    exit 1
+fi
 
 python3 "$GENERATOR" --format unified --output "$CONFIG_JSON" < "/tmp/parsed_outbounds.json" 2>>"$LOG_FILE" || {
     echo "  [X] Ошибка генератора конфига" >&2

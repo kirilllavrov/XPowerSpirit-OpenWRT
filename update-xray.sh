@@ -321,13 +321,12 @@ if curl -s -L \
         echo "[X] Подписка вернула HTML, а не данные" >>"$LOG"
     else
         # Единый пайплайн: парсер (с автоопределением формата) → генератор
-        if [ -n "$REMARKS_FILTER" ]; then
-            python3 "$PARSER" --ua "$SUB_USER_AGENT" --remarks "$REMARKS_FILTER" < "$TMP_DIR/sub.txt" > "$TMP_DIR/parsed.json" 2>>"$LOG"
-        else
-            python3 "$PARSER" --ua "$SUB_USER_AGENT" < "$TMP_DIR/sub.txt" > "$TMP_DIR/parsed.json" 2>>"$LOG"
-        fi
-        
-        if [ $? -eq 0 ]; then
+        set -- --ua "$SUB_USER_AGENT"
+        [ -n "$REMARKS_FILTER" ] && set -- "$@" --remarks "$REMARKS_FILTER"
+        python3 "$PARSER" "$@" < "$TMP_DIR/sub.txt" > "$TMP_DIR/parsed.json" 2>>"$LOG"
+        PARSE_RC=$?
+
+        if [ "$PARSE_RC" -eq 0 ]; then
             if python3 "$GENERATOR" --format unified --output "$TMP_DIR/config.json" < "$TMP_DIR/parsed.json" 2>>"$LOG"; then
                 if xray run -test -config "$TMP_DIR/config.json" >>"$LOG" 2>&1; then
                     mv "$TMP_DIR/config.json" "$CONFIG_JSON"
@@ -339,8 +338,10 @@ if curl -s -L \
             else
                 echo "[X] Ошибка генератора конфига" >>"$LOG"
             fi
+        elif [ "$PARSE_RC" -eq 2 ]; then
+            echo "[X] Парсер не нашёл серверов и не увидел hole-сигнал — прежний config.json сохранён" >>"$LOG"
         else
-            echo "[X] Ошибка парсера подписки" >>"$LOG"
+            echo "[X] Ошибка парсера подписки (код $PARSE_RC) — прежний config.json сохранён" >>"$LOG"
         fi
     fi
 else

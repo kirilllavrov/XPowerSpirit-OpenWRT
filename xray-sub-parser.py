@@ -278,7 +278,12 @@ def _is_json_format(user_agent: str) -> bool:
 def is_hole(ob: dict) -> bool:
     """Проверяет, является ли outbound сигналом hole (окончание подписки)"""
     try:
-        return ob.get("settings", {}).get("vnext", [{}])[0].get("address", "") == "hole"
+        settings = ob.get("settings") or {}
+        vnext = settings.get("vnext") or []
+        if vnext:
+            return vnext[0].get("address", "") == "hole"
+        # Встречается и форма {"protocol": "freedom", "settings": {"address": "hole"}}
+        return settings.get("address", "") == "hole"
     except Exception:
         return False
 
@@ -449,6 +454,12 @@ def unified_main():
         result = {"hole": hole, "outbounds": outbounds}
 
     print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    # hole — осознанный сигнал провайдера (DIRECT), пустой результат без hole — сбой:
+    # не тот формат по UA, не найден remarks, все серверы оказались заглушками.
+    if not result["hole"] and not result["outbounds"]:
+        log_error("No outbounds parsed and no hole signal — refusing to emit empty result")
+        sys.exit(2)
 
 
 # ================================================
