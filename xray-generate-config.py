@@ -431,6 +431,11 @@ def main():
         save_config(build_direct_config(), args.output)
         return
     
+    # loopback возвращает трафик в маршрутизацию — в балансировщике он недопустим
+    raw_outbounds = [
+        ob for ob in raw_outbounds
+        if ob.get("protocol") not in ("freedom", "blackhole", "dns", "loopback")
+    ]
     proxy_outbounds = [normalize_outbound(ob) for ob in raw_outbounds]
     cfg = build_proxy_config(proxy_outbounds)
     print_proxy_summary(proxy_outbounds)

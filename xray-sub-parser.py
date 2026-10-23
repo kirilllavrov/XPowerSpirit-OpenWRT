@@ -378,7 +378,9 @@ def parse_json_subscription(raw_data: str, remarks_filter: str = '') -> dict:
 
             # Пропускаем служебные outbounds
             protocol = ob.get("protocol", "")
-            if protocol in ("freedom", "blackhole", "dns"):
+            # loopback — не сервер, а внутренняя петля: его settings.inboundTag
+            # возвращает трафик в маршрутизацию, в балансировщике ему не место
+            if protocol in ("freedom", "blackhole", "dns", "loopback"):
                 continue
 
             # Пропускаем заглушки (невалидные серверы)
