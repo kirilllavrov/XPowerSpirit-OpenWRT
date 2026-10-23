@@ -71,8 +71,8 @@ def load_settings():
                 for key in ROUTING_CONFIG:
                     if key in user_routing:
                         ROUTING_CONFIG[key] = user_routing[key]
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [!] Не удалось прочитать {SETTINGS_FILE}: {e}", file=sys.stderr)
 
 
 # ============================================

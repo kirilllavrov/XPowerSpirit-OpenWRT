@@ -20,8 +20,16 @@ ss -tuln 2>/dev/null | grep -q ':12345' && \
 printf "\n[3] Config Xray:\n"
 CFG="/etc/xray/config.json"
 [ -f "$CFG" ] || { _fail "$CFG отсутствует!"; exit 1; }
-grep -q '"tproxy": "tproxy"' "$CFG" && _ok "TProxy включён в inbound" || _fail "TProxy не настроен"
-grep -q '"mark": 2' "$CFG" && _ok "Mark 2 на месте (sockopt) — loop prevention через OUTPUT" || _warn "Mark 2 не найден (может быть не указан явно)"
+if jq -e 'any(.inbounds[]?; .streamSettings.sockopt.tproxy == "tproxy")' "$CFG" >/dev/null 2>&1; then
+    _ok "TProxy включён в inbound"
+else
+    _fail "TProxy не настроен"
+fi
+if jq -e 'any(.outbounds[]?; .streamSettings.sockopt.mark == 2)' "$CFG" >/dev/null 2>&1; then
+    _ok "Mark 2 на месте (sockopt) — loop prevention через OUTPUT"
+else
+    _warn "Mark 2 не найден (может быть не указан явно)"
+fi
 
 # 4. nftables (inet fw4, цепочка xray_tproxy)
 printf "\n[4] nftables (inet fw4 xray_tproxy):\n"
@@ -98,7 +106,7 @@ fi
 
 # 9. Доступность сервера
 printf "\n[9] Доступность сервера:\n"
-SERVER=$(grep -o '"address": "[^"]*"' "$CFG" | head -1 | cut -d'"' -f4)
+SERVER=$(jq -r '[.outbounds[]?.settings.vnext[]?.address] | first // empty' "$CFG" 2>/dev/null)
 if [ -n "$SERVER" ]; then
     printf "  Проверка %s... " "$SERVER"
     curl -sI -m 3 "https://$SERVER" >/dev/null 2>&1 && _ok "Доступен (HTTPS)" || \

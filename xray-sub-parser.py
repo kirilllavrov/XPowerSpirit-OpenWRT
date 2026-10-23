@@ -119,10 +119,22 @@ def parse_extra_json(extra_raw: str):
     if not extra_raw:
         return None
     try:
-        decoded = urlparse.unquote(extra_raw)
-        return json.loads(decoded)
+        return json.loads(extra_raw)
     except Exception:
         return None
+
+
+def get_raw_param(query: str, key: str):
+    """
+    Значение параметра из сырой query-строки.
+    Нужно для extra: parse_qs уже декодирует значения и превращает '+' в пробел,
+    поэтому повторное декодирование портит JSON.
+    """
+    prefix = key + "="
+    for pair in query.split("&"):
+        if pair.startswith(prefix):
+            return urlparse.unquote(pair[len(prefix):])
+    return None
 
 
 # -----------------------------
@@ -186,7 +198,7 @@ def parse_vless_uri(uri: str, idx: int):
     host_header = get_param("host", None)
     grpc_service = get_param("serviceName", None) or get_param("grpc-service-name", None)
     xhttp_mode = get_param("mode", None)
-    extra_raw = get_param("extra", None)
+    extra_raw = get_raw_param(parsed.query, "extra")
 
     # SETTINGS
     user_obj = {"id": uuid, "encryption": encryption}

@@ -39,7 +39,7 @@ fetch_url() {
     _os=$(settings_get ".device_os" 2>/dev/null || echo "")
 
     while [ $retry -le $max_retries ]; do
-        curl -s -L --max-time 15 \
+        curl -fsS -L --max-time 15 \
             -H "User-Agent: $_ua" \
             ${_ver:+-H "X-Ver-Os: $_ver"} \
             ${_model:+-H "X-Device-Model: $_model"} \
@@ -183,12 +183,18 @@ for i in $(seq 1 5); do
     sleep 2
 done
 
-LATEST_VERSION=$(curl -s --user-agent "OpenWrt-Xray/1.0" --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest |
-    sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
+LATEST_VERSION=$(curl -fsS --user-agent "OpenWrt-Xray/1.0" --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest |
+    jq -r '.tag_name // empty')
 
 if [ -z "$LATEST_VERSION" ]; then
     echo "[!] Не удалось получить версию Xray — пропускаем обновление" >>"$LOG"
 else
+    LATEST_VER_NUM="${LATEST_VERSION#v}"
+    CURRENT_VERSION=""
+    if [ -x /usr/bin/xray ]; then
+        CURRENT_VERSION=$(/usr/bin/xray version 2>/dev/null | head -1 | awk '{print $2}')
+    fi
+
     ARCH=$(uname -m)
     case "$ARCH" in
     x86_64 | amd64) MACHINE="64" ;;
@@ -208,8 +214,8 @@ else
             FREE_SPACE_TMP=$(df /tmp | awk 'NR==2 {print $4}')
             if [ "$FREE_SPACE_TMP" -lt 20480 ]; then
                 echo "[!] Недостаточно места в /tmp (нужно минимум 20MB) — пропускаем" >>"$LOG"
-            elif [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ]; then
-                echo "✓ Xray ZIP не изменился" >>"$LOG"
+            elif [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ] && [ "$CURRENT_VERSION" = "$LATEST_VER_NUM" ]; then
+                echo "✓ Xray ZIP не изменился, версия $CURRENT_VERSION актуальна" >>"$LOG"
             else
                 echo "→ Скачиваем Xray ZIP..." >>"$LOG"
                 if fetch_url "$ZIP_URL" "$ZIP_DEST"; then
@@ -308,7 +314,7 @@ _model=$(settings_get ".device_model" 2>/dev/null || echo "")
 _os=$(settings_get ".device_os" 2>/dev/null || echo "")
 
 # Скачиваем подписку
-if curl -s -L \
+if curl -fsS -L \
     -H "User-Agent: $SUB_USER_AGENT" \
     -H "x-hwid: $HWID" \
     ${_ver:+-H "X-Ver-Os: $_ver"} \

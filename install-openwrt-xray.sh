@@ -105,7 +105,7 @@ download_file() {
     _os=$(settings_get ".device_os" 2>/dev/null || echo "")
 
     while [ $retry -le $max_retries ]; do
-        curl -s -L --max-time 15 \
+        curl -fsS -L --max-time 15 \
             -H "User-Agent: $_ua" \
             ${_ver:+-H "X-Ver-Os: $_ver"} \
             ${_model:+-H "X-Device-Model: $_model"} \
@@ -475,8 +475,8 @@ for i in $(seq 1 10); do
 done
 
 # Получаем версию Xray
-LATEST_VERSION=$(curl -s --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest |
-	sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
+LATEST_VERSION=$(curl -fsS --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest |
+	jq -r '.tag_name // empty')
 
 [ -z "$LATEST_VERSION" ] && die "Не удалось получить версию Xray"
 
@@ -805,7 +805,7 @@ echo "12. Настройка Crontab..."
 uci set system.@system[0].cronloglevel='9'
 uci commit system
 
-CRON_ENTRY="30 2 * * * $UPDATER"
+CRON_ENTRY="30 2 * * * $UPDATER >>/tmp/log/xray-update.log 2>&1"
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
 	(
 		crontab -l 2>/dev/null || true
