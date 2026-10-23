@@ -13,6 +13,12 @@ else
     LAN_IF="${LAN_IF%% *}"
 fi
 
+if [ -z "$LAN_IF" ]; then
+    logger -t update-nft "LAN interface not detected — TProxy rules not applied"
+    echo "[X] Не удалось определить LAN-интерфейс (br-lan): правила TProxy не применены" >&2
+    exit 1
+fi
+
 # Автоопределение Guest интерфейса
 if ip link show br-guest >/dev/null 2>&1; then
     GUEST_IF="br-guest"
@@ -48,7 +54,38 @@ except:
 ' "$CONF" 2>/dev/null
 }
 
+# IP DNS-серверов из config.json (dns.hosts и литеральные адреса в dns.servers):
+# нужны, чтобы запросы DoH уходили мимо TProxy и не зацикливались
+extract_dns_ips() {
+    python3 -c '
+import json, sys
+def is_ipv4(a):
+    if not isinstance(a, str) or a.count(".") != 3:
+        return False
+    return all(p.isdigit() and 0 <= int(p) <= 255 for p in a.split("."))
+try:
+    with open(sys.argv[1]) as f:
+        cfg = json.load(f)
+    dns = cfg.get("dns") or {}
+    ips = set()
+    for value in (dns.get("hosts") or {}).values():
+        for a in (value if isinstance(value, list) else [value]):
+            if is_ipv4(a):
+                ips.add(a)
+    for server in (dns.get("servers") or []):
+        addr = server.get("address") if isinstance(server, dict) else server
+        if is_ipv4(addr):
+            ips.add(addr)
+    for a in sorted(ips):
+        print(a)
+except:
+    pass
+' "$CONF" 2>/dev/null
+}
+
 setup_network() {
+    DNS_SET=$(extract_dns_ips | paste -sd, -)
+
     # Policy routing
     while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
     ip route flush table 100 2>/dev/null
@@ -78,7 +115,9 @@ setup_network() {
 
     # Базовые bypass
     nft add rule inet fw4 xray_tproxy ip daddr { 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } return
-    nft add rule inet fw4 xray_tproxy ip daddr { 77.88.8.8, 77.88.8.1, 1.1.1.1, 1.0.0.1, 45.90.28.0, 45.90.30.0 } return
+    if [ -n "$DNS_SET" ]; then
+        nft add rule inet fw4 xray_tproxy ip daddr { $DNS_SET } return
+    fi
 
     # DHCP — НЕ ТРОГАЕМ
     nft add rule inet fw4 xray_tproxy udp dport { 67, 68 } return
@@ -119,7 +158,9 @@ setup_network() {
 
     # Базовые bypass (локальные сети)
     nft add rule inet fw4 xray_output ip daddr { 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } return
-    nft add rule inet fw4 xray_output ip daddr { 77.88.8.8, 77.88.8.1, 1.1.1.1, 1.0.0.1, 45.90.28.0, 45.90.30.0 } return
+    if [ -n "$DNS_SET" ]; then
+        nft add rule inet fw4 xray_output ip daddr { $DNS_SET } return
+    fi
     nft add rule inet fw4 xray_output udp dport { 67, 68 } return
 
     # Bypass для прокси-серверов
@@ -132,6 +173,22 @@ setup_network() {
     # Помечаем mark 1 для перенаправления через PREROUTING → TProxy
     nft add rule inet fw4 xray_output meta l4proto tcp meta mark set 1
     nft add rule inet fw4 xray_output meta l4proto udp meta mark set 1
+
+    # Проверяем, что ключевые правила реально применились: иначе init.d сочтёт
+    # правила готовыми и запустит Xray без TProxy (прокси молча не работает)
+    _chain=$(nft list chain inet fw4 xray_tproxy 2>/dev/null)
+    for _pat in "tproxy ip to 127.0.0.1:12345" "udp dport 443 drop"; do
+        if ! echo "$_chain" | grep -qF "$_pat"; then
+            logger -t update-nft "TProxy chain incomplete: missing $_pat"
+            echo "[X] В цепочке xray_tproxy нет правила: $_pat" >&2
+            exit 1
+        fi
+    done
+    if ! echo "$_chain" | grep -qE "mark (0x0*2|2) return"; then
+        logger -t update-nft "Loop prevention rule missing (mark 2 return)"
+        echo "[X] В цепочке xray_tproxy нет защиты от петель (mark 2 return)" >&2
+        exit 1
+    fi
 
     logger -t update-nft "Xray TProxy rules applied"
 }

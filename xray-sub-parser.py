@@ -45,6 +45,20 @@ def normalize_tag(tag: str) -> str:
     return tag or "proxy"
 
 
+# selector балансировщика и subjectSelector observatory сопоставляются с тегами
+# по префиксу, поэтому теги прокси получают собственный префикс и не могут
+# случайно захватить служебные outbound (direct/block/dns-out)
+TAG_PREFIX = "proxy-"
+
+
+def proxy_tag(name: str, fallback: str) -> str:
+    """Тег outbound-а из подписки с гарантированным префиксом"""
+    base = normalize_tag(name) if name else ""
+    if not base or base == "proxy":
+        base = fallback
+    return TAG_PREFIX + base
+
+
 # -----------------------------
 # ЗАГРУЗКА URL
 # -----------------------------
@@ -126,7 +140,7 @@ def parse_vless_uri(uri: str, idx: int):
 
     # ТЕГ
     fragment = parsed.fragment or ""
-    tag = normalize_tag(fragment) if fragment else f"proxy-vless-{idx}"
+    tag = proxy_tag(fragment, f"vless-{idx}")
 
     # QUERY
     q = urlparse.parse_qs(parsed.query)
@@ -363,8 +377,7 @@ def parse_json_subscription(raw_data: str, remarks_filter: str = '') -> dict:
                 continue
 
             # Нормализуем тег
-            tag = ob.get("tag", "") or "proxy"
-            tag = normalize_tag(tag)
+            tag = proxy_tag(ob.get("tag", ""), "node")
             counter = 2
             base_tag = tag
             while tag in seen_tags:
