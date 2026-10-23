@@ -32,11 +32,6 @@ SETTINGS_FILE = "/etc/xray/settings.json"
 # Whitelist по умолчанию (переопределяется из settings.json)
 DOMAIN_WHITELIST = []
 
-# Категория geosite с доменами проверки «какой у меня IP» (ifconfig.me, api.ipify.org,
-# 2ip.ru и подобные). Провайдеры и сервисы используют их для детекта VPN, поэтому
-# такие домены обязаны идти напрямую. Сами домены живут в geosite.dat, не в settings.json.
-IP_CHECK_GEOSITE = "geosite:category-ipcheck"
-
 # Правила роутинга по умолчанию (переопределяются из settings.json → routing)
 ROUTING_CONFIG = {
     "domainStrategy": "IPOnDemand",
@@ -365,11 +360,11 @@ def bs_categories_missing() -> list:
 
 def ip_check_geosite_available() -> bool:
     """Правило проверки IP включаем только если категория реально есть в geosite.dat"""
-    if geosite_has_category(IP_CHECK_GEOSITE.split(":", 1)[1]):
+    if geosite_has_category("category-ipcheck"):
         return True
     print(
-        f"  [!] {IP_CHECK_GEOSITE} отсутствует в geosite.dat — правило проверки IP пропущено.\n"
-        f"      Пересоберите геофайлы, иначе сервисы проверки IP пойдут через прокси.",
+        "  [!] geosite:category-ipcheck отсутствует в geosite.dat — правило проверки IP пропущено.\n"
+        "      Пересоберите геофайлы, иначе сервисы проверки IP пойдут через прокси.",
         file=sys.stderr,
     )
     return False
@@ -402,12 +397,13 @@ def build_rules(proxy_outbounds: list, mode: str = "normal", direct_mode: bool =
             "balancerTag": "balancer-dns"
         })
 
-    # Домены проверки IP — всегда напрямую и раньше остальных правил:
-    # иначе провайдер/сервис увидит IP прокси и определит VPN
+    # Домены проверки «какой у меня IP» (категория geosite:category-ipcheck в geosite.dat):
+    # всегда напрямую и раньше остальных правил, иначе провайдер/сервис увидит IP прокси
+    # и определит VPN. Отдельное правило, а не direct_domains: в режиме bs тот список не используется.
     if ip_check_geosite_available():
         rules.append({
             "type": "field",
-            "domain": [IP_CHECK_GEOSITE],
+            "domain": ["geosite:category-ipcheck"],
             "outboundTag": "direct"
         })
 
