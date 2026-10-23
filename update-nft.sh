@@ -3,6 +3,20 @@
 
 CONF="/etc/xray/config.json"
 
+# Откат при неудаче: иначе маркировка трафика роутера остаётся без TProxy-правил
+# (пакет уходит в table 100 → lo и теряется), и роутер остаётся без интернета.
+fail() {
+    logger -t update-nft "$1"
+    echo "[X] $1" >&2
+    nft delete table inet xray_self 2>/dev/null
+    nft flush chain inet fw4 xray_tproxy 2>/dev/null
+    nft delete chain inet fw4 xray_tproxy 2>/dev/null
+    while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
+    ip route flush table 100 2>/dev/null
+    echo "[X] Правила TProxy откатены, трафик идёт напрямую" >&2
+    exit 1
+}
+
 # Автоопределение LAN интерфейса
 if ip link show br-lan >/dev/null 2>&1; then
     LAN_IF="br-lan"
@@ -14,9 +28,7 @@ else
 fi
 
 if [ -z "$LAN_IF" ] || ! ip link show "$LAN_IF" >/dev/null 2>&1; then
-    logger -t update-nft "LAN interface '$LAN_IF' does not exist — TProxy rules not applied"
-    echo "[X] LAN-интерфейс '${LAN_IF:-<пусто>}' не существует: правила TProxy не применены" >&2
-    exit 1
+    fail "LAN-интерфейс '${LAN_IF:-<пусто>}' не существует"
 fi
 
 # Автоопределение Guest интерфейса
@@ -191,35 +203,25 @@ setup_network() {
     _chain=$(nft list chain inet fw4 xray_tproxy 2>/dev/null)
     for _pat in "tproxy ip to 127.0.0.1:12345" "udp dport 443 drop"; do
         if ! echo "$_chain" | grep -qF "$_pat"; then
-            logger -t update-nft "TProxy chain incomplete: missing $_pat"
-            echo "[X] В цепочке xray_tproxy нет правила: $_pat" >&2
-            exit 1
+            fail "В цепочке xray_tproxy нет правила: $_pat"
         fi
     done
     if ! echo "$_chain" | grep -qE "mark (0x0*2|2) return"; then
-        logger -t update-nft "Loop prevention rule missing (mark 2 return)"
-        echo "[X] В цепочке xray_tproxy нет защиты от петель (mark 2 return)" >&2
-        exit 1
+        fail "В цепочке xray_tproxy нет защиты от петель (mark 2 return)"
     fi
     if [ -n "$DNS_SET" ]; then
         _dns_first=${DNS_SET%%,*}
         if ! echo "$_chain" | grep -qF "$_dns_first"; then
-            logger -t update-nft "DNS bypass rule missing ($_dns_first)"
-            echo "[X] В цепочке xray_tproxy нет bypass для DNS-серверов ($_dns_first)" >&2
-            exit 1
+            fail "В цепочке xray_tproxy нет bypass для DNS-серверов ($_dns_first)"
         fi
     fi
 
     _self=$(nft list chain inet xray_self output 2>/dev/null)
     if ! echo "$_self" | grep -q "mark set 0x00000001"; then
-        logger -t update-nft "Self-traffic chain incomplete: mark rule missing"
-        echo "[X] В цепочке xray_self нет правила маркировки (mark set 1)" >&2
-        exit 1
+        fail "В цепочке xray_self нет правила маркировки (mark set 1)"
     fi
     if ! echo "$_self" | grep -qE "type route hook output priority mangle"; then
-        logger -t update-nft "Self-traffic chain has wrong type/hook — router traffic will bypass proxy"
-        echo "[X] Цепочка xray_self должна быть type route hook output priority mangle" >&2
-        exit 1
+        fail "Цепочка xray_self должна быть type route hook output priority mangle"
     fi
 
     logger -t update-nft "Xray TProxy rules applied"
