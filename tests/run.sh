@@ -18,6 +18,11 @@ if [ -z "$ASSET_DIR" ]; then
     done
 fi
 
+# Правила роутинга живут только в settings.json — тесты берут эталон из репозитория
+XRAY_SETTINGS_FILE="$TMP/settings.json"
+cp "$ROOT/settings.default.json" "$XRAY_SETTINGS_FILE"
+export XRAY_SETTINGS_FILE
+
 PASS=0
 FAIL=0
 ok() { PASS=$((PASS + 1)); printf '[ OK ] %s\n' "$1"; }
@@ -219,6 +224,17 @@ sys.exit(0 if any('geosite:category-ipcheck' in d
                   for r in rules for d in r.get('domain', [])) else 1)" \
         "$TMP/config_$mode.json" "генератор: в режиме $mode ipcheck → direct"
 done
+
+# Без routing в settings.json генератор обязан отказаться, а не собрать конфиг без правил
+jq 'del(.routing)' "$TMP/settings.json" >"$TMP/settings_norouting.json"
+XRAY_SETTINGS_FILE="$TMP/settings_norouting.json" python3 "$GENERATOR" \
+    --output "$TMP/cfg_norouting.json" <"$TMP/unified.json" >/dev/null 2>&1
+assert_rc "$?" 1 "генератор: без routing в settings.json — отказ (код 1)"
+
+jq 'del(.routing.direct_ips)' "$TMP/settings.json" >"$TMP/settings_partial.json"
+XRAY_SETTINGS_FILE="$TMP/settings_partial.json" python3 "$GENERATOR" \
+    --output "$TMP/cfg_partial.json" <"$TMP/unified.json" >/dev/null 2>&1
+assert_rc "$?" 1 "генератор: нет обязательного ключа direct_ips — отказ (код 1)"
 
 # -------------------------------------------- режимы normal / bs (белые списки)
 

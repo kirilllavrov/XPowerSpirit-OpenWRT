@@ -27,60 +27,65 @@ import os
 #   КОНФИГУРАЦИЯ
 # ============================================
 
-SETTINGS_FILE = "/etc/xray/settings.json"
+# XRAY_SETTINGS_FILE — только для тестов и ручных прогонов вне устройства
+SETTINGS_FILE = os.environ.get("XRAY_SETTINGS_FILE", "/etc/xray/settings.json")
+
+# Эталон правил роутинга: из него доливаются недостающие ключи на устройстве
+SETTINGS_DEFAULT_URL = ("https://raw.githubusercontent.com/kirilllavrov/"
+                        "XPowerSpirit-OpenWRT/main/settings.default.json")
 
 # Whitelist по умолчанию (переопределяется из settings.json)
 DOMAIN_WHITELIST = []
 
-# Правила роутинга по умолчанию (переопределяются из settings.json → routing)
-ROUTING_CONFIG = {
-    "domainStrategy": "IPOnDemand",
-    "block_domains": ["geosite:category-ads"],
-    "direct_ips": ["geoip:ru", "geoip:private"],
-    "direct_domains": [
-        "geosite:private",
-        "geosite:category-browser",
-        "geosite:category-cdn-ru",
-        "geosite:category-mobile",
-        "geosite:category-ru"
-    ],
-    "proxy_domains": [
-        "geosite:category-streaming",
-        "geosite:category-games"
-    ],
-    # Белые списки (БС) операторов РФ — отдельные категории тех же геофайлов.
-    # Домены живут в geosite.dat, адреса — в geoip.dat; это разные категории.
-    "bs_domains": ["geosite:category-whitelist"],
-    "bs_ips": ["geoip:whitelist"],
-    # DNS: БС/RU-домены резолвит Яндекс напрямую (DOHL, routing не проходит),
-    # всё остальное — DoH через прокси (входит в routing с inboundTag=dns-inbuilt).
-    "dns_direct_address": "https+local://common.dot.dns.yandex.net/dns-query",
-    "dns_proxy_address": "https://cloudflare-dns.com/dns-query",
-    "dns_hosts": {
-        "common.dot.dns.yandex.net": ["77.88.8.1", "77.88.8.8"],
-        "cloudflare-dns.com": ["1.0.0.1", "1.1.1.1"],
-        "dns.google": ["8.8.8.8", "8.8.4.4"],
-        "dns.nextdns.io": ["45.90.28.0", "45.90.30.0"]
-    }
+# Правила роутинга задаются только в settings.json → routing (единственный источник:
+# settings.default.json). Здесь — лишь перечень обязательных ключей: без них правила
+# получились бы пустыми (RU-трафик ушёл бы в прокси, реклама не блокировалась), поэтому
+# генератор отказывается работать, а не собирает тихо неверный конфиг.
+ROUTING_CONFIG = {}
+
+ROUTING_COMMON_KEYS = (
+    "domainStrategy",
+    "block_domains",
+    "dns_direct_address",
+    "dns_proxy_address",
+    "dns_hosts",
+)
+ROUTING_MODE_KEYS = {
+    "normal": ("direct_ips", "direct_domains", "proxy_domains"),
+    "bs": ("bs_domains", "bs_ips"),
 }
 
 
-def load_settings():
-    """Загружает настройки из /etc/xray/settings.json"""
+def load_settings(mode: str) -> None:
+    """Загружает routing из settings.json и проверяет обязательные ключи"""
     global DOMAIN_WHITELIST, ROUTING_CONFIG
-    if os.path.isfile(SETTINGS_FILE):
-        try:
-            with open(SETTINGS_FILE) as f:
-                settings = json.load(f)
-            DOMAIN_WHITELIST = settings.get("subscription", {}).get("domain_whitelist", [])
-            # Загружаем правила роутинга (мержим с дефолтами — пользователь может переопределить любое поле)
-            user_routing = settings.get("routing", {})
-            if user_routing:
-                for key in ROUTING_CONFIG:
-                    if key in user_routing:
-                        ROUTING_CONFIG[key] = user_routing[key]
-        except Exception as e:
-            print(f"  [!] Не удалось прочитать {SETTINGS_FILE}: {e}", file=sys.stderr)
+
+    if not os.path.isfile(SETTINGS_FILE):
+        log_error(f"Нет {SETTINGS_FILE} — правила роутинга задаются только там")
+        sys.exit(1)
+
+    try:
+        with open(SETTINGS_FILE) as f:
+            settings = json.load(f)
+    except Exception as e:
+        log_error(f"Не удалось прочитать {SETTINGS_FILE}: {e}")
+        sys.exit(1)
+
+    DOMAIN_WHITELIST = settings.get("subscription", {}).get("domain_whitelist", [])
+    ROUTING_CONFIG = settings.get("routing") or {}
+
+    required = ROUTING_COMMON_KEYS + ROUTING_MODE_KEYS[mode]
+    missing = [key for key in required if key not in ROUTING_CONFIG]
+    if missing:
+        log_error(f"В {SETTINGS_FILE} → routing нет обязательных ключей: {', '.join(missing)}")
+        log_error("Правила роутинга задаются только в settings.json; без этих ключей")
+        log_error("правила получились бы пустыми, поэтому конфиг не собирается.")
+        log_error("Долейте недостающие ключи, сохранив свои значения:")
+        log_error(f"  curl -fsSL {SETTINGS_DEFAULT_URL} -o /tmp/settings.default.json")
+        log_error("  jq --slurpfile def /tmp/settings.default.json \\")
+        log_error("     '.routing = ($def[0].routing + (.routing // {}))' \\")
+        log_error(f"     {SETTINGS_FILE} > /tmp/s.json && mv /tmp/s.json {SETTINGS_FILE}")
+        sys.exit(1)
 
 
 # ============================================
@@ -537,7 +542,7 @@ def main():
     mode = args.mode
     
     # Загружаем настройки из единого JSON-конфига
-    load_settings()
+    load_settings(mode)
     if DOMAIN_WHITELIST:
         print(f"  → Domain whitelist из settings.json: {', '.join(DOMAIN_WHITELIST)}", file=sys.stderr)
     
