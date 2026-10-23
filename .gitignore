@@ -4,6 +4,7 @@
 .vscode/
 AGENTS.md
 .github/
-
+.mcp.json
 *.swp
 *.swo
+test/
