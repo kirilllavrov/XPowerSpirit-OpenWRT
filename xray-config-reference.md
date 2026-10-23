@@ -11,7 +11,7 @@
 ## Паспорт справочника
 
 | Параметр | Значение |
-|---|---|
+| --- | --- |
 | Источник | <https://xtls.github.io/ru/config/> (русская версия, синхронизирована с последним релизом Xray-core) |
 | Дата сверки | 2026-10-23 |
 | Версия Xray, на которой проверялось поведение | 26.10.21 |
@@ -64,7 +64,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 Страница: <https://xtls.github.io/ru/config/log.html>
 
 | Поле | Тип / значения | По умолчанию | Что делает и ограничения |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `access` | string | нет (→ stdout) | Путь к журналу доступа. Специальное значение `none` отключает журнал |
 | `error` | string | нет (→ stdout) | Путь к журналу ошибок. Специальное значение `none` отключает журнал |
 | `loglevel` | `debug` \| `info` \| `warning` \| `error` \| `none` | `warning` | Уровень **только** журнала ошибок. На access-журнал влияет лишь значение `none` |
@@ -87,7 +87,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 ### 3.1. DnsObject
 
 | Поле | Тип / значения | По умолчанию | Комментарий |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `hosts` | `map{string: address}` или `map{string: [address]}` | — | Статические записи; имеет приоритет над серверами |
 | `script` | string | — | Lua-скрипт обработки |
 | `servers` | `[string \| DnsServerObject]` | — | Список серверов (см. 3.2) |
@@ -108,7 +108,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 ### 3.2. DnsServerObject и схемы адресов
 
 | Поле | Тип | По умолчанию | Комментарий |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `id` | string | `""` | Идентификатор для Lua-скриптов |
 | `address` | address | — | Схема адреса — см. ниже |
 | `port` | number | `53` | Не действует для DOH/DOHL/DOQL — порт задаётся в URL |
@@ -124,7 +124,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 Схемы значения `address`:
 
 | Форма | Режим | Проходит через routing? |
-|---|---|---|
+| --- | --- | --- |
 | `"localhost"` | системный DNS | — |
 | `"8.8.8.8"` | UDP DNS | да |
 | `"tcp://host"` | DNS over TCP | да |
@@ -151,7 +151,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 ### 4.1. RoutingObject
 
 | Поле | Тип / значения | По умолчанию | Комментарий |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `domainStrategy` | `AsIs` \| `IPIfNonMatch` \| `IPOnDemand` | `AsIs` | `IPOnDemand`: при встрече правила с `ip` домен разрешается встроенным DNS сразу; при ошибке используется исходный IP. `IPIfNonMatch`: второй проход после того, как ни одно правило не сработало |
 | `rules` | `[RuleObject]` | — | Правила применяются по порядку |
 | `script` | string | — | Lua-скрипт |
@@ -171,7 +171,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 плюс `ruleTag` и `webhook {url, deduplication, headers}`.
 
 | Условие | Формат |
-|---|---|
+| --- | --- |
 | `domain` | строка без префикса = подстрока; `regexp:`; `domain:` (домен и поддомены, рекомендуется); `keyword:`; `full:`; `dotless:`; `geosite:name`; `ext:file:tag` |
 | `ip` | IP, CIDR, `geoip:xx`, `geoip:private`, `ext:file:tag`; инверсия `!` (несколько отрицаний — AND, положительные и совокупность отрицаний — OR) |
 | `port` / `sourcePort` / `localPort` | `a`, `"a-b"`, `"53,443,1000-2000"` |
@@ -187,7 +187,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 ### 4.3. BalancerObject и StrategyObject
 
 | Поле | Тип / значения | Комментарий |
-|---|---|---|
+| --- | --- | --- |
 | `tag` | string | Сопоставляется с `balancerTag` правила |
 | `selector` | `[string]` | **Префиксное** сопоставление с тегами outbound: `["a"]` захватит `a` и `ab` |
 | `fallbackTag` | string | Используется, если по данным наблюдения все outbound недоступны |
@@ -210,7 +210,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 `level`: `map{string: LevelPolicyObject}`, `system`: `SystemPolicyObject`.
 
 | Поле уровня | По умолчанию | Смысл |
-|---|---|---|
+| --- | --- | --- |
 | `handshake` | `60` (сек) | Лимит времени на рукопожатие |
 | `connIdle` | `300` (сек) | Лимит простоя соединения |
 | `uplinkOnly` | `1` (сек) | Ожидание после закрытия исходящего канала |
@@ -235,7 +235,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 `burstObservatory` (пакетный): `subjectSelector`, `pingConfig`:
 
 | Поле | По умолчанию | Комментарий |
-|---|---|---|
+| --- | --- | --- |
 | `destination` | `https://connectivitycheck.gstatic.com/generate_204` | URL должен возвращать HTTP 204 |
 | `connectivity` | `""` | Проверка локальной сети, выполняется только при неудаче `destination` |
 | `interval` | `1m` | Средний интервал на каждый outbound; минимум `10s` (меньшее значение заменяется) |
@@ -257,7 +257,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 Страница: <https://xtls.github.io/ru/config/inbound.html>
 
 | Поле | Тип / значения | По умолчанию | Комментарий |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `listen` | address | `0.0.0.0` | `"::"` = одновременно IPv6+IPv4; поддерживается Unix domain socket (`/dev/shm/x.sock`, `@`/`@@` для abstract, `,0666` для прав) |
 | `port` | number \| `"env:VAR"` \| string | — | Диапазоны `"5-10"`, `"11,13,15-17"`; слушать большой диапазон — дорого, лучше iptables |
 | `protocol` | `tunnel` \| `http` \| `shadowsocks` \| `socks` \| `vless` \| `vmess` \| `trojan` \| `wireguard` \| `hysteria` \| `masque` \| `tun` | — | |
@@ -269,7 +269,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 ### 7.1. SniffingObject
 
 | Поле | Значения | По умолчанию | Комментарий |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `enabled` | bool | — | Включает обнаружение |
 | `destOverride` | `["http" \| "tls" \| "quic" \| "fakedns"]` | — | Заменять целевой адрес обнаруженным |
 | `metadataOnly` | bool | — | Только метаданные соединения; отключает все снифферы кроме `fakedns` |
@@ -286,7 +286,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 Имя протокола в документации — `tunnel`; «Dokodemo door» — прежнее название.
 
 | Поле | Значения | По умолчанию | Комментарий |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `allowedNetwork` | `tcp` \| `udp` \| `tcp,udp` | `tcp` | |
 | `rewriteAddress` | address | `localhost` | Куда перенаправлять |
 | `rewritePort` | number `[0,65535]` | `0` → порт прослушивания | |
@@ -303,7 +303,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 Страница: <https://xtls.github.io/ru/config/outbound.html>
 
 | Поле | Значения | Комментарий |
-|---|---|---|
+| --- | --- | --- |
 | `sendThrough` | address | Исходный адрес |
 | `protocol` | `blackhole` \| `dns` \| `freedom` \| `http` \| `loopback` \| `shadowsocks` \| `socks` \| `trojan` \| `vless` \| `vmess` \| `hysteria` \| `wireguard` \| `masque` | |
 | `settings` | OutboundConfigurationObject | Зависит от протокола |
@@ -319,7 +319,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 Документированный вид клиентских `settings` (плоский):
 
 | Поле | Тип | Комментарий |
-|---|---|---|
+| --- | --- | --- |
 | `address` | address | Домен / IPv4 / IPv6 сервера |
 | `port` | number | |
 | `id` | string | Любая строка < 30 байт или UUID; соответствие описано стандартом VLESS UUID Mapping |
@@ -356,7 +356,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 Только традиционный DNS (UDP/TCP); DoH/DoT/DoQ к этому outbound не применимы.
 
 | Поле | Значения | Комментарий |
-|---|---|---|
+| --- | --- | --- |
 | `rewriteNetwork` | `tcp` \| `udp` | Изменить транспорт запроса |
 | `rewriteAddress` | address | Изменить адрес DNS-сервера |
 | `rewritePort` | number | Изменить порт |
@@ -418,7 +418,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 Клиент:
 
 | Поле | Обязательность | Комментарий |
-|---|---|---|
+| --- | --- | --- |
 | `serverName` | — | Одно из серверных `serverNames`; IP → Client Hello без SNI |
 | `fingerprint` | **обязательно** | `unsafe` не поддерживается |
 | `shortId` | — | До 16 hex-символов, длина **чётная**; короче — дополнится нулями справа |
@@ -461,7 +461,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 `V6Only`, `tcpWindowClamp`, `tcpMptcp`, `addressPortStrategy`, `customSockopt`.
 
 | Поле | Значения | Комментарий |
-|---|---|---|
+| --- | --- | --- |
 | `mark` | number | `SO_MARK` для исходящих соединений при ненулевом значении; только Linux, нужен `CAP_NET_ADMIN` |
 | `tproxy` | `redirect` \| `tproxy` \| `off` | Прозрачное проксирование (Linux): `redirect` — TCP, `tproxy` — TCP и UDP |
 | `domainStrategy` | `AsIs` \| `UseIP` \| `UseIPv4` \| … | Резолв адреса прокси-сервера / цели Freedom через встроенный DNS |
@@ -508,7 +508,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 «В документации не упоминается, подтвердить нельзя.»
 
 | Сущность | Статус |
-|---|---|
+| --- | --- |
 | `streamSettings.network` (`tcp`/`ws`/`grpc`/`http`) | не описано; документировано `streamSettings.method`. На Xray 26.10.21 `network` принимается (совместимость), но это не документированное поведение |
 | `sockopt.tcpNoDelay` | отсутствует в списке полей SockoptObject |
 | `settings.domainStrategy` у Freedom и direct-подобных outbound | нет; документировано `sockopt.domainStrategy` |
@@ -525,7 +525,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 Что проект использует и чем это подтверждается:
 
 | Использование | Где в проекте | Как в документации |
-|---|---|---|
+| --- | --- | --- |
 | `log.loglevel: "none"` + файлы access/error; каталог создают установщик и `init.d` | [xray-generate-config.py](./xray-generate-config.py#L119), [install-openwrt-xray.sh](./install-openwrt-xray.sh#L172) | `access`/`error`/`loglevel` — подтверждено; сам ядро каталог не создаёт |
 | `dns` c `hosts`, `queryStrategy`, `serveStale`, `serveExpiredTTL`, `disableFallbackIfMatch`, `enableParallelQuery` | [xray-generate-config.py](./xray-generate-config.py#L123) | подтверждено |
 | `servers` в режиме `https+local://` (DOHL) + `domains`, `expectedIPs`, `skipFallback` | там же | подтверждено; DOHL не проходит routing |
