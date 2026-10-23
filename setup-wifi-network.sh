@@ -186,4 +186,4 @@ if [ $IOT_EXISTS -eq 1 ]; then
 else
 	echo "IoT   : не настроен"
 fi
-echo "Режим : WPA2 + WPA3 (sae-mixed) | PMF Required"
+echo "Режим : WPA2 + WPA3 (sae-mixed) | PMF optional (ieee80211w=1)"

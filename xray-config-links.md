@@ -4,6 +4,20 @@
 > Xray-конфигурации (`config.json`), правил маршрутизации/DNS, TProxy/nftables или
 > парсеров подписок — сначала открой нужный раздел ниже. Если не уверен в параметре —
 > **открой официальную страницу по ссылке** и следуй ей дословно, не выдумывай.
+>
+> ⚠️ `xtls.github.io` — SPA: несуществующая страница может ответить HTTP 200 и отдать
+> заглушку «404». Перед использованием страницы проверь её заголовок, например:
+> `curl -sL <URL> | grep -o '<title>[^<]*</title>'`.
+
+## Что где в проекте
+
+| Файл / тема | Раздел документации |
+|-------------|---------------------|
+| `xray-generate-config.py` — log, dns, inbounds, outbounds, routing, balancers | `config/`, `config/dns.html`, `config/inbound.html`, `config/outbound.html`, `config/routing.html`, `config/observatory.html` |
+| `xray-generate-config.py` — `burstObservatory` + `leastLoad` | `config/observatory.html`, `config/routing.html` |
+| `xray-generate-config.py` — `tproxy-in` (dokodemo-door), `sockopt.tproxy`, `mark` | `config/inbounds/tunnel.html`, `config/transports/sockopt.html`, `document/level-2/tproxy.html` |
+| `xray-sub-parser.py` — VLESS URI, транспорты, TLS/Reality | `config/outbounds/vless.html`, `config/transport.html`, `config/transports/*.html` |
+| `update-nft.sh` — `tproxy`, `meta mark`, цепочки fw4 | man nftables, wiki nftables, `document/level-2/tproxy.html` |
 
 ## Конфигурация Xray (xtls.github.io/config)
 
@@ -13,14 +27,16 @@
 - https://xtls.github.io/config/dns.html — DNS: серверы, domainStrategy, hosts, правила
 - https://xtls.github.io/config/fakedns.html
 - https://xtls.github.io/config/inbound.html — входящие: tproxy/dokodemo-door, sniffing, порты
-- https://xtls.github.io/config/outbound.html — исходящие: freedom, blackhole, dns, vless
-- https://xtls.github.io/config/routing.html — routing: rules, balancer, observatory
+- https://xtls.github.io/config/outbound.html — исходящие: freedom, blackhole, dns, vless (общие поля, Mux)
+- https://xtls.github.io/config/routing.html — routing: rules, балансировщики (`balancers`, стратегии, `fallbackTag`)
+- https://xtls.github.io/config/observatory.html — `observatory` / `burstObservatory` (`subjectSelector`, `pingConfig`), используется проектом для `leastLoad`
 
 ### Входящие подключения (inbounds)
 
 Куда смотреть при настройке inbound (tproxy/dokodemo-door, sniffing, порты).
+`tproxy-in` в этом проекте — это **dokodemo-door**, его страница называется «Tunnel（dokodemo-door）».
 
-- https://xtls.github.io/config/inbounds/tunnel.html
+- https://xtls.github.io/config/inbounds/tunnel.html — Tunnel (dokodemo-door): `followRedirect`, `allowedNetwork`, TProxy
 - https://xtls.github.io/config/inbounds/tun.html
 
 ### Исходящие подключения (outbounds)
@@ -30,6 +46,7 @@
 - https://xtls.github.io/config/outbounds/blackhole.html
 - https://xtls.github.io/config/outbounds/dns.html
 - https://xtls.github.io/config/outbounds/freedom.html
+- https://xtls.github.io/config/outbounds/vless.html — VLESS-клиент: `vnext`, `users`, `flow`, `encryption`
 
 ### Транспорт
 
@@ -55,6 +72,9 @@ sockopt (tproxy, mark) и безопасность соединения.
 
 ## nftables
 
-Куда смотреть при правке правил TProxy (`update-nft.sh`): цепочки, tproxy, mark, policy routing.
+Куда смотреть при правке правил TProxy (`update-nft.sh`): цепочки, `tproxy`, `mark`, policy routing
+(`ip rule`/`ip route` — это уже iproute2, `man ip-rule` / `man ip-route`).
 
-- https://www.netfilter.org/projects/nftables/manpage.html — man nftables
+- https://www.netfilter.org/projects/nftables/manpage.html — man nftables (синтаксис, `tproxy`, `meta mark`)
+- https://www.netfilter.org/projects/nftables/index.html — официальная страница проекта nftables
+- https://wiki.nftables.org/wiki-nftables/index.php/Main_Page — официальная wiki nftables (примеры цепочек)
