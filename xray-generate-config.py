@@ -358,18 +358,6 @@ def bs_categories_missing() -> list:
     return missing
 
 
-def ip_check_geosite_available() -> bool:
-    """Правило проверки IP включаем только если категория реально есть в geosite.dat"""
-    if geosite_has_category("category-ipcheck"):
-        return True
-    print(
-        "  [!] geosite:category-ipcheck отсутствует в geosite.dat — правило проверки IP пропущено.\n"
-        "      Пересоберите геофайлы, иначе сервисы проверки IP пойдут через прокси.",
-        file=sys.stderr,
-    )
-    return False
-
-
 def build_rules(proxy_outbounds: list, mode: str = "normal", direct_mode: bool = False) -> list:
     """
     Строит правила маршрутизации.
@@ -400,12 +388,11 @@ def build_rules(proxy_outbounds: list, mode: str = "normal", direct_mode: bool =
     # Домены проверки «какой у меня IP» (категория geosite:category-ipcheck в geosite.dat):
     # всегда напрямую и раньше остальных правил, иначе провайдер/сервис увидит IP прокси
     # и определит VPN. Отдельное правило, а не direct_domains: в режиме bs тот список не используется.
-    if ip_check_geosite_available():
-        rules.append({
-            "type": "field",
-            "domain": ["geosite:category-ipcheck"],
-            "outboundTag": "direct"
-        })
+    rules.append({
+        "type": "field",
+        "domain": ["geosite:category-ipcheck"],
+        "outboundTag": "direct"
+    })
 
     rules += [
         # Блокировка рекламы — всегда, в любом режиме

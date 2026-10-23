@@ -593,9 +593,10 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
   `category-ipcheck`; генератор ставит правило `geosite:category-ipcheck → direct` **раньше**
   блокировок и всех прочих правил (`2ip.ru`, `ifconfig.me`, `ipify.org`, `ipinfo.io`, `ip.sb`,
   `ident.me`, `ipapi.co`, `ipwho.is`, `checkip.amazonaws.com`, `wtfismyip.com`, `myip.ipip.net`).
-  Наличие категории проверяется по `geosite.dat`: неизвестная категория делает конфиг
-  невалидным (`failed to check code … from geosite.dat`), поэтому при её отсутствии правило
-  пропускается с предупреждением в stderr, а не ломает старт Xray.
+  Категория обязательна: неизвестная категория делает конфиг невалидным
+  (`failed to check code … from geosite.dat`), поэтому без неё в `geosite.dat` Xray не стартует.
+  Проверка наличия категории в генераторе намеренно не делается — геофайл обновляется раньше
+  конфига, а `xray run -test` в `update-xray.sh` и `init.d` и так не даст применить невалидный конфиг.
 
   Практика по геофайлу (проверено вручную собранным `geosite.dat`): коды категорий в файле
   хранятся **в верхнем регистре** (`CATEGORY-IPCHECK`), entries идут как последовательность

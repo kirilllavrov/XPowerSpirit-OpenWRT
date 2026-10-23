@@ -150,11 +150,8 @@ sys.exit(0 if 'balancers' not in c.get('routing', {}) and tags == ['direct', 'bl
 python3 "$GENERATOR" --output "$TMP/config2.json" <"$TMP/unified.json" 2>/dev/null
 assert_rc "$?" 0 "генератор: унифицированный вход"
 
-# Категория проверки IP: правило включается только если она есть в geosite.dat
-mkdir -p "$TMP/asset"
-printf 'CATEGORY-IPCHECK\x00other' >"$TMP/asset/geosite.dat"
-XRAY_LOCATION_ASSET="$TMP/asset" python3 "$GENERATOR" --output "$TMP/config_ipcheck.json" \
-    <"$TMP/unified.json" 2>/dev/null
+# Категория проверки IP: правило есть всегда, категория живёт в геофайле
+python3 "$GENERATOR" --output "$TMP/config_ipcheck.json" <"$TMP/unified.json" 2>/dev/null
 assert_py "
 import json, sys
 rules = json.load(open(sys.argv[1]))['routing']['rules']
@@ -222,16 +219,6 @@ sys.exit(0 if any('geosite:category-ipcheck' in d
                   for r in rules for d in r.get('domain', [])) else 1)" \
         "$TMP/config_$mode.json" "генератор: в режиме $mode ipcheck → direct"
 done
-
-# Без категории в геофайлах правило не генерируется (иначе конфиг невалиден)
-XRAY_LOCATION_ASSET="$TMP" python3 "$GENERATOR" --output "$TMP/config_nocat.json" \
-    <"$TMP/unified.json" 2>/dev/null
-assert_py "
-import json, sys
-rules = json.load(open(sys.argv[1]))['routing']['rules']
-sys.exit(0 if not any('category-ipcheck' in d
-                      for r in rules for d in r.get('domain', [])) else 1)" \
-    "$TMP/config_nocat.json" "генератор: без категории правило пропускается, конфиг валиден"
 
 # -------------------------------------------- режимы normal / bs (белые списки)
 
