@@ -22,20 +22,6 @@
     "block_domains": [
       "geosite:category-ads"
     ],
-    "ip_check_domains": [
-      "domain:ifconfig.me",
-      "domain:ifconfig.co",
-      "domain:ipify.org",
-      "domain:ipinfo.io",
-      "domain:ip.sb",
-      "domain:ident.me",
-      "domain:ipapi.co",
-      "domain:ipwho.is",
-      "domain:checkip.amazonaws.com",
-      "domain:wtfismyip.com",
-      "domain:2ip.ru",
-      "domain:myip.ipip.net"
-    ],
     "direct_ips": [
       "geoip:ru",
       "geoip:private"

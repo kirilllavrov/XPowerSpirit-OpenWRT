@@ -150,23 +150,34 @@ sys.exit(0 if 'balancers' not in c.get('routing', {}) and tags == ['direct', 'bl
 python3 "$GENERATOR" --output "$TMP/config2.json" <"$TMP/unified.json" 2>/dev/null
 assert_rc "$?" 0 "генератор: унифицированный вход"
 
+# Категория проверки IP: правило включается только если она есть в geosite.dat
+mkdir -p "$TMP/asset"
+printf 'CATEGORY-IPCHECK\x00other' >"$TMP/asset/geosite.dat"
+XRAY_LOCATION_ASSET="$TMP/asset" python3 "$GENERATOR" --output "$TMP/config_ipcheck.json" \
+    <"$TMP/unified.json" 2>/dev/null
 assert_py "
 import json, sys
-c = json.load(open(sys.argv[1]))
-rules = c['routing']['rules']
+rules = json.load(open(sys.argv[1]))['routing']['rules']
 idx = next((i for i, r in enumerate(rules)
-            if any('ifconfig.me' in d for d in r.get('domain', []))), None)
+            if any('category-ipcheck' in d for d in r.get('domain', []))), None)
 if idx is None:
     sys.exit(1)
-# правило проверки IP должно стоять раньше блокировок и балансировщика
 if any(r.get('outboundTag') == 'block' for r in rules[:idx]):
     sys.exit(1)
 if any('balancerTag' in r for r in rules[:idx]):
     sys.exit(1)
-domains = rules[idx]['domain']
-sys.exit(0 if rules[idx]['outboundTag'] == 'direct'
-         and 'domain:ifconfig.me' in domains and 'domain:ipify.org' in domains else 1)" \
-    "$TMP/config2.json" "генератор: ip_check_domains → direct раньше block/balancer"
+sys.exit(0 if rules[idx]['outboundTag'] == 'direct' else 1)" \
+    "$TMP/config_ipcheck.json" "генератор: geosite:category-ipcheck → direct раньше block/balancer"
+
+# Без категории в геофайлах правило не генерируется (иначе конфиг невалиден)
+XRAY_LOCATION_ASSET="$TMP" python3 "$GENERATOR" --output "$TMP/config_nocat.json" \
+    <"$TMP/unified.json" 2>/dev/null
+assert_py "
+import json, sys
+rules = json.load(open(sys.argv[1]))['routing']['rules']
+sys.exit(0 if not any('category-ipcheck' in d
+                      for r in rules for d in r.get('domain', [])) else 1)" \
+    "$TMP/config_nocat.json" "генератор: без категории правило пропускается, конфиг валиден"
 
 # ------------------------------------------------- определение архитектуры
 

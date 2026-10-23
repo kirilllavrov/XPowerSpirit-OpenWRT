@@ -32,6 +32,11 @@ SETTINGS_FILE = "/etc/xray/settings.json"
 # Whitelist по умолчанию (переопределяется из settings.json)
 DOMAIN_WHITELIST = []
 
+# Категория geosite с доменами проверки «какой у меня IP» (ifconfig.me, api.ipify.org,
+# 2ip.ru и подобные). Провайдеры и сервисы используют их для детекта VPN, поэтому
+# такие домены обязаны идти напрямую. Сами домены живут в geosite.dat, не в settings.json.
+IP_CHECK_GEOSITE = "geosite:category-ipcheck"
+
 # Правила роутинга по умолчанию (переопределяются из settings.json → routing)
 ROUTING_CONFIG = {
     "domainStrategy": "IPOnDemand",
@@ -42,22 +47,6 @@ ROUTING_CONFIG = {
         "dns.quad9.net",
         "doh.opendns.com",
         "dns.nextdns.io"
-    ],
-    # Домены для проверки «какой у меня IP». Провайдеры и сервисы используют их
-    # для детекта VPN, поэтому они обязаны идти напрямую и показывать реальный IP.
-    "ip_check_domains": [
-        "domain:ifconfig.me",
-        "domain:ifconfig.co",
-        "domain:ipify.org",
-        "domain:ipinfo.io",
-        "domain:ip.sb",
-        "domain:ident.me",
-        "domain:ipapi.co",
-        "domain:ipwho.is",
-        "domain:checkip.amazonaws.com",
-        "domain:wtfismyip.com",
-        "domain:2ip.ru",
-        "domain:myip.ipip.net"
     ],
     "block_domains": ["geosite:category-ads"],
     "direct_ips": ["geoip:ru", "geoip:private"],
@@ -290,6 +279,34 @@ def print_proxy_summary(proxy_outbounds: list) -> None:
         print(f"  ✓ Балансировщик: 1 сервер + fallback DIRECT", file=sys.stderr)
 
 
+def geosite_has_category(category: str) -> bool:
+    """
+    Есть ли категория в geosite.dat. Имена категорий хранятся в файле как строки,
+    поэтому достаточно поиска по бинарнику. Неизвестная категория делает конфиг
+    невалидным (xray run -test падает), поэтому проверяем до генерации.
+    """
+    asset_dir = os.environ.get("XRAY_LOCATION_ASSET", "/usr/share/xray")
+    try:
+        with open(os.path.join(asset_dir, "geosite.dat"), "rb") as f:
+            data = f.read()
+    except OSError:
+        return False
+    # в geosite.dat коды категорий хранятся в верхнем регистре (CATEGORY-ADS)
+    return category.upper().encode() in data or category.lower().encode() in data
+
+
+def ip_check_geosite_available() -> bool:
+    """Правило проверки IP включаем только если категория реально есть в geosite.dat"""
+    if geosite_has_category(IP_CHECK_GEOSITE.split(":", 1)[1]):
+        return True
+    print(
+        f"  [!] {IP_CHECK_GEOSITE} отсутствует в geosite.dat — правило проверки IP пропущено.\n"
+        f"      Пересоберите геофайлы, иначе сервисы проверки IP пойдут через прокси.",
+        file=sys.stderr,
+    )
+    return False
+
+
 def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
     """
     Строит правила маршрутизации.
@@ -303,14 +320,19 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
             "type": "field",
             "inboundTag": ["dns-local"],
             "outboundTag": "dns-out"
-        },
-        # Проверочные домены IP — всегда напрямую и раньше всех остальных правил:
-        # иначе провайдер/сервис увидит IP прокси и определит VPN
-        {
+        }
+    ]
+
+    # Домены проверки IP — всегда напрямую и раньше остальных правил:
+    # иначе провайдер/сервис увидит IP прокси и определит VPN
+    if ip_check_geosite_available():
+        rules.append({
             "type": "field",
-            "domain": ROUTING_CONFIG["ip_check_domains"],
+            "domain": [IP_CHECK_GEOSITE],
             "outboundTag": "direct"
-        },
+        })
+
+    rules += [
         # Ловим DNS через DoH, которые прошли мимо dnsmasq (от браузера)
         {
             "type": "field",

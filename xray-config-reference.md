@@ -584,15 +584,24 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
   серверам подписки, RSS Xray ~64 МБ против ~10 МБ на малом конфиге. На роутере с 128 МБ
   памяти и лимитом «одно устройство» это заметно; помогает фильтр `--remarks` (например,
   «Германия» → 1 узел, конфиг 5.4 КБ вместо 147 КБ).
-* **Проверочные домены IP должны идти напрямую — и это теперь отдельная категория.**
+* **Проверочные домены IP вынесены в geosite-категорию `category-ipcheck`.**
   В подписке/геобазе `ifconfig.me` и `api.ipify.org` попадали в `direct` случайно, через
   `geosite:category-cdn-ru` (проверка по категориям: `category-browser`, `category-mobile`,
-  `category-ru`, `private` → прокси, `category-cdn-ru` → direct). Такое поведение верное по
-  смыслу (иначе провайдер увидит IP прокси и определит VPN), но держалось на побочном эффекте
-  чужой категории, которая меняется вместе с геобазой. Добавлено явное поле
-  `routing.ip_check_domains` и правило `direct`, стоящее **раньше** блокировок и всех прочих
-  правил: `ifconfig.me`, `ifconfig.co`, `ipify.org`, `ipinfo.io`, `ip.sb`, `ident.me`,
-  `ipapi.co`, `ipwho.is`, `checkip.amazonaws.com`, `wtfismyip.com`, `2ip.ru`, `myip.ipip.net`.
+  `category-ru`, `private` → прокси, `category-cdn-ru` → direct). Поведение верное по смыслу
+  (иначе провайдер увидит IP прокси и определит VPN), но держалось на побочном эффекте чужой
+  категории, меняющейся вместе с геобазой. Список перенесён в геофайл — категория
+  `category-ipcheck`; генератор ставит правило `geosite:category-ipcheck → direct` **раньше**
+  блокировок и всех прочих правил (`2ip.ru`, `ifconfig.me`, `ipify.org`, `ipinfo.io`, `ip.sb`,
+  `ident.me`, `ipapi.co`, `ipwho.is`, `checkip.amazonaws.com`, `wtfismyip.com`, `myip.ipip.net`).
+  Наличие категории проверяется по `geosite.dat`: неизвестная категория делает конфиг
+  невалидным (`failed to check code … from geosite.dat`), поэтому при её отсутствии правило
+  пропускается с предупреждением в stderr, а не ломает старт Xray.
+
+  Практика по геофайлу (проверено вручную собранным `geosite.dat`): коды категорий в файле
+  хранятся **в верхнем регистре** (`CATEGORY-IPCHECK`), entries идут как последовательность
+  `0a <len> <GeoSite>`, поэтому новую категорию можно дописать в конец существующего файла.
+  Живая проверка с дописанной категорией: `ifconfig.me`, `api.ipify.org`, `2ip.ru` →
+  `direct`, `example.com` → `proxy-AUTO-3`.
 
 ### Проверено на aarch64 (OpenWrt 25.12 armsr/armv8 в QEMU)
 

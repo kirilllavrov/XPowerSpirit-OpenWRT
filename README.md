@@ -567,7 +567,7 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
 
 5. **Правила маршрутизации** (порядок важен, правила собираются из `settings.json → routing`):
    1. `inboundTag: ["dns-local"]` → `dns-out` (hijack во встроенный DNS)
-   2. `ip_check_domains` (`ifconfig.me`, `api.ipify.org`, `2ip.ru`, …) → `direct` — раньше всех остальных правил, чтобы сервисы проверки IP видели реальный адрес провайдера, а не прокси
+   2. `geosite:category-ipcheck` → `direct` — раньше всех остальных правил, чтобы сервисы проверки IP видели реальный адрес провайдера, а не прокси. Домены живут в `geosite.dat` (категория `category-ipcheck`), в `settings.json` их нет
    3. `doh_domains` → `direct` (чтобы DNS-запросы не уходили в прокси)
    4. `block_domains` (`geosite:category-ads`) → `block`
    5. NTP (порт 123/UDP) → `direct`
@@ -676,20 +676,6 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
     "block_domains": [
       "geosite:category-ads"
     ],
-    "ip_check_domains": [
-      "domain:ifconfig.me",
-      "domain:ifconfig.co",
-      "domain:ipify.org",
-      "domain:ipinfo.io",
-      "domain:ip.sb",
-      "domain:ident.me",
-      "domain:ipapi.co",
-      "domain:ipwho.is",
-      "domain:checkip.amazonaws.com",
-      "domain:wtfismyip.com",
-      "domain:2ip.ru",
-      "domain:myip.ipip.net"
-    ],
     "direct_ips": [
       "geoip:ru",
       "geoip:private"
@@ -728,7 +714,6 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 | `routing.domainStrategy` | string | Стратегия маршрутизации (по умолчанию `IPOnDemand`) |
 | `routing.doh_domains` | array | DoH-домены → direct (защита от DNS-петель) |
 | `routing.block_domains` | array | Домены для блокировки (реклама) |
-| `routing.ip_check_domains` | array | Домены проверки IP → direct: провайдеры используют их для детекта VPN, поэтому они должны показывать реальный адрес |
 | `routing.direct_ips` | array | IP-адреса напрямую (РФ + локальные) |
 | `routing.direct_domains` | array | Домены напрямую (geosite-категории РФ) |
 | `routing.proxy_domains` | array | Домены через прокси (стриминг, игры) |
@@ -845,17 +830,39 @@ jq '.routing.block_domains += ["domain:doubleclick.net"]' \
     /etc/xray/settings.json > /tmp/settings.tmp && mv /tmp/settings.tmp /etc/xray/settings.json
 ```
 
-**Добавить свой домен проверки IP (должен идти напрямую):**
+**Домены проверки IP (`geosite:category-ipcheck`):**
 
-```bash
-jq '.routing.ip_check_domains += ["domain:myip.example.com"]' \
-    /etc/xray/settings.json > /tmp/settings.tmp && mv /tmp/settings.tmp /etc/xray/settings.json
+Сервисы `ifconfig.me`, `api.ipify.org`, `2ip.ru` и подобные провайдеры используют для детекта
+VPN, поэтому они обязаны идти напрямую и показывать реальный адрес. Список доменов хранится
+в геофайле, а не в `settings.json`: категория `category-ipcheck` в `geosite.dat`.
+
+Правило `geosite:category-ipcheck → direct` стоит **раньше** блокировок и всех прочих правил.
+Чтобы добавить свой домен — внесите его в категорию при сборке геофайлов:
+
+```yaml
+# domain-list-community; простое имя = домен и его поддомены
+category-ipcheck:
+  - ifconfig.me
+  - ifconfig.co
+  - ipify.org
+  - ipinfo.io
+  - ip.sb
+  - ident.me
+  - ipapi.co
+  - ipwho.is
+  - checkip.amazonaws.com
+  - wtfismyip.com
+  - 2ip.ru
+  - myip.ipip.net
 ```
 
-> Список `ip_check_domains` применяется **раньше** правил блокировки и всего остального:
-> сервисы проверки IP (`ifconfig.me`, `api.ipify.org`, `2ip.ru` и подобные) иначе увидят
-> адрес прокси, и провайдер определит VPN. Проверить: `curl -s https://api.ipify.org`
-> должен вернуть адрес провайдера, а не узла подписки.
+> В `geosite.dat` код категории хранится в верхнем регистре — `CATEGORY-IPCHECK`.
+>
+> Без категории в `geosite.dat` конфиг был бы невалиден, поэтому генератор проверяет её наличие:
+> если категории нет — правило пропускается, а в лог пишется предупреждение
+> (`geosite:category-ipcheck отсутствует в geosite.dat`). После пересборки геофайлов правило
+> включается автоматически.
+> Проверка: `curl -s https://api.ipify.org` должен вернуть адрес провайдера, а не узла подписки.
 
 **Изменить стратегию маршрутизации:**
 
