@@ -34,9 +34,6 @@ SETTINGS_FILE = os.environ.get("XRAY_SETTINGS_FILE", "/etc/xray/settings.json")
 SETTINGS_DEFAULT_URL = ("https://raw.githubusercontent.com/kirilllavrov/"
                         "XPowerSpirit-OpenWRT/main/settings.default.json")
 
-# Whitelist по умолчанию (переопределяется из settings.json)
-DOMAIN_WHITELIST = []
-
 # Правила роутинга задаются только в settings.json → routing (единственный источник:
 # settings.default.json). Здесь — лишь перечень обязательных ключей: без них правила
 # получились бы пустыми (RU-трафик ушёл бы в прокси, реклама не блокировалась), поэтому
@@ -58,7 +55,7 @@ ROUTING_MODE_KEYS = {
 
 def load_settings(mode: str) -> None:
     """Загружает routing из settings.json и проверяет обязательные ключи"""
-    global DOMAIN_WHITELIST, ROUTING_CONFIG
+    global ROUTING_CONFIG
 
     if not os.path.isfile(SETTINGS_FILE):
         log_error(f"Нет {SETTINGS_FILE} — правила роутинга задаются только там")
@@ -71,7 +68,6 @@ def load_settings(mode: str) -> None:
         log_error(f"Не удалось прочитать {SETTINGS_FILE}: {e}")
         sys.exit(1)
 
-    DOMAIN_WHITELIST = settings.get("subscription", {}).get("domain_whitelist", [])
     ROUTING_CONFIG = settings.get("routing") or {}
 
     required = ROUTING_COMMON_KEYS + ROUTING_MODE_KEYS[mode]
@@ -543,8 +539,6 @@ def main():
     
     # Загружаем настройки из единого JSON-конфига
     load_settings(mode)
-    if DOMAIN_WHITELIST:
-        print(f"  → Domain whitelist из settings.json: {', '.join(DOMAIN_WHITELIST)}", file=sys.stderr)
     
     print(f"  → Обработка унифицированной подписки (режим: {mode})", file=sys.stderr)
     try:
