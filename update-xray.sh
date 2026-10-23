@@ -17,6 +17,7 @@ if ! flock -n 200; then
 fi
 
 LOG="/tmp/log/xray-update.log"
+mkdir -p /tmp/log
 
 die() {
     echo "[X] $1" | tee -a "$LOG"

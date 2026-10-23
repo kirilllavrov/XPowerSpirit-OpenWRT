@@ -169,7 +169,7 @@ if [ -z "$SUB_URL" ]; then
 fi
 
 # Создаём необходимые директории
-mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR"
+mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR" /tmp/log
 
 # Инициализируем settings.json из репозитория (если файла нет)
 if [ ! -f "$SETTINGS_JSON" ]; then
@@ -590,6 +590,9 @@ CONF="/etc/xray/config.json"
 ASSET_DIR="/usr/share/xray"
 
 start_service() {
+    # Xray не создаёт каталог для log.access/log.error — без него старт падает
+    mkdir -p /tmp/log
+
     # Ждём сеть
     for i in $(seq 1 15); do
         if ip route | grep -q default; then
