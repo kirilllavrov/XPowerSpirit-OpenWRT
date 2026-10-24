@@ -715,7 +715,23 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 | `geo.geoip_url` | string | URL geoip.dat |
 | `geo.geosite_url` | string | URL geosite.dat |
 
-> **Примечание:** Поля `routing.*` мержатся поверх значений по умолчанию: если ключ отсутствует в `settings.json`, используется дефолт из кода `xray-generate-config.py`; если присутствует — полностью заменяет список.
+> **Примечание:** `settings.json` — единственный источник правил роутинга, в генераторе их нет.
+> Обязательные ключи перечислены в `ROUTING_KEYS` (`xray-generate-config.py`). Если ключ
+> отсутствует, генератор завершается с кодом 1 и перечисляет недостающие — иначе правила
+> получились бы пустыми (RU-трафик ушёл бы в прокси, реклама перестала бы блокироваться).
+> Список из `settings.json` **полностью заменяет** значение: дефолта в коде больше нет.
+>
+> **Обновление с прежней версии.** Если `settings.json` создан старой версией установщика,
+> в нём может не хватать ключей `routing`. Долейте недостающие, сохранив свои значения:
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/settings.default.json \
+>     -o /tmp/settings.default.json
+> jq --slurpfile def /tmp/settings.default.json \
+>    '.routing = ($def[0].routing + (.routing // {}))' \
+>    /etc/xray/settings.json > /tmp/settings.new && mv /tmp/settings.new /etc/xray/settings.json
+> /usr/share/xray/update-xray.sh
+> ```
 >
 > **Примечание:** Настройки гостевой, IoT сетей и LAN (`--guest=*`, `--iot=*`, `--lan-ip=`) — это параметры установочного скрипта. Они применяются в UCI напрямую и не сохраняются в `settings.json`.
 

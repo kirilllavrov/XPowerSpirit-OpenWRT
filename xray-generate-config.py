@@ -27,55 +27,63 @@ import os
 #   КОНФИГУРАЦИЯ
 # ============================================
 
-SETTINGS_FILE = "/etc/xray/settings.json"
+# XRAY_SETTINGS_FILE — только для тестов и ручных прогонов вне устройства
+SETTINGS_FILE = os.environ.get("XRAY_SETTINGS_FILE", "/etc/xray/settings.json")
+
+# Эталон правил роутинга: из него доливаются недостающие ключи на устройстве
+SETTINGS_DEFAULT_URL = ("https://raw.githubusercontent.com/kirilllavrov/"
+                        "XPowerSpirit-OpenWRT/main/settings.default.json")
 
 # Категория geosite с доменами проверки «какой у меня IP» (ifconfig.me, api.ipify.org,
 # 2ip.ru и подобные). Провайдеры и сервисы используют их для детекта VPN, поэтому
 # такие домены обязаны идти напрямую. Сами домены живут в geosite.dat, не в settings.json.
 IP_CHECK_GEOSITE = "geosite:category-ipcheck"
 
-# Правила роутинга по умолчанию (переопределяются из settings.json → routing)
-ROUTING_CONFIG = {
-    "domainStrategy": "IPOnDemand",
-    "doh_domains": [
-        "common.dot.dns.yandex.net",
-        "cloudflare-dns.com",
-        "dns.google",
-        "dns.quad9.net",
-        "doh.opendns.com",
-        "dns.nextdns.io"
-    ],
-    "block_domains": ["geosite:category-ads"],
-    "direct_ips": ["geoip:ru", "geoip:private"],
-    "direct_domains": [
-        "geosite:private",
-        "geosite:category-browser",
-        "geosite:category-cdn-ru",
-        "geosite:category-mobile",
-        "geosite:category-ru"
-    ],
-    "proxy_domains": [
-        "geosite:category-streaming",
-        "geosite:category-games"
-    ]
-}
+# Правила роутинга задаются только в settings.json → routing (единственный источник:
+# settings.default.json). Здесь — лишь перечень обязательных ключей: без них правила
+# получились бы пустыми (RU-трафик ушёл бы в прокси, реклама не блокировалась), поэтому
+# генератор отказывается работать, а не собирает тихо неверный конфиг.
+ROUTING_CONFIG = {}
+
+ROUTING_KEYS = (
+    "domainStrategy",
+    "doh_domains",
+    "block_domains",
+    "direct_ips",
+    "direct_domains",
+    "proxy_domains",
+)
 
 
 def load_settings():
-    """Загружает настройки из /etc/xray/settings.json"""
+    """Загружает routing из settings.json и проверяет обязательные ключи"""
     global ROUTING_CONFIG
-    if os.path.isfile(SETTINGS_FILE):
-        try:
-            with open(SETTINGS_FILE) as f:
-                settings = json.load(f)
-            # Загружаем правила роутинга (мержим с дефолтами — пользователь может переопределить любое поле)
-            user_routing = settings.get("routing", {})
-            if user_routing:
-                for key in ROUTING_CONFIG:
-                    if key in user_routing:
-                        ROUTING_CONFIG[key] = user_routing[key]
-        except Exception as e:
-            print(f"  [!] Не удалось прочитать {SETTINGS_FILE}: {e}", file=sys.stderr)
+
+    if not os.path.isfile(SETTINGS_FILE):
+        log_error(f"Нет {SETTINGS_FILE} — правила роутинга задаются только там")
+        sys.exit(1)
+
+    try:
+        with open(SETTINGS_FILE) as f:
+            settings = json.load(f)
+    except Exception as e:
+        log_error(f"Не удалось прочитать {SETTINGS_FILE}: {e}")
+        sys.exit(1)
+
+    routing = settings.get("routing") or {}
+    missing = [key for key in ROUTING_KEYS if key not in routing]
+    if missing:
+        log_error(f"В {SETTINGS_FILE} → routing нет обязательных ключей: {', '.join(missing)}")
+        log_error("Правила роутинга задаются только в settings.json; без этих ключей")
+        log_error("правила получились бы пустыми, поэтому конфиг не собирается.")
+        log_error("Долейте недостающие ключи, сохранив свои значения:")
+        log_error(f"  curl -fsSL {SETTINGS_DEFAULT_URL} -o /tmp/settings.default.json")
+        log_error("  jq --slurpfile def /tmp/settings.default.json \\")
+        log_error("     '.routing = ($def[0].routing + (.routing // {}))' \\")
+        log_error(f"     {SETTINGS_FILE} > /tmp/s.json && mv /tmp/s.json {SETTINGS_FILE}")
+        sys.exit(1)
+
+    ROUTING_CONFIG = {key: routing[key] for key in ROUTING_KEYS}
 
 
 # ============================================
