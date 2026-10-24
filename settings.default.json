@@ -34,6 +34,7 @@
     "bs_ips": [
       "geoip:whitelist"
     ],
+    "bs_tag_pattern": "bypass",
     "dns_direct_address": "https+local://common.dot.dns.yandex.net/dns-query",
     "dns_proxy_address": "https://cloudflare-dns.com/dns-query",
     "dns_hosts": {
@@ -48,6 +49,8 @@
     "confirmations": 3,
     "back_confirmations": 2,
     "min_dwell": 600,
+    "select_want": 5,
+    "node_timeout": 2,
     "probe_external": [
       {
         "host": "connectivitycheck.gstatic.com",

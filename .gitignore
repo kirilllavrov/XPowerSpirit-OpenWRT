@@ -8,6 +8,7 @@ AGENTS.md
 *.swp
 *.swo
 test/
+tests/
 
 # --- Python cache ---
 __pycache__/

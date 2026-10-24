@@ -291,15 +291,34 @@ def build_proxy_config(proxy_outbounds: list, mode: str = "normal") -> dict:
     Собирает полный конфиг с прокси, burstObservatory, balancer и routing.
     mode="normal" — обычная маршрутизация, mode="bs" — белые списки оператора.
     """
+    if not proxy_outbounds:
+        return build_no_proxy_config(mode)
+
     cfg = base_config(mode, has_proxy=True)
     cfg["outbounds"] = proxy_outbounds + [make_direct_outbound(), make_block_outbound(), build_dns_outbound()]
-    cfg.update(build_burst_observatory(proxy_outbounds))
+    cfg.update(build_burst_observatory(proxy_outbounds, mode))
     routing = {
         "domainStrategy": ROUTING_CONFIG["domainStrategy"],
         "rules": build_rules(proxy_outbounds, mode=mode),
         "balancers": build_balancers(proxy_outbounds, mode)
     }
     cfg["routing"] = routing
+    return cfg
+
+
+def build_no_proxy_config(mode: str = "bs") -> dict:
+    """
+    Профиль без прокси: в bs это случай «нет ни одного доступного bypass-узла».
+    БС-домены и адреса идут напрямую, всё остальное блокируется (быстрый отказ).
+    """
+    print("  [!] В профиле нет прокси-узлов — не-БС трафик будет блокироваться",
+          file=sys.stderr)
+    cfg = base_config(mode, has_proxy=False)
+    cfg["outbounds"] = [make_direct_outbound(), make_block_outbound(), build_dns_outbound()]
+    cfg["routing"] = {
+        "domainStrategy": ROUTING_CONFIG["domainStrategy"],
+        "rules": build_rules([], mode=mode, catch_all="block")
+    }
     return cfg
 
 
@@ -359,13 +378,48 @@ def bs_categories_missing() -> list:
     return missing
 
 
-def build_rules(proxy_outbounds: list, mode: str = "normal", direct_mode: bool = False) -> list:
+def is_bypass_node(ob: dict) -> bool:
+    """
+    Узел годится для режима БС: тег содержит bs_tag_pattern.
+    В реальной подписке такие узлы называются bypass-1…bypass-20
+    (после парсера — proxy-bypass-N).
+    """
+    pattern = str(ROUTING_CONFIG.get("bs_tag_pattern") or "bypass").lower()
+    return bool(pattern) and pattern in str(ob.get("tag", "")).lower()
+
+
+def load_selected_tags(path: str) -> list:
+    """
+    Теги узлов, отобранных пробой (bs-nodes.json, поле selected[].tag).
+    Пустой результат — ограничение не применяется: в профиль идут все bypass-узлы.
+    """
+    if not path:
+        return []
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        print(f"  [!] Не удалось прочитать {path}: {e}", file=sys.stderr)
+        return []
+    tags = []
+    for item in data.get("selected") or []:
+        if isinstance(item, dict) and item.get("tag"):
+            tags.append(str(item["tag"]))
+        elif isinstance(item, str) and item:
+            tags.append(item)
+    return tags
+
+
+def build_rules(proxy_outbounds: list, mode: str = "normal", direct_mode: bool = False,
+                catch_all: str = "") -> list:
     """
     Строит правила маршрутизации.
 
     mode="normal": RU/private — напрямую, стриминг/игры и всё остальное — в балансировщик.
     mode="bs": домены и адреса из белого списка — напрямую, всё остальное — в балансировщик
     (т.е. в прокси). Реклама и QUIC блокируются в обоих режимах.
+    catch_all — переопределение последнего правила, когда прокси нет
+    (в bs — "block", чтобы недоступное не висело в таймаутах).
     """
     rules = [
         # Клиентский DNS (от dnsmasq) → dns-out (hijack → dns-inbuilt)
@@ -464,7 +518,7 @@ def build_rules(proxy_outbounds: list, mode: str = "normal", direct_mode: bool =
         rules.append({
             "type": "field",
             "network": "tcp,udp",
-            "outboundTag": "direct"
+            "outboundTag": catch_all or "direct"
         })
 
     return rules
@@ -495,24 +549,29 @@ def build_balancers(proxy_outbounds: list, mode: str = "normal") -> list:
     ]
 
 
-def build_burst_observatory(proxy_outbounds: list) -> dict:
+def build_burst_observatory(proxy_outbounds: list, mode: str = "normal") -> dict:
     """
     Создаёт конфигурацию burstObservatory для мониторинга прокси.
     Используется со стратегией leastLoad.
-    
+
     Пингует connectivitycheck.gstatic.com (Google Connectivity Check) —
     более надёжный endpoint, чем google.com, не троттлится.
     GET вместо HEAD — лучше совместимость с прокси-протоколами.
     Таймаут 15s — с запасом на Reality/TLS handshake.
+
+    В bs-профиле узлов мало (только bypass-*), поэтому интервал сокращён до
+    документированного минимума: пока observatory не собрал данные, leastLoad
+    никого не выбирает и трафик уходит в fallbackTag.
     """
     subject_selector = [ob["tag"] for ob in proxy_outbounds]
+    fast = mode == "bs"
     return {
         "burstObservatory": {
             "subjectSelector": subject_selector,
             "pingConfig": {
                 "destination": "http://connectivitycheck.gstatic.com/generate_204",
-                "interval": "1m",
-                "sampling": 10,
+                "interval": "10s" if fast else "1m",
+                "sampling": 3 if fast else 10,
                 "timeout": "15s",
                 "httpMethod": "GET"
             }
@@ -529,6 +588,8 @@ def parse_args():
     parser.add_argument('--output', required=True, help='Output config file')
     parser.add_argument('--mode', default='normal', choices=['normal', 'bs'],
                         help='normal — обычная маршрутизация, bs — белые списки оператора')
+    parser.add_argument('--nodes', default='',
+                        help='JSON со списком отобранных пробой узлов (selected[].tag)')
     parser.add_argument('--format', default='unified', help=argparse.SUPPRESS)  # обратная совместимость, не используется
     return parser.parse_args()
 
@@ -573,6 +634,25 @@ def main():
         ob for ob in raw_outbounds
         if ob.get("protocol") not in ("freedom", "blackhole", "dns", "loopback")
     ]
+
+    # В bs-режиме в профиль попадают только узлы, которые умеют работать при БС
+    # (в реальной подписке — теги bypass-1…bypass-20).
+    if mode == "bs":
+        total = len(raw_outbounds)
+        raw_outbounds = [ob for ob in raw_outbounds if is_bypass_node(ob)]
+        print(f"  → bypass-узлов: {len(raw_outbounds)} из {total}", file=sys.stderr)
+
+        selected = load_selected_tags(args.nodes)
+        if selected:
+            keep = set(selected)
+            matched = [ob for ob in raw_outbounds if ob.get("tag") in keep]
+            if matched:
+                raw_outbounds = matched
+                print(f"  → Отобрано пробой: {len(matched)} узлов", file=sys.stderr)
+            else:
+                print("  [!] Теги из bs-nodes.json не найдены в подписке — берём все bypass-узлы",
+                      file=sys.stderr)
+
     proxy_outbounds = [normalize_outbound(ob) for ob in raw_outbounds]
     cfg = build_proxy_config(proxy_outbounds, mode=mode)
     print_proxy_summary(proxy_outbounds, mode)

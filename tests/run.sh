@@ -259,9 +259,36 @@ mkdir -p "$TMP/assets"
 printf 'CATEGORY-WHITELIST CATEGORY-ADS CATEGORY-IPCHECK geolocation-!cn' >"$TMP/assets/geosite.dat"
 printf 'whitelist ru private cn ir' >"$TMP/assets/geoip.dat"
 
+# bs-профиль собирается только из узлов bypass-*: остальные в БС бесполезны
+cat >"$TMP/bypass.json" <<'JSON'
+{"hole": false, "outbounds": [
+  {"tag": "proxy-AUTO", "protocol": "vless",
+   "settings": {"vnext": [{"address": "auto.example.com", "port": 443,
+                           "users": [{"id": "11111111-1111-1111-1111-111111111111", "encryption": "none"}]}]},
+   "streamSettings": {"network": "tcp", "security": "tls", "tlsSettings": {"serverName": "auto.example.com"}}},
+  {"tag": "proxy-bypass-1", "protocol": "vless",
+   "settings": {"vnext": [{"address": "b1.example.com", "port": 443,
+                           "users": [{"id": "22222222-2222-2222-2222-222222222222", "encryption": "none"}]}]},
+   "streamSettings": {"network": "tcp", "security": "reality",
+                      "realitySettings": {"serverName": "www.vk.com", "password": "k", "shortId": "ab", "fingerprint": "chrome"}}},
+  {"tag": "proxy-bypass-2", "protocol": "vless",
+   "settings": {"vnext": [{"address": "b2.example.com", "port": 443,
+                           "users": [{"id": "33333333-3333-3333-3333-333333333333", "encryption": "none"}]}]},
+   "streamSettings": {"network": "tcp", "security": "reality",
+                      "realitySettings": {"serverName": "yandex.ru", "password": "k", "shortId": "ab", "fingerprint": "chrome"}}}
+]}
+JSON
+
 XRAY_LOCATION_ASSET="$TMP/assets" python3 "$GENERATOR" --mode bs --output "$TMP/cfg_bs.json" \
-    <"$TMP/unified.json" 2>/dev/null
+    <"$TMP/bypass.json" 2>/dev/null
 assert_rc "$?" 0 "bs: профиль собран при наличии категорий"
+
+assert_py "
+import json, sys
+c = json.load(open(sys.argv[1]))
+tags = [o['tag'] for o in c['outbounds'] if o.get('protocol') == 'vless']
+sys.exit(0 if tags == ['proxy-bypass-1', 'proxy-bypass-2'] else 1)" \
+    "$TMP/cfg_bs.json" "bs: в профиль попадают только узлы bypass-*"
 
 assert_py "
 import json, sys
@@ -298,6 +325,31 @@ sys.exit(0 if len(s) == 3
          and c['dns']['disableFallbackIfMatch'] is False else 1)" \
     "$TMP/cfg_bs.json" "bs: DNS БС-доменов напрямую, остального — через прокси"
 
+# Отбор пробой: генератор берёт только теги из bs-nodes.json
+printf '{"selected":[{"tag":"proxy-bypass-2"}]}' >"$TMP/nodes.json"
+XRAY_LOCATION_ASSET="$TMP/assets" python3 "$GENERATOR" --mode bs --nodes "$TMP/nodes.json" \
+    --output "$TMP/cfg_bs_sel.json" <"$TMP/bypass.json" 2>/dev/null
+assert_rc "$?" 0 "bs: профиль с --nodes собран"
+assert_py "
+import json, sys
+c = json.load(open(sys.argv[1]))
+tags = [o['tag'] for o in c['outbounds'] if o.get('protocol') == 'vless']
+sys.exit(0 if tags == ['proxy-bypass-2'] else 1)" \
+    "$TMP/cfg_bs_sel.json" "bs: --nodes ограничивает набор узлов"
+
+# Нет bypass-узлов — профиль собирается без прокси и без балансировщика
+XRAY_LOCATION_ASSET="$TMP/assets" python3 "$GENERATOR" --mode bs \
+    --output "$TMP/cfg_bs_noproxy.json" <"$TMP/unified.json" 2>/dev/null
+assert_rc "$?" 0 "bs: без bypass-узлов профиль собирается"
+assert_py "
+import json, sys
+c = json.load(open(sys.argv[1]))
+rules = c['routing']['rules']
+sys.exit(0 if not c['routing'].get('balancers')
+         and rules[-1].get('outboundTag') == 'block'
+         and any(r.get('domain') == ['geosite:category-whitelist'] for r in rules) else 1)" \
+    "$TMP/cfg_bs_noproxy.json" "bs: без bypass-узлов не-БС трафик блокируется"
+
 # ------------------------------------------------------------- bs-probe.py
 
 PROBE="$ROOT/bs-probe.py"
@@ -330,6 +382,48 @@ wait "$SRV" 2>/dev/null
 
 run_probe
 assert_rc "$?" 2 "bs-probe: ничего не доступно -> unknown"
+
+# Отбор bypass-узлов и журнал рабочих серверов
+cat >"$TMP/nodes_src.json" <<'JSON'
+{"outbounds": [
+  {"tag": "proxy-bypass-live", "protocol": "vless",
+   "settings": {"vnext": [{"address": "127.0.0.1", "port": 18082,
+                           "users": [{"id": "x", "encryption": "none"}]}]},
+   "streamSettings": {"security": "none"}},
+  {"tag": "proxy-bypass-dead", "protocol": "vless",
+   "settings": {"vnext": [{"address": "127.0.0.1", "port": 18083,
+                           "users": [{"id": "x", "encryption": "none"}]}]},
+   "streamSettings": {"security": "none"}},
+  {"tag": "proxy-AUTO", "protocol": "vless",
+   "settings": {"vnext": [{"address": "127.0.0.1", "port": 18082,
+                           "users": [{"id": "x", "encryption": "none"}]}]},
+   "streamSettings": {"security": "none"}}
+]}
+JSON
+
+python3 -m http.server 18082 --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 &
+SRV=$!
+sleep 1
+python3 "$PROBE" --select-nodes --no-mark --from "$TMP/nodes_src.json" \
+    --out "$TMP/bs-nodes.json" --ledger "$TMP/bs-good.json" --want 1 \
+    --timeout 1 --workers 2 --network test >/dev/null 2>&1
+assert_rc "$?" 0 "bs-probe: найден рабочий bypass-узел"
+kill "$SRV" 2>/dev/null
+wait "$SRV" 2>/dev/null
+
+assert_py "
+import json, sys
+d = json.load(open(sys.argv[1]))
+sel = [x['tag'] for x in d['selected']]
+sys.exit(0 if sel == ['proxy-bypass-live'] else 1)" \
+    "$TMP/bs-nodes.json" "bs-probe: в selected только рабочий узел (AUTO отфильтрован)"
+
+assert_py "
+import json, sys
+d = json.load(open(sys.argv[1]))
+nodes = (d['networks'].get('test') or {}).get('nodes', [])
+sys.exit(0 if nodes and nodes[0]['key'].startswith('127.0.0.1:18082|') else 1)" \
+    "$TMP/bs-good.json" "bs-probe: рабочий узел записан в журнал по endpoint+SNI"
 
 # ------------------------------------------------- определение архитектуры
 

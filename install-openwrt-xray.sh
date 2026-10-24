@@ -892,6 +892,12 @@ else
 fi
 
 cp "$CONFIG_NORMAL" "$CONFIG_JSON"
+
+# Разбор подписки нужен сторожу, чтобы пересобрать bs-профиль без сети
+if cp "/tmp/parsed_outbounds.json" "${STATE_DIR}/parsed.json.tmp" && chmod 600 "${STATE_DIR}/parsed.json.tmp"; then
+    mv "${STATE_DIR}/parsed.json.tmp" "${STATE_DIR}/parsed.json"
+fi
+
 rm -f "/tmp/sub_raw.txt" "/tmp/parsed_outbounds.json" "/tmp/config.bs.json"
 
 if [ ! -s "$CONFIG_JSON" ]; then

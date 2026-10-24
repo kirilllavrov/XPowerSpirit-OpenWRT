@@ -163,6 +163,9 @@ TMP_DIR="/tmp/xray_update"
 MODE_FILE="$STATE_DIR/mode"
 CONFIG_NORMAL="$CONFIG_DIR/config.normal.json"
 CONFIG_BS="$CONFIG_DIR/config.bs.json"
+# Разбор подписки и результат отбора bypass-узлов — для пересборки bs-профиля без сети
+PARSED_STATE="$STATE_DIR/parsed.json"
+NODES_FILE="$STATE_DIR/bs-nodes.json"
 
 GENERATOR="/usr/share/xray/xray-generate-config.py"
 PARSER="/usr/share/xray/xray-sub-parser.py"
@@ -205,10 +208,16 @@ ensure_setting() {
 migrate_settings() {
     ensure_setting ".routing.bs_domains" '["geosite:category-whitelist"]'
     ensure_setting ".routing.bs_ips" '["geoip:whitelist"]'
+    ensure_setting ".routing.bs_tag_pattern" '"bypass"'
+    ensure_setting ".routing.dns_direct_address" '"https+local://common.dot.dns.yandex.net/dns-query"'
+    ensure_setting ".routing.dns_proxy_address" '"https://cloudflare-dns.com/dns-query"'
+    ensure_setting ".routing.dns_hosts" '{"common.dot.dns.yandex.net":["77.88.8.1","77.88.8.8"],"cloudflare-dns.com":["1.0.0.1","1.1.1.1"],"dns.google":["8.8.8.8","8.8.4.4"],"dns.nextdns.io":["45.90.28.0","45.90.30.0"]}'
     ensure_setting ".bs.interval" '60'
     ensure_setting ".bs.confirmations" '3'
     ensure_setting ".bs.back_confirmations" '2'
     ensure_setting ".bs.min_dwell" '600'
+    ensure_setting ".bs.select_want" '5'
+    ensure_setting ".bs.node_timeout" '2'
     [ -f "$MODE_FILE" ] || echo "normal" >"$MODE_FILE"
 }
 
@@ -425,6 +434,14 @@ if curl -fsS -L \
         PARSE_RC=$?
 
         if [ "$PARSE_RC" -eq 0 ]; then
+            # Сохраняем разбор подписки: по нему сторож пересоберёт bs-профиль без сети
+            if cp "$TMP_DIR/parsed.json" "${PARSED_STATE}.tmp" && chmod 600 "${PARSED_STATE}.tmp"; then
+                mv "${PARSED_STATE}.tmp" "$PARSED_STATE"
+            else
+                rm -f "${PARSED_STATE}.tmp"
+                echo "[!] Не удалось сохранить $PARSED_STATE" >>"$LOG"
+            fi
+
             # Один разбор подписки → два профиля: обычный и режим белых списков
             if python3 "$GENERATOR" --mode normal --output "$TMP_DIR/config.normal.json" < "$TMP_DIR/parsed.json" 2>>"$LOG"; then
                 if xray run -test -config "$TMP_DIR/config.normal.json" >>"$LOG" 2>&1; then
@@ -437,7 +454,9 @@ if curl -fsS -L \
                 echo "[X] Ошибка генератора (normal)" >>"$LOG"
             fi
 
-            python3 "$GENERATOR" --mode bs --output "$TMP_DIR/config.bs.json" < "$TMP_DIR/parsed.json" 2>>"$LOG"
+            set -- --mode bs --output "$TMP_DIR/config.bs.json"
+            [ -s "$NODES_FILE" ] && set -- "$@" --nodes "$NODES_FILE"
+            python3 "$GENERATOR" "$@" < "$TMP_DIR/parsed.json" 2>>"$LOG"
             BS_RC=$?
             if [ "$BS_RC" -eq 0 ]; then
                 if xray run -test -config "$TMP_DIR/config.bs.json" >>"$LOG" 2>&1; then

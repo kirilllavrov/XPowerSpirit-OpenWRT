@@ -12,10 +12,15 @@
 
 SETTINGS_JSON="/etc/xray/settings.json"
 CONFIG="/etc/xray/config.json"
+CONFIG_NORMAL="/etc/xray/config.normal.json"
+CONFIG_BS="/etc/xray/config.bs.json"
 STATE_DIR="/etc/xray/state"
 MODE_FILE="$STATE_DIR/mode"
 STATE_FILE="$STATE_DIR/watchdog"
+NODES_FILE="$STATE_DIR/bs-nodes.json"
+LEDGER="$STATE_DIR/bs-good.json"
 PROBE="/usr/share/xray/bs-probe.py"
+GENERATOR="${GENERATOR:-/usr/share/xray/xray-generate-config.py}"
 LOG="/tmp/log/xray-mode.log"
 LOCK_FILE="/var/lock/xray-mode.lock"
 UPDATE_LOCK="/var/lock/xray-update.lock"
@@ -111,8 +116,61 @@ probe_state() {
 
 # ---------------------------------------------------------------- переключение
 
+# Отбор рабочих bypass-узлов: пробы идут напрямую (SO_MARK=2), журнал
+# /etc/xray/state/bs-good.json помнит, что работало у текущего оператора.
+select_nodes() {
+    local want timeout pattern
+    [ -s "$CONFIG_NORMAL" ] || {
+        log "[!] Нет $CONFIG_NORMAL — отбор bypass-узлов пропущен"
+        return 1
+    }
+    want=$(setting_num ".bs.select_want" 5)
+    timeout=$(setting_num ".bs.node_timeout" 2)
+    pattern=$(settings_get ".routing.bs_tag_pattern" 2>/dev/null)
+    [ -n "$pattern" ] || pattern="bypass"
+
+    if python3 "$PROBE" --select-nodes --from "$CONFIG_NORMAL" \
+        --out "$NODES_FILE" --ledger "$LEDGER" --want "$want" \
+        --timeout "$timeout" --tag-pattern "$pattern" >>"$LOG" 2>&1; then
+        return 0
+    fi
+    log "[!] Рабочих bypass-узлов не найдено — профиль будет без прокси"
+    return 1
+}
+
+# Пересборка bs-профиля из сохранённого разбора подписки — сеть не нужна.
+rebuild_bs_profile() {
+    local parsed="$STATE_DIR/parsed.json"
+    local tmp="/tmp/config.bs.new"
+    local rc
+    if [ ! -s "$parsed" ]; then
+        log "[!] Нет $parsed — используем готовый $CONFIG_BS"
+        return 0
+    fi
+
+    set -- --mode bs --output "$tmp"
+    [ -s "$NODES_FILE" ] && set -- "$@" --nodes "$NODES_FILE"
+    python3 "$GENERATOR" "$@" <"$parsed" >>"$LOG" 2>&1
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+        mv "$tmp" "$CONFIG_BS"
+        log "[i] bs-профиль пересобран"
+        return 0
+    fi
+    rm -f "$tmp"
+    log "[!] Пересборка bs-профиля не удалась (код $rc) — используем прежний"
+    return 1
+}
+
 switch_to() {
     local new="$1" profile
+
+    # Для БС сначала подбираем узлы и пересобираем профиль под них
+    if [ "$new" = "bs" ]; then
+        select_nodes || true
+        rebuild_bs_profile || true
+    fi
+
     profile=$(profile_for "$new")
 
     if [ ! -s "$profile" ]; then

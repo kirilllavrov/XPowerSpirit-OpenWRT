@@ -18,13 +18,16 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import os
 import random
 import socket
 import ssl
 import struct
+import subprocess
 import sys
+import time
 
 # Путь переопределяется в тестах (на устройстве — /etc/xray/settings.json)
 SETTINGS_FILE = os.environ.get("BS_PROBE_SETTINGS", "/etc/xray/settings.json")
@@ -217,6 +220,251 @@ def classify(external_ok: bool, bs_ok: bool) -> str:
     return "unknown"
 
 
+# -----------------------------
+#   ОТБОР BYPASS-УЗЛОВ
+# -----------------------------
+LEDGER_VERSION = 1
+LEDGER_FAIL_LIMIT = 3
+
+
+def node_key(ob: dict) -> str:
+    """
+    Идентичность узла для журнала: адрес:порт + SNI.
+
+    В реальной подписке один и тот же IP используется узлами с разными SNI
+    (www.vk.com / yandex.ru) — оператор фильтрует по SNI, поэтому «работает
+    или нет» относится к паре (IP, SNI), а не к адресу.
+    """
+    vnext = ((ob.get("settings") or {}).get("vnext") or [{}])[0]
+    addr = vnext.get("address") or ""
+    port = vnext.get("port") or 0
+    stream = ob.get("streamSettings") or {}
+    sni = ((stream.get("realitySettings") or {}).get("serverName")
+           or (stream.get("tlsSettings") or {}).get("serverName") or "")
+    return f"{addr}:{port}|{sni}"
+
+
+def bypass_nodes(config_path: str, pattern: str) -> list:
+    """Прокси-узлы из готового профиля, чей тег содержит pattern."""
+    try:
+        with open(config_path) as f:
+            cfg = json.load(f)
+    except (OSError, ValueError) as e:
+        log(f"[X] Не удалось прочитать {config_path}: {e}")
+        return []
+    pat = (pattern or "").lower()
+    nodes = []
+    for ob in cfg.get("outbounds") or []:
+        if (ob.get("protocol") or "") in ("freedom", "blackhole", "dns", "loopback"):
+            continue
+        if pat and pat not in str(ob.get("tag") or "").lower():
+            continue
+        key = node_key(ob)
+        if key.startswith(":"):
+            continue
+        nodes.append(ob)
+    return nodes
+
+
+def load_ledger(path: str) -> dict:
+    """Журнал рабочих узлов; при чтении ошибки — пустой."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        if isinstance(data, dict) and isinstance(data.get("networks"), dict):
+            return data
+    except (OSError, ValueError):
+        pass
+    return {"version": LEDGER_VERSION, "networks": {}}
+
+
+def save_ledger(path: str, ledger: dict, max_per_network: int) -> None:
+    """Чистка и атомарная запись журнала."""
+    networks = ledger.get("networks") or {}
+    for net in list(networks):
+        block = networks[net] or {}
+        nodes = [n for n in block.get("nodes", [])
+                 if int(n.get("fail_count", 0)) < LEDGER_FAIL_LIMIT]
+        nodes.sort(key=lambda n: n.get("ok_at", 0), reverse=True)
+        block["nodes"] = nodes[:max_per_network]
+        block["updated"] = int(time.time())
+        if not nodes:
+            networks.pop(net, None)
+    tmp = f"{path}.tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(ledger, f, ensure_ascii=False, indent=2)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except OSError as e:
+        log(f"[!] Не удалось записать {path}: {e}")
+
+
+def detect_network_key() -> str:
+    """
+    Грубый признак сети оператора — первые два октета WAN-адреса.
+    Нужен потому, что у разных операторов работают разные bypass-узлы.
+    """
+    ip = ""
+    try:
+        raw = subprocess.run(["ubus", "call", "network.interface.wan", "status"],
+                             capture_output=True, timeout=5).stdout
+        data = json.loads(raw or b"{}")
+        addrs = ((data.get("data") or {}).get("ipv4-address") or [])
+        if addrs:
+            ip = str(addrs[0].get("address") or "")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+
+    if not ip:
+        try:
+            out = subprocess.run(["ip", "-4", "route", "get", "1.1.1.1"],
+                                 capture_output=True, timeout=5).stdout.decode()
+            toks = out.split()
+            if "src" in toks:
+                ip = toks[toks.index("src") + 1]
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    parts = [p for p in ip.split(".") if p.isdigit()]
+    return ".".join(parts[:2]) if len(parts) >= 2 else "unknown"
+
+
+def probe_node(ob: dict, mark: int, timeout: float) -> dict:
+    """
+    Проверка узла напрямую (SO_MARK обходит TProxy).
+
+    reality проверяется только TCP-коннектом: сервер подставляет чужой
+    сертификат, и полноценная TLS-проверка всегда дала бы ложный отказ.
+    """
+    vnext = ((ob.get("settings") or {}).get("vnext") or [{}])[0]
+    addr = str(vnext.get("address") or "")
+    port = int(vnext.get("port") or 0)
+    stream = ob.get("streamSettings") or {}
+    security = str(stream.get("security") or "none").lower()
+    sni = ((stream.get("realitySettings") or {}).get("serverName")
+           or (stream.get("tlsSettings") or {}).get("serverName") or "")
+
+    res = {"tag": ob.get("tag"), "key": node_key(ob), "ok": False, "error": None}
+    if not addr or not port:
+        res["error"] = "no-endpoint"
+        return res
+
+    ips = resolve(addr)
+    if not ips and addr.replace(".", "").isdigit():
+        ips = [addr]
+    last = "connect"
+    for ip in ips[:3]:
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            if mark:
+                sock.setsockopt(socket.SOL_SOCKET, SO_MARK, mark)
+            sock.settimeout(timeout)
+            sock.connect((ip, port))
+            if security == "tls" and sni:
+                # интересует только завершённость хендшейка, не валидность сертификата
+                sock = ssl._create_unverified_context().wrap_socket(sock, server_hostname=sni)
+            res["ok"] = True
+            return res
+        except ssl.SSLError as e:
+            last = f"tls:{e.__class__.__name__}"
+        except OSError as e:
+            last = f"net:{e.__class__.__name__}"
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+    res["error"] = last
+    return res
+
+
+def ledger_update(ledger: dict, net: str, results: list) -> None:
+    """Успехи закрепляем, неудачи копим и чистим при 3 подряд."""
+    block = ledger.setdefault("networks", {}).setdefault(net, {"nodes": []})
+    by_key = {n.get("key"): n for n in block.get("nodes", []) if n.get("key")}
+    now = int(time.time())
+
+    for res in results:
+        node = by_key.get(res["key"])
+        if res["ok"]:
+            if node is None:
+                node = {"key": res["key"], "tag": res["tag"], "fail_count": 0}
+                by_key[res["key"]] = node
+            node["ok_at"] = now
+            node["tag"] = res["tag"]
+            node["fail_count"] = 0
+        elif node is not None:
+            node["fail_count"] = int(node.get("fail_count", 0)) + 1
+
+    block["nodes"] = list(by_key.values())
+    block["updated"] = now
+
+
+def select_nodes(args) -> int:
+    """Режим --select-nodes: отобрать рабочие bypass-узлы и обновить журнал."""
+    mark = 0 if args.no_mark else max(0, args.mark)
+    nodes = bypass_nodes(args.from_config, args.tag_pattern)
+    if not nodes:
+        log(f"[X] В {args.from_config} нет узлов с '{args.tag_pattern}'")
+        return 2
+
+    ledger = load_ledger(args.ledger)
+    net = args.network or detect_network_key()
+    known = {n.get("key") for n in
+             ((ledger.get("networks") or {}).get(net) or {}).get("nodes", [])}
+    # Сначала проверяем то, что уже работало в этой сети
+    ordered = sorted(nodes, key=lambda ob: node_key(ob) not in known)
+
+    selected, failed, results = [], [], []
+    workers = max(1, args.workers)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        idx = 0
+        while idx < len(ordered) and len(selected) < args.want:
+            chunk = ordered[idx:idx + workers]
+            idx += workers
+            futures = {pool.submit(probe_node, ob, mark, args.timeout): ob for ob in chunk}
+            for fut in concurrent.futures.as_completed(futures):
+                res = fut.result()
+                results.append(res)
+                (selected if res["ok"] else failed).append(res)
+
+    ledger_update(ledger, net, results)
+    save_ledger(args.ledger, ledger, max(1, args.ledger_max))
+
+    # В профиль берём только need-узлов, но в журнал попадают все успешные
+    selected = selected[:max(1, args.want)]
+
+    out = {
+        "network": net,
+        "ts": int(time.time()),
+        "pattern": args.tag_pattern,
+        "want": args.want,
+        "candidates": len(nodes),
+        "probed": len(results),
+        "selected": selected,
+        "failed": failed,
+    }
+    try:
+        with open(args.out, "w") as f:
+            json.dump(out, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+    except OSError as e:
+        log(f"[X] Не удалось записать {args.out}: {e}")
+        return 2
+
+    log(f"[i] сеть {net}: проверено {len(results)} из {len(nodes)}, "
+        f"рабочих {len(selected)} (нужно {args.want})")
+    for res in selected:
+        log(f"    OK   {res['tag']}  {res['key']}")
+    for res in failed[:5]:
+        log(f"    FAIL {res['tag']}  {res['key']}  {res['error']}")
+
+    return 0 if selected else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Проба доступности: normal / bs / unknown")
     parser.add_argument("--json", action="store_true", help="машиночитаемый вывод")
@@ -226,7 +474,24 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=4.0, help="таймаут одной пробы, с")
     parser.add_argument("--dns-server", default="",
                         help="резолвить пробы напрямую через этот DNS (например 77.88.8.8)")
+    parser.add_argument("--select-nodes", action="store_true",
+                        help="отобрать рабочие bypass-узлы и обновить журнал")
+    parser.add_argument("--from", dest="from_config", default="/etc/xray/config.normal.json",
+                        help="профиль, из которого берутся узлы (по умолчанию config.normal.json)")
+    parser.add_argument("--tag-pattern", default="bypass",
+                        help="подстрока тега bypass-узла (по умолчанию bypass)")
+    parser.add_argument("--out", default="/etc/xray/state/bs-nodes.json",
+                        help="результат отбора")
+    parser.add_argument("--ledger", default="/etc/xray/state/bs-good.json",
+                        help="журнал рабочих узлов")
+    parser.add_argument("--network", default="", help="ключ сети (по умолчанию — WAN /16)")
+    parser.add_argument("--want", type=int, default=5, help="сколько рабочих узлов отобрать")
+    parser.add_argument("--workers", type=int, default=8, help="параллельных проб")
+    parser.add_argument("--ledger-max", type=int, default=10, help="записей журнала на сеть")
     args = parser.parse_args()
+
+    if args.select_nodes:
+        return select_nodes(args)
 
     mark = 0 if args.no_mark else max(0, args.mark)
     external_probes, bs_probes = load_probes()
