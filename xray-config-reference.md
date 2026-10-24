@@ -526,17 +526,17 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 
 | Использование | Где в проекте | Как в документации |
 |---|---|---|
-| `log.loglevel: "none"` + файлы access/error; каталог создают установщик и `init.d` | [xray-generate-config.py](./xray-generate-config.py#L119), [install-openwrt-xray.sh](./install-openwrt-xray.sh#L172) | `access`/`error`/`loglevel` — подтверждено; сам ядро каталог не создаёт |
-| `dns` c `hosts`, `queryStrategy`, `serveStale`, `serveExpiredTTL`, `disableFallbackIfMatch`, `enableParallelQuery` | [xray-generate-config.py](./xray-generate-config.py#L123) | подтверждено |
+| `log.loglevel: "none"` + файлы access/error; каталог создают установщик и `init.d` | [xray-generate-config.py](./xray-generate-config.py), [install-openwrt-xray.sh](./install-openwrt-xray.sh) | `access`/`error`/`loglevel` — подтверждено; сам ядро каталог не создаёт |
+| `dns` c `hosts`, `queryStrategy`, `serveStale`, `serveExpiredTTL`, `disableFallbackIfMatch`, `enableParallelQuery` | [xray-generate-config.py](./xray-generate-config.py) | подтверждено |
 | `servers` в режиме `https+local://` (DOHL) + `domains`, `expectedIPs`, `skipFallback` | там же | подтверждено; DOHL не проходит routing |
-| `routing.domainStrategy: "IPOnDemand"`, правила `domain`/`ip`/`port`/`network`/`inboundTag` | [build_rules](./xray-generate-config.py#L275) | подтверждено |
-| `balancers[].selector` + `leastLoad` + `fallbackTag`; теги прокси с префиксом `proxy-` | [build_balancer](./xray-generate-config.py#L352), [proxy_tag](./xray-sub-parser.py#L54) | подтверждено; `selector` и `subjectSelector` **префиксные** |
-| `burstObservatory.pingConfig` (`destination`, `GET`, `1m`, `10`, `15s`) | [build_burst_observatory](./xray-generate-config.py#L369) | подтверждено; предупреждение о перехвате TProxy |
-| inbound `tunnel` (в конфиге — `dokodemo-door`) + `sockopt.tproxy` + `sniffing.routeOnly` | [base_config](./xray-generate-config.py#L115) | подтверждено; `dokodemo-door` — прежнее имя протокола |
-| `blackhole` c `response.type: "http"` | [make_block_outbound](./xray-generate-config.py#L231) | подтверждено |
-| DNS-outbound: `action: "hijack"`, `qType: "1,28"` | [build_dns_outbound](./xray-generate-config.py#L199) | подтверждено |
-| Freedom: `sockopt.domainStrategy: "UseIPv4"` | [make_direct_outbound](./xray-generate-config.py#L215) | подтверждено |
-| REALITY: `password` (+ `publicKey` для старых ядер) | [parse_vless_uri](./xray-sub-parser.py#L243) | подтверждено; `publicKey` — прежнее имя |
+| `routing.domainStrategy: "IPOnDemand"`, правила `domain`/`ip`/`port`/`network`/`inboundTag` | [build_rules](./xray-generate-config.py) | подтверждено |
+| `balancers[].selector` + `leastLoad` + `fallbackTag`; теги прокси с префиксом `proxy-` | [build_balancer](./xray-generate-config.py), [proxy_tag](./xray-sub-parser.py) | подтверждено; `selector` и `subjectSelector` **префиксные** |
+| `burstObservatory.pingConfig` (`destination`, `GET`, `1m`, `10`, `15s`) | [build_burst_observatory](./xray-generate-config.py) | подтверждено; предупреждение о перехвате TProxy |
+| inbound `tunnel` (в конфиге — `dokodemo-door`) + `sockopt.tproxy` + `sniffing.routeOnly` | [base_config](./xray-generate-config.py) | подтверждено; `dokodemo-door` — прежнее имя протокола |
+| `blackhole` c `response.type: "http"` | [make_block_outbound](./xray-generate-config.py) | подтверждено |
+| DNS-outbound: `action: "hijack"`, `qType: "1,28"` | [build_dns_outbound](./xray-generate-config.py) | подтверждено |
+| Freedom: `sockopt.domainStrategy: "UseIPv4"` | [make_direct_outbound](./xray-generate-config.py) | подтверждено |
+| REALITY: `password` (+ `publicKey` для старых ядер) | [parse_vless_uri](./xray-sub-parser.py) | подтверждено; `publicKey` — прежнее имя |
 
 ### Проверено на живом стенде (OpenWrt 25.12 в контейнере)
 

@@ -314,7 +314,8 @@ def ip_check_geosite_available() -> bool:
 def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
     """
     Строит правила маршрутизации.
-    Использует настройки из settings.json → routing (либо дефолты).
+    Значения берутся только из settings.json → routing (проверка обязательных
+    ключей — в load_settings), готовых дефолтов в коде нет.
     Если несколько прокси, использует балансировщик.
     Если один прокси, использует прямой outboundTag.
     """

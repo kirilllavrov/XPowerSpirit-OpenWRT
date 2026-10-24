@@ -13,7 +13,7 @@
 - [Требования](#-требования)
 - [Быстрый старт](#-быстрый-старт)
 - [Детальное описание скриптов](#-детальное-описание-скриптов)
-  - [install-openwrt-xray.sh](#install-openwrtxraysh)
+  - [install-openwrt-xray.sh](#install-openwrt-xraysh)
   - [setup-led-status.sh](#setup-led-statussh)
   - [setup-wifi-network.sh](#setup-wifi-networksh)
   - [update-xray.sh](#update-xraysh)
@@ -202,7 +202,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 
 1. **Настройка времени** — таймзона `Europe/Moscow` (MSK-3), синхронизация NTP (`ru.pool.ntp.org`, fallback `time.google.com`)
 2. **Загрузка скриптов** — скачивает `xray-generate-config.py`, `xray-sub-parser.py`, `update-xray.sh`, `update-nft.sh` в `/usr/share/xray/`
-3. **Сохранение настроек** — записывает URL подписки, User-Agent, фильтр remarks, модель/версию ОС, HWID и домен в whitelist в единый JSON-файл `/etc/xray/settings.json` (файл инициализируется из `settings.default.json` в репозитории, если его ещё нет)
+3. **Сохранение настроек** — записывает URL подписки, User-Agent, фильтр remarks, модель/версию ОС и HWID в единый JSON-файл `/etc/xray/settings.json` (файл инициализируется из `settings.default.json` в репозитории, если его ещё нет)
 4. **LAN и IPv6** — задаёт `--lan-ip` (по умолчанию `192.168.1.1/24`), диапазон DHCP `.100-.250`, отключает IPv6 на LAN/WAN, останавливает и отключает `odhcpd`
 5. **Гостевая сеть (опционально, `--guest=1`)**:
    - Bridge `br-guest`, интерфейс `guest` с DHCP (`.100-.250`, аренда 12ч)
@@ -810,8 +810,11 @@ uci commit sqm
 
 ### Настройка правил роутинга
 
-Правила маршрутизации настраиваются через секцию `routing` в `settings.json`.
-Все поля опциональны — при отсутствии используются значения по умолчанию.
+Правила маршрутизации настраиваются через секцию `routing` в `settings.json` — это
+единственный источник правил, в генераторе их нет. Все шесть ключей (`domainStrategy`,
+`doh_domains`, `block_domains`, `direct_ips`, `direct_domains`, `proxy_domains`) обязательны:
+если какого-то нет, генератор завершается с кодом 1 и печатает готовую команду доливки
+из `settings.default.json`, а не собирает конфиг с пустыми правилами.
 
 **Добавить домен в обход прокси (direct):**
 
@@ -884,7 +887,8 @@ jq '.routing.domainStrategy = "IPIfNonMatch"' \
 ### Прогон тестов без устройства
 
 Проверяет парсер и генератор на синтетических фикстурах: коды возврата, режим `hole`,
-фильтр `remarks`, префиксы тегов и отсутствие коллизий с `direct`/`block`/`dns-out`.
+фильтр `remarks`, префиксы тегов и отсутствие коллизий с `direct`/`block`/`dns-out`,
+а также что генератор отказывается собирать конфиг без обязательных ключей `routing`.
 Если доступен бинарь `xray`, дополнительно валидирует сгенерированные конфиги.
 
 ```bash
