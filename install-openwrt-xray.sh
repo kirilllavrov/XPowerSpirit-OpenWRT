@@ -747,9 +747,55 @@ sysctl -p /etc/sysctl.d/99-xray.conf >/dev/null 2>&1
 echo "[+] Sysctl настроен"
 
 # =============================================
-# 11. Geo + HWID + config.json
+# 11. Cron: автообновление в 2.30 ночи
 # =============================================
-echo "[+] Geo + HWID + config.json"
+echo "11. Настройка Crontab..."
+
+uci set system.@system[0].cronloglevel='9'
+uci commit system
+
+CRON_ENTRY="30 2 * * * $UPDATER >>/tmp/log/xray-update.log 2>&1"
+if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
+	(
+		crontab -l 2>/dev/null || true
+		echo "$CRON_ENTRY"
+	) | crontab -
+	echo "[+] Cron-задача для обновления Xray добавлена: $CRON_ENTRY"
+else
+	echo "[-] Cron-задача уже существует, пропускаем"
+fi
+
+# =============================================
+# 12. Настройка hotplug (автообновление после включения WAN)
+# =============================================
+echo "12. Настройка hotplug..."
+
+cat >/etc/hotplug.d/iface/99-xray-autoupdate <<'EOF'
+#!/bin/sh
+[ "$ACTION" = "ifup" ] || exit 0
+[ "$INTERFACE" = "wan" ] || exit 0
+
+if ! pidof xray >/dev/null; then
+    /etc/init.d/xray start
+    sleep 5
+fi
+
+for i in 1 2 3 4 5 6 7; do
+    sleep 5
+    if curl -fs --max-time 3 https://www.google.com/gen_204 >/dev/null; then
+        /usr/share/xray/update-xray.sh &
+        exit 0
+    fi
+done
+EOF
+
+chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
+echo "[+] Hotplug для автообновления после включения WAN настроен"
+
+# =============================================
+# 13. Geo + HWID + config.json
+# =============================================
+echo "13. Geo + HWID + config.json"
 
 update_geo() {
 	local URL="$1"
@@ -786,17 +832,23 @@ update_geo "$GEOIP_URL" "$GEO_DIR/geoip.dat"
 update_geo "$GEOSITE_URL" "$GEO_DIR/geosite.dat"
 
 # =============================================
-# 11b. HWID
+# 13b. HWID
 # =============================================
-echo "11b. Генерируем HWID..."
-HWID="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
-settings_set ".hwid" "$HWID"
-echo "  ✓ HWID сохранён в settings.json: $HWID"
+echo "13b. Определяем HWID..."
+HWID="$(settings_get ".hwid" 2>/dev/null)"
+if [ -n "$HWID" ]; then
+	echo "  ✓ Использую прежний HWID из settings.json: $HWID"
+	echo "    (переустановка не занимает новое устройство в подписке)"
+else
+	HWID="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
+	settings_set ".hwid" "$HWID"
+	echo "  ✓ HWID сохранён в settings.json: $HWID"
+fi
 
 # =============================================
 # 11c. Генерация config.json
 # =============================================
-echo "11c. Генерируем config.json из подписки..."
+echo "13c. Генерируем config.json из подписки..."
 
 SUB_URL=$(settings_get ".subscription.url")
 SUB_UA=$(settings_get ".subscription.user_agent")
@@ -821,6 +873,10 @@ PARSE_RC=$?
 if [ "$PARSE_RC" -eq 2 ]; then
     echo "  [X] В подписке не найдено ни одного сервера: не тот формат (--sub-ua), пустой фильтр --remarks" >&2
     echo "      или все серверы оказались заглушками. DIRECT-конфиг в этом случае не создаётся." >&2
+    echo "      Частая причина заглушек — лимит устройств у провайдера: подписка привязана к HWID," >&2
+    echo "      и новый HWID ($HWID) считается ещё одним устройством." >&2
+    echo "      Что делать: освободить устройство в панели провайдера или вернуть прежний HWID" >&2
+    echo "      в $SETTINGS_JSON и запустить /usr/share/xray/update-xray.sh." >&2
     rm -f "/tmp/sub_raw.txt"
     exit 1
 elif [ "$PARSE_RC" -ne 0 ]; then
@@ -842,52 +898,6 @@ if [ ! -s "$CONFIG_JSON" ]; then
 fi
 echo ""
 echo "[+] Геофайлы загружены, конфиг сгенерирован"
-
-# =============================================
-# 12. Cron: автообновление в 2.30 ночи
-# =============================================
-echo "12. Настройка Crontab..."
-
-uci set system.@system[0].cronloglevel='9'
-uci commit system
-
-CRON_ENTRY="30 2 * * * $UPDATER >>/tmp/log/xray-update.log 2>&1"
-if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
-	(
-		crontab -l 2>/dev/null || true
-		echo "$CRON_ENTRY"
-	) | crontab -
-	echo "[+] Cron-задача для обновления Xray добавлена: $CRON_ENTRY"
-else
-	echo "[-] Cron-задача уже существует, пропускаем"
-fi
-
-# =============================================
-# 13. Настройка hotplug (автообновление после включения WAN)
-# =============================================
-echo "13. Настройка hotplug..."
-
-cat >/etc/hotplug.d/iface/99-xray-autoupdate <<'EOF'
-#!/bin/sh
-[ "$ACTION" = "ifup" ] || exit 0
-[ "$INTERFACE" = "wan" ] || exit 0
-
-if ! pidof xray >/dev/null; then
-    /etc/init.d/xray start
-    sleep 5
-fi
-
-for i in 1 2 3 4 5 6 7; do
-    sleep 5
-    if curl -fs --max-time 3 https://www.google.com/gen_204 >/dev/null; then
-        /usr/share/xray/update-xray.sh &
-        exit 0
-    fi
-done
-EOF
-
-chmod +x /etc/hotplug.d/iface/99-xray-autoupdate
-echo "[+] Hotplug для автообновления после включения WAN настроен"
 
 # =============================================
 # 14. Проверяем config.json

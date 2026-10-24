@@ -218,13 +218,17 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 9. **Init-скрипт** — `/etc/init.d/xray` (`procd`): ожидание сети, синхронизация времени, проверка geo-файлов и конфига, применение nftables-правил, `respawn 3600 5 5`
 10. **Маршрутизация** — таблица `xray` (ID 100) в `/etc/iproute2/rt_tables`
 11. **Sysctl** — `route_localnet`, `ip_forward` (+ `/etc/sysctl.d/99-xray.conf`)
-12. **Гео-базы** — `geoip.dat` / `geosite.dat` с проверкой SHA256
-13. **HWID** — уникальный ID устройства (`/proc/sys/kernel/random/uuid` без дефисов)
-14. **Генерация config.json** — единый пайплайн: `xray-sub-parser.py --ua <UA>` (автоопределение формата подписки) → `xray-generate-config.py --format unified`
-15. **Проверка конфига** — `xray run -test -config /etc/xray/config.json`
-16. **Cron** — автообновление в 2:30 (`30 2 * * *`)
-17. **Hotplug** — автообновление при подъёме WAN (`ifup wan`), но только после успешной проверки интернета
+12. **Cron** — автообновление в 2:30 (`30 2 * * *`)
+13. **Hotplug** — автообновление при подъёме WAN (`ifup wan`), но только после успешной проверки интернета
+14. **Гео-базы** — `geoip.dat` / `geosite.dat` с проверкой SHA256
+15. **HWID** — уникальный ID устройства (`/proc/sys/kernel/random/uuid` без дефисов). При переустановке берётся прежний HWID из `settings.json`: подписка на одно устройство не тратит ещё один слот
+16. **Генерация config.json** — единый пайплайн: `xray-sub-parser.py --ua <UA>` (автоопределение формата подписки) → `xray-generate-config.py --format unified`
+17. **Проверка конфига** — `xray run -test -config /etc/xray/config.json`
 18. **Перезагрузка** — по завершении установки роутер перезагружается
+
+> Cron и hotplug настраиваются **до** работы с подпиской: если провайдер откажет (например, исчерпан
+> лимит устройств и вместо серверов пришли заглушки), устройство всё равно останется с автообновлением,
+> а в лог попадёт причина отказа и подсказка про HWID.
 
 **Логирование:** Все этапы записываются в `/tmp/xray_install.log`
 
