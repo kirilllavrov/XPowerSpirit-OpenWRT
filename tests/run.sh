@@ -250,8 +250,11 @@ sys.exit(0 if b.get('balancer') == 'direct' and b.get('balancer-dns') == 'direct
          and 'geosite:category-whitelist' not in domains else 1)" \
     "$TMP/cfg_normal.json" "normal: без БС-правил, fallback балансировщика direct"
 
-# Без категорий в геофайлах bs-профиль собирать нельзя — отказ с кодом 3
-python3 "$GENERATOR" --mode bs --output "$TMP/cfg_bs_none.json" <"$TMP/unified.json" 2>"$TMP/e_bs"
+# Без категорий в геофайлах bs-профиль собирать нельзя — отказ с кодом 3.
+# Каталог ресурсов задаём пустой: иначе тест зависит от геофайлов на машине.
+mkdir -p "$TMP/asset-none"
+XRAY_LOCATION_ASSET="$TMP/asset-none" python3 "$GENERATOR" --mode bs \
+    --output "$TMP/cfg_bs_none.json" <"$TMP/unified.json" 2>"$TMP/e_bs"
 assert_rc "$?" 3 "bs: отказ, если категорий БС нет в геофайлах"
 
 # Фальшивые геофайлы с нужными категориями

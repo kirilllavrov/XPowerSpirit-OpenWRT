@@ -141,7 +141,7 @@ select_nodes() {
 # Пересборка bs-профиля из сохранённого разбора подписки — сеть не нужна.
 rebuild_bs_profile() {
     local parsed="$STATE_DIR/parsed.json"
-    local tmp="/tmp/config.bs.new"
+    local tmp="/tmp/config.bs.new.json"   # Xray определяет формат по расширению
     local rc
     if [ ! -s "$parsed" ]; then
         log "[!] Нет $parsed — используем готовый $CONFIG_BS"
@@ -186,7 +186,7 @@ switch_to() {
         return 1
     fi
 
-    local tmp="/tmp/xray-config.new"
+    local tmp="/tmp/xray-config.new.json"  # расширение обязательно: иначе xray не распознает формат
     cp "$profile" "$tmp" || {
         log "[X] Не удалось скопировать $profile"
         flock -u 201
