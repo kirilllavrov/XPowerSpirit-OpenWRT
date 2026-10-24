@@ -168,7 +168,6 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 | `--iot-ip=IP` | IP-адрес шлюза IoT-сети | `192.168.3.1` |
 | `--iot-dl=Kbps` | Лимит скачивания для IoT | `10240` (10 Mbps) |
 | `--iot-ul=Kbps` | Лимит загрузки для IoT | `10240` (10 Mbps) |
-| `--dwl=DOMAIN` | Домен для whitelist (`subscription.domain_whitelist`) | — |
 
 > `--guest-dl=0 --guest-ul=0` (аналогично для IoT) отключает SQM — скорость не ограничивается.
 > Значения `--guest-*`/`--iot-*`/`--lan-ip` применяются напрямую в UCI и в `settings.json` не сохраняются.
@@ -654,10 +653,7 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
   "subscription": {
     "url": "https://your-subscription-url.com",
     "user_agent": "XPower/1.0",
-    "remarks_filter": "",
-    "domain_whitelist": [
-      "router.freenternet.top"
-    ]
+    "remarks_filter": ""
   },
   "hwid": "a1b2c3d4e5f6...",
   "device_model": "Cudy WR3000S v1",
@@ -710,7 +706,6 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 | `device_model` | string | Модель устройства (из dmesg) |
 | `device_os` | string | Операционная система (DISTRIB_ID) |
 | `ver_os` | string | Версия ОС (DISTRIB_RELEASE) |
-| `subscription.domain_whitelist` | array | Домены whitelist — сейчас только выводятся в лог генератора, на выбор сервера не влияют |
 | `routing.domainStrategy` | string | Стратегия маршрутизации (по умолчанию `IPOnDemand`) |
 | `routing.doh_domains` | array | DoH-домены → direct (защита от DNS-петель) |
 | `routing.block_domains` | array | Домены для блокировки (реклама) |
@@ -731,8 +726,7 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 jq -r '.subscription.url' /etc/xray/settings.json
 
 # Изменить значение
-jq --arg d 'new-domain.com' \
-    'if .subscription.domain_whitelist | index($d) then . else .subscription.domain_whitelist += [$d] end' \
+jq --arg u 'XPower/2.0' '.subscription.user_agent = $u' \
     /etc/xray/settings.json > /tmp/settings.tmp && mv /tmp/settings.tmp /etc/xray/settings.json
 ```
 
@@ -793,16 +787,6 @@ uci set sqm.guest.upload='5120'     # 5 Mbps
 uci commit sqm
 /etc/init.d/sqm restart
 ```
-
-### Добавление своего домена в whitelist
-
-```bash
-jq --arg d 'your-custom-domain.com' \
-    'if .subscription.domain_whitelist | index($d) then . else .subscription.domain_whitelist += [$d] end' \
-    /etc/xray/settings.json > /tmp/settings.tmp && mv /tmp/settings.tmp /etc/xray/settings.json
-```
-
-> **Текущее поведение:** `domain_whitelist` только читается генератором и выводится в лог (`→ Domain whitelist из settings.json: …`). На выбор сервера он не влияет: серверы не выбираются, все прокси подписки попадают в балансировщик.
 
 ### Настройка правил роутинга
 

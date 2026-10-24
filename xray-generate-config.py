@@ -29,9 +29,6 @@ import os
 
 SETTINGS_FILE = "/etc/xray/settings.json"
 
-# Whitelist по умолчанию (переопределяется из settings.json)
-DOMAIN_WHITELIST = []
-
 # Категория geosite с доменами проверки «какой у меня IP» (ifconfig.me, api.ipify.org,
 # 2ip.ru и подобные). Провайдеры и сервисы используют их для детекта VPN, поэтому
 # такие домены обязаны идти напрямую. Сами домены живут в geosite.dat, не в settings.json.
@@ -66,12 +63,11 @@ ROUTING_CONFIG = {
 
 def load_settings():
     """Загружает настройки из /etc/xray/settings.json"""
-    global DOMAIN_WHITELIST, ROUTING_CONFIG
+    global ROUTING_CONFIG
     if os.path.isfile(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE) as f:
                 settings = json.load(f)
-            DOMAIN_WHITELIST = settings.get("subscription", {}).get("domain_whitelist", [])
             # Загружаем правила роутинга (мержим с дефолтами — пользователь может переопределить любое поле)
             user_routing = settings.get("routing", {})
             if user_routing:
@@ -454,8 +450,6 @@ def main():
     
     # Загружаем настройки из единого JSON-конфига
     load_settings()
-    if DOMAIN_WHITELIST:
-        print(f"  → Domain whitelist из settings.json: {', '.join(DOMAIN_WHITELIST)}", file=sys.stderr)
     
     print("  → Обработка унифицированной подписки", file=sys.stderr)
     try:

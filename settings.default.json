@@ -2,8 +2,7 @@
   "subscription": {
     "url": "",
     "user_agent": "XPower/1.0",
-    "remarks_filter": "",
-    "domain_whitelist": []
+    "remarks_filter": ""
   },
   "hwid": "",
   "device_model": "",
