@@ -356,8 +356,28 @@ update_geo() {
         return 1
     fi
 
-    # Атомарное обновление
-    mv "$TMP_DEST" "$DEST"
+    # Подмена через rename в каталоге назначения: /tmp — tmpfs, поэтому mv между ФС
+    # копирует, и обрыв питания оставил бы обрезанный geo-файл.
+    local DEST_NEW="${DEST}.new"
+    local NEED_KB=$(($(wc -c <"$TMP_DEST") / 1024 + 1024))
+    local FREE_KB_TARGET=$(df "$(dirname "$DEST")" | awk 'NR==2 {print $4}')
+    if [ "${FREE_KB_TARGET:-0}" -lt "$NEED_KB" ]; then
+        echo "[!] Мало места в $(dirname "$DEST") для $BASE: ${FREE_KB_TARGET}KB, нужно ${NEED_KB}KB — пропускаем" >>"$LOG"
+        rm -f "$TMP_DEST"
+        return 1
+    fi
+    if ! cp "$TMP_DEST" "$DEST_NEW"; then
+        echo "[!] Не удалось скопировать $BASE в $DEST_NEW — пропускаем" >>"$LOG"
+        rm -f "$DEST_NEW" "$TMP_DEST"
+        return 1
+    fi
+    if [ "$(sha256sum "$DEST_NEW" | awk '{print $1}')" != "$REMOTE_SHA" ]; then
+        echo "[X] SHA не совпадает для $DEST_NEW — $BASE не заменён" >>"$LOG"
+        rm -f "$DEST_NEW" "$TMP_DEST"
+        return 1
+    fi
+    mv "$DEST_NEW" "$DEST"
+    rm -f "$TMP_DEST"
     echo "$REMOTE_SHA" >"$SHA_FILE"
     echo "[+] $BASE обновлён" >>"$LOG"
 }
@@ -396,15 +416,21 @@ if curl -fsS -L \
         PARSE_RC=$?
 
         if [ "$PARSE_RC" -eq 0 ]; then
-            if python3 "$GENERATOR" --format unified --output "$TMP_DIR/config.json" < "$TMP_DIR/parsed.json" 2>>"$LOG"; then
-                if xray run -test -config "$TMP_DIR/config.json" >>"$LOG" 2>&1; then
-                    mv "$TMP_DIR/config.json" "$CONFIG_JSON"
+            # Генерируем рядом с целевым файлом: подмена — rename в одной ФС,
+            # обрыв не оставит половину config.json
+            NEW_CONFIG="${CONFIG_JSON}.new"
+            rm -f "$NEW_CONFIG"
+            if python3 "$GENERATOR" --format unified --output "$NEW_CONFIG" < "$TMP_DIR/parsed.json" 2>>"$LOG"; then
+                if xray run -test -config "$NEW_CONFIG" >>"$LOG" 2>&1; then
+                    mv "$NEW_CONFIG" "$CONFIG_JSON"
                     echo "[+] Новый config.json установлен" >>"$LOG"
                 else
                     echo "[X] Новый config.json невалиден" >>"$LOG"
-                    xray run -test -config "$TMP_DIR/config.json" 2>>"$LOG"
+                    xray run -test -config "$NEW_CONFIG" 2>>"$LOG"
+                    rm -f "$NEW_CONFIG"
                 fi
             else
+                rm -f "$NEW_CONFIG"
                 echo "[X] Ошибка генератора конфига" >>"$LOG"
             fi
         elif [ "$PARSE_RC" -eq 2 ]; then

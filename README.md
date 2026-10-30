@@ -348,14 +348,16 @@ curl -fsSL https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/XPowerSpirit-Open
 5. **Обновление geoip/geosite**:
    - Загружает `geoip.dat` / `geosite.dat` по URL из `settings.json → geo.*`
    - Сверяет с `.sha256sum`, кэширует SHA в `/etc/xray/state/`
-   - Атомарное обновление (`mv`)
+   - Подмена без «половинчатого» файла: копия в `<файл>.new` рядом с целевым, повторная сверка SHA256, затем `mv` (rename в одной ФС) — `/tmp` и `/usr/share/xray` разные ФС
+   - Перед копированием проверяется свободное место в `/usr/share/xray`; при нехватке обновление пропускается с записью в лог
 6. **Пересборка config.json** — единый пайплайн:
 
    ```bash
    curl (User-Agent + x-hwid + X-Ver-Os/X-Device-Model/X-Device-Os) → sub.txt
    xray-sub-parser.py --ua <UA> [--remarks <фильтр>] → {"hole":…, "outbounds":[…]}
-   xray-generate-config.py --format unified --output config.json
-   xray run -test -config config.json
+   xray-generate-config.py --format unified --output /etc/xray/config.json.new
+   xray run -test -config /etc/xray/config.json.new
+   mv /etc/xray/config.json.new /etc/xray/config.json   # rename в одной ФС
    ```
 
    **Формат подписки определяется по User-Agent** (см. [xray-sub-parser.py](#xray-sub-parserpy)):
@@ -364,7 +366,7 @@ curl -fsSL https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/XPowerSpirit-Open
 
    Фильтр профилей (`--remarks`) берётся из `settings.json → subscription.remarks_filter` и применяется только к JSON-подпискам.
 
-   Новый конфиг устанавливается только после успешной проверки `xray run -test`.
+   Новый конфиг устанавливается только после успешной проверки `xray run -test` и подменяется `mv` (rename) — генерация идёт сразу в каталог `/etc/xray`, потому что `/tmp` и `/etc/xray` разные ФС.
 
 7. **Пересборка nftables** — вызывает `update-nft.sh` (ошибка только логируется, Xray не останавливается)
 8. **Перезапуск Xray** — перезапускает `/etc/init.d/xray` с новым конфигом
@@ -481,7 +483,7 @@ crontab -l 2>/dev/null | { cat; echo "20 2 * * * /usr/share/xray/update-scripts.
 | 5 | nftables `xray_self` | Цепочка с `type route hook output priority mangle`, `meta mark 2 return`, маркировка `meta mark set 1` (трафик роутера); наличие устаревшей `fw4 xray_output` даёт предупреждение |
 | 6 | Маршрутизация | `ip rule` с `fwmark 0x1 lookup 100`, в таблице 100 — `local default` |
 | 7 | dnsmasq | Перенаправление на `127.0.0.1#5353` |
-| 8 | Логи Xray | Последние 3 строки из `/tmp/log/xray-error.log` |
+| 8 | Логи Xray | Последние 3 строки `/tmp/log/xray-error.log`; если файл пуст или отсутствует — предупреждение (пустой журнал ≠ нет ошибок) и последние записи `logger -t xray` из syslog |
 | 9 | Доступность сервера | HTTPS/ICMP проверка первого `address` из конфига (для Reality недоступность — норма) |
 | 10 | DNS-тесты | Ответ от `127.0.0.1` |
 | 11 | DNS-тесты | Ответ от `77.88.8.8` |
