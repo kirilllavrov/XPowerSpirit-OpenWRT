@@ -54,6 +54,17 @@ ROUTING_KEYS = (
     "proxy_domains",
 )
 
+# Необязательные ключи routing: без них конфиг остаётся корректным, правило просто
+# не создаётся. Обязательными их делать нельзя — старые settings.json на роутерах
+# не содержат этих ключей, и генератор начал бы отказываться работать.
+ROUTING_OPTIONAL_KEYS = {
+    # Протоколы (sniffing), которым разрешён прямой выход — например bittorrent
+    "direct_protocols": [],
+}
+
+# Значения, документированные для RuleObject.protocol
+ROUTING_PROTOCOLS = ("http", "tls", "quic", "bittorrent")
+
 # Пресеты журналирования Xray. Роутер пишет минимум (журналы живут в tmpfs, то есть
 # в RAM), стенд в контейнере — подробно. Значения полей log.* — из официальной
 # документации: access/error — путь, спецзначение "none" отключает журнал;
@@ -120,6 +131,14 @@ def load_settings():
         sys.exit(1)
 
     ROUTING_CONFIG = {key: routing[key] for key in ROUTING_KEYS}
+    ROUTING_CONFIG.update({k: routing.get(k, v) for k, v in ROUTING_OPTIONAL_KEYS.items()})
+
+    invalid = [p for p in ROUTING_CONFIG["direct_protocols"] if p not in ROUTING_PROTOCOLS]
+    if invalid:
+        log_error(f"В {SETTINGS_FILE} → routing.direct_protocols недопустимые значения: "
+                  f"{', '.join(map(str, invalid))}")
+        log_error(f"Документированные значения RuleObject.protocol: {', '.join(ROUTING_PROTOCOLS)}")
+        sys.exit(1)
 
     log_section = settings.get("log") or {}
     preset = log_section.get("preset") or DEFAULT_LOG_PRESET
@@ -163,7 +182,6 @@ def normalize_stream_settings(stream: dict) -> None:
 
     mapped = NETWORK_TO_METHOD.get(str(network))
     if not mapped:
-        # Документированного эквивалента нет — возвращаем как было, без догадок
         stream["network"] = network
         print(
             f"  [!] Транспорт network={network!r} не имеет документированного имени "
@@ -470,7 +488,15 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
             "outboundTag": "direct"
         },
     ]
-    
+
+    # Протоколы по результатам sniffing — напрямую (по умолчанию bittorrent).
+    # Требует включённого sniffing во входящем: без него protocol не определяется.
+    if ROUTING_CONFIG["direct_protocols"]:
+        rules.append({
+            "protocol": ROUTING_CONFIG["direct_protocols"],
+            "outboundTag": "direct"
+        })
+
     if not direct_mode and proxy_outbounds:
         # Всегда через balancer — даже для одного прокси (observatory следит, fallback на direct)
         rules.append({

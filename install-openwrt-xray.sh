@@ -1,5 +1,4 @@
 #!/bin/sh
-# shellcheck disable=SC1087 # $key[] внутри jq-программы — не shell-массив
 # OpenWrt 25.12.x — Xray TProxy (IPv4-only)
 
 # Логируем установку.
@@ -209,7 +208,7 @@ esac
 
 # Проверка зависимостей до любых изменений. Иначе установщик успевает сменить
 # timezone и сеть, а падает на шаге 6 (curl/jq/unzip) — устройство остаётся
-# полу-настроенным. Список соответствует README → «Программные зависимости».
+# полу-настроенным.
 _missing=""
 for _cmd in curl jq unzip python3 nft uci; do
 	command -v "$_cmd" >/dev/null 2>&1 || _missing="$_missing $_cmd"
@@ -783,7 +782,6 @@ echo "13b. Определяем HWID..."
 HWID="$(settings_get ".hwid" 2>/dev/null)"
 if [ -n "$HWID" ]; then
 	echo "  ✓ Использую прежний HWID из settings.json: $HWID"
-	echo "    (переустановка не занимает новое устройство в подписке)"
 else
 	HWID="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
 	settings_set ".hwid" "$HWID"

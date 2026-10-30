@@ -32,6 +32,9 @@
       "geosite:category-mobile",
       "geosite:category-ru"
     ],
+    "direct_protocols": [
+      "bittorrent"
+    ],
     "proxy_domains": [
       "geosite:category-streaming",
       "geosite:category-games"

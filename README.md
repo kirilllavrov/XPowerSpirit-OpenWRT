@@ -670,10 +670,17 @@ cat subscription.json | python3 xray-sub-parser.py --ua "XPower/1.2" --remarks "
    6. QUIC (UDP/443) → `block` (VLESS+XTLS не поддерживает UDP)
    7. `direct_ips` (`geoip:ru`, `geoip:private`) → `direct`
    8. `direct_domains` (`geosite:private`, `category-browser`, `category-cdn-ru`, `category-mobile`, `category-ru`) → `direct`
-   9. `proxy_domains` (`geosite:category-streaming`, `geosite:category-games`) → `balancer`
-   10. `network: "tcp,udp"` → `balancer`
+   9. `direct_protocols` (`protocol: ["bittorrent"]`) → `direct` — по результатам sniffing; требует включённого `sniffing` во входящем
+   10. `proxy_domains` (`geosite:category-streaming`, `geosite:category-games`) → `balancer`
+   11. `network: "tcp,udp"` → `balancer`
 
-   В DIRECT-режиме правила 1–8 остаются, а вместо 9–10 добавляется одно: `network: "tcp,udp"` → `direct`.
+   В DIRECT-режиме правила 1–9 остаются, а вместо 10–11 добавляется одно: `network: "tcp,udp"` → `direct`.
+
+   > **Важно про BT:** правило `protocol: ["bittorrent"]` работает только при включённом
+   > `sniffing` во входящем (у `tproxy-in` он включён) и распознаёт **только незашифрованный**
+   > BitTorrent: по официальной документации `bittorrent` — «只有最基础的嗅探», для шифрованного
+   > и обфусцированного трафика может не сработать. BT-трафик по UDP/443 при этом всё равно
+   > попадёт под правило блокировки QUIC ниже, так как оно стоит раньше.
 
    > **Важно:** QUIC/UDP-443 блокируется на двух уровнях:
    > 1. В nftables (до Xray) — только с LAN-интерфейса
@@ -784,6 +791,9 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
       "geosite:category-mobile",
       "geosite:category-ru"
     ],
+    "direct_protocols": [
+      "bittorrent"
+    ],
     "proxy_domains": [
       "geosite:category-streaming",
       "geosite:category-games"
@@ -818,6 +828,7 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 | `routing.block_domains` | array | Домены для блокировки (реклама) |
 | `routing.direct_ips` | array | IP-адреса напрямую (РФ + локальные) |
 | `routing.direct_domains` | array | Домены напрямую (geosite-категории РФ) |
+| `routing.direct_protocols` | array | Протоколы по sniffing напрямую: `http`, `tls`, `quic`, `bittorrent`. По умолчанию `["bittorrent"]`; необязательный ключ |
 | `routing.proxy_domains` | array | Домены через прокси (стриминг, игры) |
 | `geo.geoip_url` | string | URL geoip.dat |
 | `geo.geosite_url` | string | URL geosite.dat |
@@ -1014,10 +1025,12 @@ uci commit sqm
 ### Настройка правил роутинга
 
 Правила маршрутизации настраиваются через секцию `routing` в `settings.json` — это
-единственный источник правил, в генераторе их нет. Все шесть ключей (`domainStrategy`,
+единственный источник правил, в генераторе их нет. Шесть ключей (`domainStrategy`,
 `doh_domains`, `block_domains`, `direct_ips`, `direct_domains`, `proxy_domains`) обязательны:
 если какого-то нет, генератор завершается с кодом 1 и печатает готовую команду доливки
 из `settings.default.json`, а не собирает конфиг с пустыми правилами.
+`direct_protocols` — необязательный: без него правило по протоколу просто не создаётся,
+поэтому старые `settings.json` продолжают работать.
 
 **Добавить домен в обход прокси (direct):**
 
