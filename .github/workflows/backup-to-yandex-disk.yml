@@ -1,0 +1,154 @@
+# Односторонний бэкап репозитория на Яндекс Диск по WebDAV.
+#
+# Направление только GitHub -> Яндекс Диск. Обратной синхронизации и скачивания нет:
+# workflow собирает архив текущего коммита, загружает его в каталог на Диске,
+# проверяет размер и удаляет старые архивы по счётчику хранения.
+#
+# Что нужно настроить один раз (Settings -> Secrets and variables -> Actions):
+#   секрет YANDEX_WEBDAV_USER     — логин Яндекс ID (почта)
+#   секрет YANDEX_WEBDAV_PASSWORD — пароль приложения Яндекс ID или OAuth-токен
+#                                   (основной пароль аккаунта не подходит)
+#   секрет GPG_PASSPHRASE         — необязательный; если задан, архив шифруется
+#   переменная YANDEX_WEBDAV_URL  — необязательная; по умолчанию https://webdav.yandex.ru
+#
+# Куда пишем: /GitHubBackup/<repo>/<repo>-<дата>-<sha>.zip (+ latest.zip).
+# Восстановление выполняется вручную: скачать архив с Диска и распаковать.
+
+name: Backup to Yandex Disk
+
+on:
+  schedule:
+    # 03:17 UTC ежедневно: смещение от круглого часа уменьшает очередь на стороне GitHub
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: "Сколько последних архивов оставлять на Диске"
+        type: number
+        default: 14
+      dry_run:
+        description: "Только собрать архив, без выгрузки"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: yandex-disk-backup
+  cancel-in-progress: false
+
+env:
+  REMOTE_ROOT: /GitHubBackup
+  BACKUP_TZ: Europe/Moscow
+
+jobs:
+  backup:
+    name: Архив репозитория -> Яндекс Диск
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Проверить настройку секретов
+        if: ${{ inputs.dry_run != true }}
+        env:
+          YANDEX_WEBDAV_USER: ${{ secrets.YANDEX_WEBDAV_USER }}
+          YANDEX_WEBDAV_PASSWORD: ${{ secrets.YANDEX_WEBDAV_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "$YANDEX_WEBDAV_USER" ] || missing="$missing YANDEX_WEBDAV_USER"
+          [ -n "$YANDEX_WEBDAV_PASSWORD" ] || missing="$missing YANDEX_WEBDAV_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error::Не заданы секреты:$missing. Добавьте их в Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          echo "Секреты заданы."
+
+      - name: Включить шифрование, если задан GPG_PASSPHRASE
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [ -n "${GPG_PASSPHRASE:-}" ]; then
+            echo "ENCRYPT_ARCHIVE=1" >> "$GITHUB_ENV"
+          else
+            echo "ENCRYPT_ARCHIVE=0" >> "$GITHUB_ENV"
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Собрать архив
+        run: |
+          set -euo pipefail
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          SHA_SHORT=$(git rev-parse --short=8 HEAD)
+          STAMP=$(TZ="$BACKUP_TZ" date +%Y-%m-%d_%H%M)
+          NAME="${REPO_NAME}-${STAMP}-${SHA_SHORT}"
+
+          mkdir -p dist
+          # git archive кладёт в архив только отслеживаемые файлы и не тащит .git
+          git archive --format=zip --prefix="${NAME}/" -o "dist/${NAME}.zip" HEAD
+
+          cat > "dist/MANIFEST.txt" <<EOF
+          repository: ${GITHUB_REPOSITORY}
+          ref: ${GITHUB_REF}
+          commit: $(git rev-parse HEAD)
+          run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          created: $(TZ="$BACKUP_TZ" date -Iseconds)
+          files: $(git ls-files | wc -l)
+          EOF
+          zip -q -j "dist/${NAME}.zip" dist/MANIFEST.txt
+          rm -f dist/MANIFEST.txt
+
+          echo "ARCHIVE_NAME=${NAME}" >> "$GITHUB_ENV"
+          echo "ARCHIVE_PATH=dist/${NAME}.zip" >> "$GITHUB_ENV"
+          ls -lh "dist/${NAME}.zip"
+
+      - name: Зашифровать архив
+        if: ${{ env.ENCRYPT_ARCHIVE == '1' }}
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          gpg --batch --yes --passphrase "$GPG_PASSPHRASE" \
+              --symmetric --cipher-algo AES256 \
+              --output "${ARCHIVE_PATH}.gpg" "${ARCHIVE_PATH}"
+          rm -f "$ARCHIVE_PATH"
+          echo "ARCHIVE_PATH=${ARCHIVE_PATH}.gpg" >> "$GITHUB_ENV"
+          ls -lh "${ARCHIVE_PATH}.gpg"
+
+      - name: Выгрузить на Яндекс Диск (WebDAV)
+        env:
+          YANDEX_WEBDAV_USER: ${{ secrets.YANDEX_WEBDAV_USER }}
+          YANDEX_WEBDAV_PASSWORD: ${{ secrets.YANDEX_WEBDAV_PASSWORD }}
+          YANDEX_WEBDAV_URL: ${{ vars.YANDEX_WEBDAV_URL }}
+          KEEP: ${{ inputs.keep || '14' }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          args=(--file "$ARCHIVE_PATH" --remote-dir "${REMOTE_ROOT}/${REPO_NAME}"
+                --keep "$KEEP" --retention-prefix "${REPO_NAME}-")
+          if [ "${ENCRYPT_ARCHIVE:-0}" = "1" ]; then
+            args+=(--latest-name latest.zip.gpg)
+          else
+            args+=(--latest-name latest.zip)
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          python3 .github/scripts/yandex_webdav_backup.py "${args[@]}"
+
+      - name: Итог
+        if: ${{ always() }}
+        run: |
+          {
+            echo "### Бэкап на Яндекс Диск"
+            echo ""
+            echo "- архив: \`${ARCHIVE_NAME:-—}\`"
+            echo "- выгрузка: ${{ inputs.dry_run && 'не выполнялась (dry-run)' || 'выполнена или прервана — см. лог шага выше' }}"
+            echo "- каталог на Диске: \`${REMOTE_ROOT}/${GITHUB_REPOSITORY#*/}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -2,7 +2,9 @@
 .codebase-memory/
 .vscode/
 AGENTS.md
-.github/
+.github/*
+!.github/workflows/
+!.github/scripts/
 .mcp.json
 *.swp
 *.swo
