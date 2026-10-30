@@ -1,0 +1,162 @@
+# Односторонний бэкап репозитория в Yandex Cloud Object Storage (S3 API).
+#
+# Направление только GitHub -> Object Storage. Обратной синхронизации и скачивания
+# из workflow нет: он собирает архив текущего коммита и загружает его в бакет.
+# Ротация выполняется lifecycle-правилом бакета, а не кодом:
+#   STANDARD -> COLD через 30 дней -> удаление через 365 дней;
+#   неактуальные версии объектов (перезаписи latest) удаляются через 30 дней.
+#
+# Что нужно настроить один раз (Settings -> Secrets and variables -> Actions):
+#   секрет YC_S3_KEY_ID   — Key ID статического ключа сервисного аккаунта
+#   секрет YC_S3_SECRET   — Secret статического ключа
+#   секрет GPG_PASSPHRASE — необязательный; если задан, архив шифруется
+#
+# Сервисный аккаунт: github-uploader, роль storage.uploader (только запись).
+# Проверить доступность ключа заранее:
+#   AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
+#     aws s3 ls s3://flyz-cryp-olxn-mojw --endpoint-url https://storage.yandexcloud.net
+#
+# Куда пишем: s3://flyz-cryp-olxn-mojw/XPowerSpirit-OpenWRT/<repo>-<дата>-<sha>.zip
+# и перезаписываемый latest.zip рядом.
+# Восстановление: скачать объект через консоль Yandex Cloud или aws-cli и распаковать.
+
+name: Backup to Yandex Cloud
+
+on:
+  schedule:
+    # 03:17 UTC ежедневно: смещение от круглого часа уменьшает очередь на стороне GitHub
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Только собрать архив, без выгрузки"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: yandex-cloud-backup
+  cancel-in-progress: false
+
+env:
+  BUCKET: flyz-cryp-olxn-mojw
+  ENDPOINT: https://storage.yandexcloud.net
+  AWS_DEFAULT_REGION: ru-central1
+  BACKUP_TZ: Europe/Moscow
+
+jobs:
+  backup:
+    name: Архив репозитория -> Object Storage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Проверить настройку секретов
+        if: ${{ inputs.dry_run != true }}
+        env:
+          YC_S3_KEY_ID: ${{ secrets.YC_S3_KEY_ID }}
+          YC_S3_SECRET: ${{ secrets.YC_S3_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${YC_S3_KEY_ID:-}" ] || [ -z "${YC_S3_SECRET:-}" ]; then
+            echo "::error::Нужны секреты YC_S3_KEY_ID и YC_S3_SECRET."
+            echo "::error::Добавьте их в Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          echo "Секреты найдены."
+
+      - name: Включить шифрование, если задан GPG_PASSPHRASE
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [ -n "${GPG_PASSPHRASE:-}" ]; then
+            echo "ENCRYPT_ARCHIVE=1" >> "$GITHUB_ENV"
+          else
+            echo "ENCRYPT_ARCHIVE=0" >> "$GITHUB_ENV"
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Собрать архив
+        run: |
+          set -euo pipefail
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          SHA_SHORT=$(git rev-parse --short=8 HEAD)
+          STAMP=$(TZ="$BACKUP_TZ" date +%Y-%m-%d_%H%M)
+          NAME="${REPO_NAME}-${STAMP}-${SHA_SHORT}"
+
+          mkdir -p dist
+          # git archive кладёт в архив только отслеживаемые файлы и не тащит .git
+          git archive --format=zip --prefix="${NAME}/" -o "dist/${NAME}.zip" HEAD
+
+          cat > "dist/MANIFEST.txt" <<EOF
+          repository: ${GITHUB_REPOSITORY}
+          ref: ${GITHUB_REF}
+          commit: $(git rev-parse HEAD)
+          run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          created: $(TZ="$BACKUP_TZ" date -Iseconds)
+          files: $(git ls-files | wc -l)
+          storage: s3://${BUCKET}/${REPO_NAME}
+          EOF
+          zip -q -j "dist/${NAME}.zip" dist/MANIFEST.txt
+          rm -f dist/MANIFEST.txt
+
+          echo "ARCHIVE_NAME=${NAME}" >> "$GITHUB_ENV"
+          echo "ARCHIVE_PATH=dist/${NAME}.zip" >> "$GITHUB_ENV"
+          echo "ARCHIVE_EXT=zip" >> "$GITHUB_ENV"
+          echo "OBJECT_PREFIX=${REPO_NAME}" >> "$GITHUB_ENV"
+          ls -lh "dist/${NAME}.zip"
+
+      - name: Зашифровать архив
+        if: ${{ env.ENCRYPT_ARCHIVE == '1' }}
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          gpg --batch --yes --passphrase "$GPG_PASSPHRASE" \
+              --symmetric --cipher-algo AES256 \
+              --output "${ARCHIVE_PATH}.gpg" "${ARCHIVE_PATH}"
+          rm -f "$ARCHIVE_PATH"
+          echo "ARCHIVE_PATH=${ARCHIVE_PATH}.gpg" >> "$GITHUB_ENV"
+          echo "ARCHIVE_EXT=zip.gpg" >> "$GITHUB_ENV"
+          ls -lh "${ARCHIVE_PATH}.gpg"
+
+      - name: Выгрузить в Object Storage
+        if: ${{ inputs.dry_run != true }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.YC_S3_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.YC_S3_SECRET }}
+        run: |
+          set -euo pipefail
+          KEY_DATED="${OBJECT_PREFIX}/${ARCHIVE_NAME}.${ARCHIVE_EXT}"
+          KEY_LATEST="${OBJECT_PREFIX}/latest.${ARCHIVE_EXT}"
+
+          # aws s3 cp возвращает ненулевой код при любой ошибке сети или авторизации,
+          # поэтому отдельная проверка размера не нужна: сервисному аккаунту
+          # намеренно не выдано право чтения объектов (storage.uploader).
+          aws s3 cp "$ARCHIVE_PATH" "s3://${BUCKET}/${KEY_DATED}" \
+            --endpoint-url "$ENDPOINT" --only-show-errors
+          aws s3 cp "$ARCHIVE_PATH" "s3://${BUCKET}/${KEY_LATEST}" \
+            --endpoint-url "$ENDPOINT" --only-show-errors
+
+          echo "UPLOADED_KEY=${KEY_DATED}" >> "$GITHUB_ENV"
+          echo "UPLOADED_LATEST=${KEY_LATEST}" >> "$GITHUB_ENV"
+
+      - name: Итог
+        if: ${{ always() }}
+        run: |
+          {
+            echo "### Бэкап в Yandex Cloud Object Storage"
+            echo ""
+            echo "- архив: \`${ARCHIVE_NAME:-—}.${ARCHIVE_EXT:-zip}\`"
+            echo "- размер: $(du -h "${ARCHIVE_PATH:-/dev/null}" 2>/dev/null | cut -f1 || echo '—')"
+            echo "- объект: \`s3://${BUCKET}/${UPLOADED_KEY:-не выгружался}\`"
+            echo "- latest: \`s3://${BUCKET}/${UPLOADED_LATEST:-не выгружался}\`"
+            echo "- шифрование: $([ "${ENCRYPT_ARCHIVE:-0}" = "1" ] && echo 'GPG (AES256)' || echo 'нет')"
+            echo "- выгрузка: ${{ inputs.dry_run && 'не выполнялась (dry-run)' || 'выполнена или прервана — см. лог шага выше' }}"
+          } >> "$GITHUB_STEP_SUMMARY"
