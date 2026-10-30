@@ -16,6 +16,16 @@ die() {
 
 [ "$(id -u)" != "0" ] && die "Запускать нужно от root"
 
+# Каталог, из которого запущен установщик. Пусто при `curl ... | sh -s -- ...`
+SCRIPT_DIR=""
+case "$0" in
+*/*)
+	if [ -f "$0" ]; then
+		SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+	fi
+	;;
+esac
+
 # Переменные
 REPO="https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main"
 GENERATOR="/usr/share/xray/xray-generate-config.py"
@@ -141,6 +151,35 @@ download_script() {
     echo "  → $dst"
 }
 
+# Ставит исполняемый файл: из распакованного архива, если он лежит рядом
+# с установщиком, иначе скачивает с GitHub. Так запуск из latest.zip
+# не смешивает проверенный архив с текущим main.
+install_script() {
+    local name="$1"
+    local dst="$2"
+    if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/$name" ]; then
+        cp "$SCRIPT_DIR/$name" "$dst" || die "Не удалось скопировать $name"
+        chmod +x "$dst"
+        echo "  → $dst (из архива)"
+        return 0
+    fi
+    download_script "$REPO/$name" "$dst"
+}
+
+# То же для файлов данных (settings.default.json)
+install_data() {
+    local name="$1"
+    local dst="$2"
+    local mode="${3:-600}"
+    if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/$name" ]; then
+        cp "$SCRIPT_DIR/$name" "$dst" || die "Не удалось скопировать $name"
+        echo "  → $dst (из архива)"
+    else
+        download_file "$REPO/$name" "$dst" || die "Не удалось скачать $name"
+    fi
+    chmod "$mode" "$dst"
+}
+
 # Определение суффикса релизного ZIP Xray под архитектуру устройства.
 # DISTRIB_ARCH из /etc/openwrt_release надёжнее uname: uname -m отдаёт "mips"
 # и для big-endian, и для little-endian MIPS, а armv6l/armv5l не отличить от armv7l.
@@ -228,9 +267,8 @@ mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR" /tmp/log
 
 # Инициализируем settings.json из репозитория (если файла нет)
 if [ ! -f "$SETTINGS_JSON" ]; then
-    echo "  → Скачиваем settings.default.json из репозитория..."
-    download_file "$REPO/settings.default.json" "$SETTINGS_JSON" || die "Не удалось скачать settings.default.json"
-    chmod 600 "$SETTINGS_JSON"
+    echo "  → Инициализируем settings.json из settings.default.json..."
+    install_data "settings.default.json" "$SETTINGS_JSON" 600
     echo "  ✓ settings.json инициализирован"
 fi
 
@@ -249,15 +287,15 @@ ntpd -q -p ru.pool.ntp.org 2>/dev/null ||
 echo "[+] Timezone установлен в Europe/Moscow, время синхронизировано"
 
 # =============================================
-# 2. Загружаем скрипты из репозитория
+# 2. Устанавливаем скрипты
 # =============================================
-echo "2. Загружаем скрипты из репозитория..."
+echo "2. Устанавливаем скрипты..."
 
-download_script "$REPO/xray-generate-config.py" "$GENERATOR"
-download_script "$REPO/xray-sub-parser.py" "$PARSER"
-download_script "$REPO/update-xray.sh" "$UPDATER"
-download_script "$REPO/update-nft.sh" "$NFT_UPDATER"
-download_script "$REPO/update-scripts.sh" "$SCRIPTS_UPDATER"
+install_script "xray-generate-config.py" "$GENERATOR"
+install_script "xray-sub-parser.py" "$PARSER"
+install_script "update-xray.sh" "$UPDATER"
+install_script "update-nft.sh" "$NFT_UPDATER"
+install_script "update-scripts.sh" "$SCRIPTS_UPDATER"
 
 echo "[+] Все скрипты загружены и готовы к использованию"
 
@@ -753,7 +791,9 @@ echo "[+] Sysctl настроен"
 # =============================================
 echo "11. Настройка Crontab..."
 
-uci set system.@system[0].cronloglevel='9'
+# Busybox 25.12 исправляет cronloglevel: документированное значение — 7
+# (это же значение по умолчанию в OpenWrt 25.12); 9 даёт лишний шум в логе.
+uci set system.@system[0].cronloglevel='7'
 uci commit system
 
 SCRIPTS_CRON_ENTRY="20 2 * * * $SCRIPTS_UPDATER >>/tmp/log/xray-scripts.log 2>&1"
@@ -822,9 +862,14 @@ update_geo() {
 
 	echo "  → Скачиваем $BASE"
 
-	download_file "${URL}.sha256sum" "$TMP_SHA" || die "Не удалось получить SHA256 для $BASE"
+	# Без URL download_file уходит на пустой адрес и падает с "Could not resolve: .sha256sum"
+	if [ -z "$URL" ]; then
+		die "В settings.json не задан URL для $BASE (geo.geoip_url / geo.geosite_url) — добавьте ключи из settings.default.json"
+	fi
+
+	download_file "${URL}.sha256sum" "$TMP_SHA" || die "Не удалось получить SHA256 для $BASE (${URL}.sha256sum)"
 	REMOTE_SHA="$(cut -d' ' -f1 "$TMP_SHA")"
-	[ -n "$REMOTE_SHA" ] || die "Пустой SHA256 для $BASE"
+	[ -n "$REMOTE_SHA" ] || die "Пустой SHA256 для $BASE (${URL}.sha256sum)"
 
 	download_file "$URL" "$TMP" || die "Не удалось скачать $BASE"
 	LOCAL_SHA="$(sha256sum "$TMP" | awk '{print $1}')"

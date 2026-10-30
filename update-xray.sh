@@ -10,6 +10,7 @@
 
 # Блокировка от одновременного запуска
 LOCK_FILE="/var/lock/xray-update.lock"
+mkdir -p "$(dirname "$LOCK_FILE")" 2>/dev/null
 exec 200>"$LOCK_FILE"
 if ! flock -n 200; then
     echo "Другой экземпляр уже запущен" >&2
@@ -318,9 +319,14 @@ update_geo() {
 
     echo "→ Обновление $BASE..." >>"$LOG"
 
+    if [ -z "$URL" ]; then
+        echo "[!] В settings.json не задан URL для $BASE (geo.geoip_url / geo.geosite_url) — пропускаем" >>"$LOG"
+        return 1
+    fi
+
     # Скачиваем SHA256
     if ! fetch_url "${URL}.sha256sum" "$TMP_SHA"; then
-        echo "[!] Не удалось скачать sha256sum для $BASE — пропускаем" >>"$LOG"
+        echo "[!] Не удалось скачать sha256sum для $BASE (${URL}.sha256sum) — пропускаем" >>"$LOG"
         return 1
     fi
 

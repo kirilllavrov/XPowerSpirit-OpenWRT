@@ -28,6 +28,7 @@
 #
 # Куда пишем: s3://flyz-cryp-olxn-mojw/XPowerSpirit-OpenWRT/
 #   <repo>-<дата>-<sha>.zip          — датированная копия (может шифроваться GPG)
+#   install.sh / install.sh.sha256   — установка с нуля: curl .../install.sh | sh -s -- --sub=...
 #   latest.zip                       — источник автообновления роутеров (всегда открытый)
 #   latest.zip.sha256                — хеш latest.zip; роутер сравнивает его с установленным
 # latest.zip собирается детерминированно (фиксированные префикс/MANIFEST/TZ), поэтому
@@ -163,6 +164,11 @@ jobs:
           rm -f dist/MANIFEST.txt
           (cd dist && sha256sum latest.zip > latest.zip.sha256)
 
+          # Bootstrap-установщик публикуется отдельным объектом: его скачивают до того,
+          # как на роутере что-либо установлено. В архив он не входит — он сам
+          # скачивает latest.zip.
+          sha256sum install.sh > dist/install.sh.sha256
+
           echo "Содержимое архива:"
           unzip -Z1 "dist/${NAME}.zip"
           echo "sha256 latest.zip: $(cut -d' ' -f1 dist/latest.zip.sha256)"
@@ -217,6 +223,12 @@ jobs:
           aws s3 cp dist/latest.zip "s3://${BUCKET}/${OBJECT_PREFIX}/latest.zip" \
             --endpoint-url "$ENDPOINT" --only-show-errors
           aws s3 cp dist/latest.zip.sha256 "s3://${BUCKET}/${OBJECT_PREFIX}/latest.zip.sha256" \
+            --endpoint-url "$ENDPOINT" --only-show-errors
+
+          # Установка с нуля: curl .../install.sh | sh -s -- --sub=...
+          aws s3 cp install.sh "s3://${BUCKET}/${OBJECT_PREFIX}/install.sh" \
+            --endpoint-url "$ENDPOINT" --only-show-errors
+          aws s3 cp dist/install.sh.sha256 "s3://${BUCKET}/${OBJECT_PREFIX}/install.sh.sha256" \
             --endpoint-url "$ENDPOINT" --only-show-errors
 
           echo "UPLOADED_LATEST=${OBJECT_PREFIX}/latest.zip" >> "$GITHUB_ENV"

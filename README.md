@@ -2,8 +2,6 @@
 
 Комплексное решение для настройки прокси-сервера Xray с TProxy на OpenWrt. Проект включает автоматическую установку Xray, настройку гостевой сети, управление подписками, генерацию конфигурации и автоматическое обновление.
 
-> **Связанные проекты (не зависимость):** OpenWrt-пакеты (LuCI веб-интерфейс + CLI `xray-status`) живут в отдельном репозитории [XPowerSpirit-WebUI](https://github.com/kirilllavrov/XPowerSpirit-WebUI). Этот проект устанавливается и работает полностью без него.
->
 > **Документация по конфигурации Xray:** [xray-config-reference.md](./xray-config-reference.md) — справочник по базовой конфигурации, сверенный с официальной русской документацией; [xray-config-links.md](./xray-config-links.md) — карта официальных ссылок (Xray, nftables).
 
 ## 📋 Содержание
@@ -14,6 +12,7 @@
 - [Быстрый старт](#-быстрый-старт)
 - [Детальное описание скриптов](#-детальное-описание-скриптов)
   - [install-openwrt-xray.sh](#install-openwrt-xraysh)
+  - [install.sh](#installsh)
   - [setup-led-status.sh](#setup-led-statussh)
   - [setup-wifi-network.sh](#setup-wifi-networksh)
   - [update-xray.sh](#update-xraysh)
@@ -46,7 +45,7 @@
 
 ## 🏗 Архитектура проекта
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                     OpenWrt Router                          │
 │                                                             │
@@ -96,7 +95,7 @@
 
 ### Аппаратные
 
-- Устройство с OpenWrt 25.12.x или совместимой версией
+- Устройство с OpenWrt 25.12.x
 - Firewall `fw4` (nftables, таблица `inet fw4`) — правила TProxy добавляются именно в неё
 - Минимум 20 MB свободного места в `/tmp` и 10 MB в `/`
 - Поддержка nftables TProxy в ядре (`kmod-nft-tproxy`, `kmod-nft-socket`)
@@ -118,7 +117,7 @@
 | `mips64_*` / `mips64el_*` | MIPS64 | `Xray-linux-mips64.zip` / `mips64le` |
 | `riscv64_*`, `loongarch64_*` | RISC-V / LoongArch | `Xray-linux-riscv64.zip` / `loong64` |
 
-Неизвестная архитектура — установка останавливается с сообщением, а не подставляет x86-64.
+Неизвестная архитектура — установка останавливается.
 `update-xray.sh` в этом случае не трогает уже установленный бинарь.
 
 > Важно: `uname -m` отдаёт `mips` и для big-endian, и для little-endian MIPS, поэтому определять
@@ -131,10 +130,11 @@
 
 ### Программные зависимости
 
-Скрипт установки **не устанавливает пакеты** — их нужно поставить заранее (`opkg install` или `apk add`):
+Скрипт установки **не устанавливает пакеты** — их нужно поставить заранее через `apk`:
 
 ```bash
-curl ca-certificates nftables kmod-nft-tproxy kmod-nft-socket python3 resolveip unzip sqm-scripts jq
+apk update
+apk add curl ca-bundle nftables-json kmod-nft-tproxy kmod-nft-socket python3 resolveip unzip jq
 ```
 
 ### Опционально (для расширенной функциональности)
@@ -147,6 +147,19 @@ curl ca-certificates nftables kmod-nft-tproxy kmod-nft-socket python3 resolveip 
 
 ### 1. Загрузка и минимальная установка
 
+**Из Yandex Object Storage (рекомендуется):** скачивается `latest.zip`, проверяется SHA-256, установщик запускается из архива — все файлы берутся из проверенной копии, а не из текущего `main` на GitHub.
+
+```bash
+cd /tmp
+curl -fsSL https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/XPowerSpirit-OpenWRT/install.sh | sh -s -- \
+  --sub=https://your-subscription-url.com \
+  --guest=1
+```
+
+Если Object Storage недоступен (нет объекта, сеть, несовпадение SHA-256), `install.sh` автоматически скачивает установщик с GitHub.
+
+**С GitHub (`main`):**
+
 ```bash
 cd /tmp
 curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/install-openwrt-xray.sh | sh -s -- \
@@ -154,10 +167,12 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
   --guest=1
 ```
 
+> Установщик, запущенный из распакованного архива (`sh ./XPowerSpirit-OpenWRT/install-openwrt-xray.sh`), ставит скрипты из своего каталога. Запущенный через `curl | sh` — скачивает их с GitHub.
+
 **Параметры установки:**
 
 | Параметр | Описание | По умолчанию |
-|----------|----------|--------------|
+| ---------- | ---------- | -------------- |
 | `--sub=URL` | URL подписки (обязательно) | — |
 | `--sub-ua=STRING` | User-Agent для запроса подписки (он же определяет формат подписки) | `XPower/1.0` (из `settings.default.json`) |
 | `--remarks=STRING` | Фильтр профиля по remarks (только для JSON-подписок) | — |
@@ -203,7 +218,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 **Что делает:**
 
 1. **Настройка времени** — таймзона `Europe/Moscow` (MSK-3), синхронизация NTP (`ru.pool.ntp.org`, fallback `time.google.com`)
-2. **Загрузка скриптов** — скачивает `xray-generate-config.py`, `xray-sub-parser.py`, `update-xray.sh`, `update-nft.sh` в `/usr/share/xray/`
+2. **Загрузка скриптов** — `xray-generate-config.py`, `xray-sub-parser.py`, `update-xray.sh`, `update-nft.sh`, `update-scripts.sh` в `/usr/share/xray/`. Если установщик запущен из распакованного `latest.zip` (рядом лежат эти файлы), они копируются из архива; иначе скачиваются с GitHub
 3. **Сохранение настроек** — записывает URL подписки, User-Agent, фильтр remarks, модель/версию ОС и HWID в единый JSON-файл `/etc/xray/settings.json` (файл инициализируется из `settings.default.json` в репозитории, если его ещё нет)
 4. **LAN и IPv6** — задаёт `--lan-ip` (по умолчанию `192.168.1.1/24`), диапазон DHCP `.100-.250`, отключает IPv6 на LAN/WAN, останавливает и отключает `odhcpd`
 5. **Гостевая сеть (опционально, `--guest=1`)**:
@@ -228,11 +243,27 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 17. **Проверка конфига** — `xray run -test -config /etc/xray/config.json`
 18. **Перезагрузка** — по завершении установки роутер перезагружается
 
-> Cron и hotplug настраиваются **до** работы с подпиской: если провайдер откажет (например, исчерпан
-> лимит устройств и вместо серверов пришли заглушки), устройство всё равно останется с автообновлением,
-> а в лог попадёт причина отказа и подсказка про HWID.
-
 **Логирование:** Все этапы записываются в `/tmp/xray_install.log`
+
+---
+
+### install.sh
+
+**Назначение:** Bootstrap-установка с нуля из Yandex Cloud.
+
+**Что делает:**
+
+1. Скачивает `latest.zip.sha256` и `latest.zip`
+2. Проверяет `sha256sum -c`; при несовпадении, 404 или сетевой ошибке — fallback на установщик с GitHub
+3. Распаковывает архив в `/tmp/xray-bootstrap` и читает `commit` из `MANIFEST.txt`
+4. Запускает `install-openwrt-xray.sh` из архива (`exec sh`), передавая все аргументы как есть
+
+**Запуск:**
+
+```bash
+curl -fsSL https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/XPowerSpirit-OpenWRT/install.sh \
+  | sh -s -- --sub=https://your-subscription-url.com
+```
 
 ---
 
@@ -277,7 +308,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 **Параметры:**
 
 | Параметр | Описание | По умолчанию |
-|----------|----------|--------------|
+| ---------- | ---------- | -------------- |
 | `--ssid=NAME` | SSID домашней сети | `Home-WiFi` |
 | `--pass=PASS` | Пароль домашней сети | `HomeSecure123!` |
 | `--ssid-guest=NAME` | SSID гостевой сети | `Guest-WiFi` |
@@ -386,9 +417,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 
 ### update-scripts.sh
 
-**Назначение:** Обновление установленных скриптов (`/usr/share/xray/*`) из `latest.zip` в Yandex Object Storage, без повторного запуска установщика.
-
-**Источник:** `settings.json → update.archive_url` (по умолчанию `https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/XPowerSpirit-OpenWRT/latest.zip`). Архив собирается workflow `.github/workflows/backup-to-yandex-cloud.yml` при push в `main` и по расписанию; рядом лежит `latest.zip.sha256`.
+**Назначение:** Обновление установленных скриптов (`/usr/share/xray/*`) из `latest.zip` в Yandex Cloud, без повторного запуска установщика.
 
 **Алгоритм:**
 
@@ -408,7 +437,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 **Флаги:**
 
 | Флаг | Действие |
-|------|----------|
+| ------ | ---------- |
 | без флагов | применить `latest.zip`, если SHA-256 изменился |
 | `--check` | показать установленный и доступный SHA-256, ничего не менять |
 | `--force` | применить архив независимо от SHA-256 |
@@ -444,7 +473,7 @@ crontab -l 2>/dev/null | { cat; echo "20 2 * * * /usr/share/xray/update-scripts.
 **Проверяет 11 ключевых точек:**
 
 | # | Компонент | Что проверяется |
-|---|-----------|-----------------|
+| --- | ----------- | ----------------- |
 | 1 | Процесс Xray | Запущен ли `xray` (`pgrep -a xray`) |
 | 2 | Порты | Слушается ли порт 12345 (`ss -tuln`); для TProxy отсутствие в `ss` — норма |
 | 3 | Конфигурация | Наличие `"tproxy": "tproxy"` в inbound и `"mark": 2` в sockopt (loop prevention) |
@@ -503,8 +532,6 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 | `--remarks=STRING` | Фильтр профилей по `remarks` (регистронезависимая подстрока, только для JSON-подписок) |
 
 **Автоопределение формата по User-Agent** (`--ua`): маркеры `happ`, `singbox`, `sfa`, `sfi`, `sfm`, `sft`, `karing`, `xpower` → JSON; иначе → Base64/VLESS.
-
-> ⚠️ Маркер `xpower` входит в список JSON-маркеров, поэтому значение по умолчанию `subscription.user_agent = "XPower/1.0"` включает JSON-режим. Если провайдер отдаёт Base64 для этого UA, укажите другой `--sub-ua`.
 
 **Функции:**
 
@@ -645,8 +672,6 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
 
 6. **Stream settings прокси** — `mark: 2` (по нему nftables распознаёт пакеты Xray и не зацикливает их), `tcpKeepAliveInterval: 30`; Mux отключён
 
-   > Транспорт задаётся полем `network` (`tcp`/`ws`/`grpc`/`http`/`xhttp`). В актуальной документации Xray его заменило поле `method`; `network` принимается ядром как совместимый вид. Поля `xhttpSettings` (`path`, `host`, `mode`, `extra`) в документации не описаны.
-
 7. **Freedom (direct) outbound** — `tag: "direct"`, `sockopt.domainStrategy: "UseIPv4"` для корректной работы в IPv4-only среде, `sockopt.mark: 2`
 
 8. **Blackhole (block) outbound** — `tag: "block"`, `response.type: "http"`: возвращает HTTP 403 вместо глухого закрытия соединения, чтобы браузер сразу показывал ошибку, а не висел в таймауте
@@ -783,7 +808,7 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 | `geo.geosite_url` | string | URL geosite.dat |
 | `update.archive_url` | string | URL `latest.zip` для автообновления скриптов (`update-scripts.sh`) |
 
-> **Примечание:** `settings.json` — единственный источник правил роутинга, в генераторе их нет.
+> **Примечание:** `settings.json` — единственный источник правил роутинга.
 > Обязательные ключи перечислены в `ROUTING_KEYS` (`xray-generate-config.py`). Если ключ
 > отсутствует, генератор завершается с кодом 1 и перечисляет недостающие — иначе правила
 > получились бы пустыми (RU-трафик ушёл бы в прокси, реклама перестала бы блокироваться).
@@ -947,14 +972,6 @@ category-ipcheck:
   - myip.ipip.net
 ```
 
-> В `geosite.dat` код категории хранится в верхнем регистре — `CATEGORY-IPCHECK`.
->
-> Без категории в `geosite.dat` конфиг был бы невалиден, поэтому генератор проверяет её наличие:
-> если категории нет — правило пропускается, а в лог пишется предупреждение
-> (`geosite:category-ipcheck отсутствует в geosite.dat`). После пересборки геофайлов правило
-> включается автоматически.
-> Проверка: `curl -s https://api.ipify.org` должен вернуть адрес провайдера, а не узла подписки.
-
 **Изменить стратегию маршрутизации:**
 
 ```bash
@@ -965,21 +982,6 @@ jq '.routing.domainStrategy = "IPIfNonMatch"' \
 > Поддерживаемые форматы: `"domain:example.com"`, `"geosite:category-ru"`, `"geoip:ru"`, `"geoip:private"`, `"ext:custom.dat:tag"`.
 
 После любых изменений перегенерируйте конфиг: `/usr/share/xray/update-xray.sh`.
-
----
-
-### Прогон тестов без устройства
-
-Проверяет парсер и генератор на синтетических фикстурах: коды возврата, режим `hole`,
-фильтр `remarks`, префиксы тегов и отсутствие коллизий с `direct`/`block`/`dns-out`,
-а также что генератор отказывается собирать конфиг без обязательных ключей `routing`.
-Если доступен бинарь `xray`, дополнительно валидирует сгенерированные конфиги.
-
-```bash
-XRAY_BIN=/usr/bin/xray XRAY_LOCATION_ASSET=/usr/share/xray ./tests/run.sh
-```
-
-Без `XRAY_BIN` проверки ядром пропускаются, остальные выполняются всегда.
 
 ---
 
