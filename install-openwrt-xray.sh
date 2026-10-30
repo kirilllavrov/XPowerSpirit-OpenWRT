@@ -1,9 +1,7 @@
 #!/bin/sh
 # OpenWrt 25.12.x — Xray TProxy (IPv4-only)
 
-# Логируем установку.
-# Ротация: одна предыдущая копия, иначе повторные прогоны (особенно в контейнере)
-# растили бы файл в tmpfs без предела.
+# Логируем установку с ротацией.
 LOG_FILE="/tmp/xray_install.log"
 if [ -s "$LOG_FILE" ]; then
     _install_log_size=$(stat -c%s "$LOG_FILE" 2>/dev/null || wc -c <"$LOG_FILE")
