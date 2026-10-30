@@ -69,8 +69,8 @@ rotate_log() {
     local max_size="${2:-262144}"
     [ -f "$file" ] || return
     local size
-    size=$(stat -c%s "$file" 2>/dev/null || wc -c <"$file")
-    if [ "$size" -gt "$max_size" ]; then
+    size=$(stat -c%s "$file" 2>/dev/null) || size=$(wc -c <"$file")
+    if [ "${size:-0}" -gt "$max_size" ]; then
         : >"$file"
     fi
 }
