@@ -5,11 +5,16 @@
 # проверяет размер и удаляет старые архивы по счётчику хранения.
 #
 # Что нужно настроить один раз (Settings -> Secrets and variables -> Actions):
-#   секрет YANDEX_WEBDAV_USER     — логин Яндекс ID (почта)
-#   секрет YANDEX_WEBDAV_PASSWORD — пароль приложения Яндекс ID или OAuth-токен
-#                                   (основной пароль аккаунта не подходит)
+#   секрет YANDEX_DISK_TOKEN      — OAuth-токен Яндекса с правом записи на Диск
+#   либо пара секретов YANDEX_WEBDAV_USER + YANDEX_WEBDAV_PASSWORD
+#                                 — логин и пароль приложения «Файлы WebDAV»
+#                                   (документированный Яндексом способ для WebDAV)
 #   секрет GPG_PASSPHRASE         — необязательный; если задан, архив шифруется
 #   переменная YANDEX_WEBDAV_URL  — необязательная; по умолчанию https://webdav.yandex.ru
+#
+# Вариант авторизации выбирается автоматически: скрипт проверяет, какой заголовок
+# принимает сервер, и пишет в лог, какой сработал. Проверить заранее:
+#   YANDEX_DISK_TOKEN=... python3 .github/scripts/yandex_webdav_backup.py --check
 #
 # Куда пишем: /GitHubBackup/<repo>/<repo>-<дата>-<sha>.zip (+ latest.zip).
 # Восстановление выполняется вручную: скачать архив с Диска и распаковать.
@@ -51,18 +56,20 @@ jobs:
       - name: Проверить настройку секретов
         if: ${{ inputs.dry_run != true }}
         env:
+          YANDEX_DISK_TOKEN: ${{ secrets.YANDEX_DISK_TOKEN }}
           YANDEX_WEBDAV_USER: ${{ secrets.YANDEX_WEBDAV_USER }}
           YANDEX_WEBDAV_PASSWORD: ${{ secrets.YANDEX_WEBDAV_PASSWORD }}
         run: |
           set -euo pipefail
-          missing=""
-          [ -n "$YANDEX_WEBDAV_USER" ] || missing="$missing YANDEX_WEBDAV_USER"
-          [ -n "$YANDEX_WEBDAV_PASSWORD" ] || missing="$missing YANDEX_WEBDAV_PASSWORD"
-          if [ -n "$missing" ]; then
-            echo "::error::Не заданы секреты:$missing. Добавьте их в Settings -> Secrets and variables -> Actions."
+          if [ -n "$YANDEX_DISK_TOKEN" ]; then
+            echo "Используется OAuth-токен YANDEX_DISK_TOKEN."
+          elif [ -n "$YANDEX_WEBDAV_USER" ] && [ -n "$YANDEX_WEBDAV_PASSWORD" ]; then
+            echo "Используется пара логин + пароль приложения."
+          else
+            echo "::error::Нужен секрет YANDEX_DISK_TOKEN либо пара YANDEX_WEBDAV_USER + YANDEX_WEBDAV_PASSWORD."
+            echo "::error::Добавьте их в Settings -> Secrets and variables -> Actions."
             exit 1
           fi
-          echo "Секреты заданы."
 
       - name: Включить шифрование, если задан GPG_PASSPHRASE
         env:
@@ -122,6 +129,7 @@ jobs:
 
       - name: Выгрузить на Яндекс Диск (WebDAV)
         env:
+          YANDEX_DISK_TOKEN: ${{ secrets.YANDEX_DISK_TOKEN }}
           YANDEX_WEBDAV_USER: ${{ secrets.YANDEX_WEBDAV_USER }}
           YANDEX_WEBDAV_PASSWORD: ${{ secrets.YANDEX_WEBDAV_PASSWORD }}
           YANDEX_WEBDAV_URL: ${{ vars.YANDEX_WEBDAV_URL }}
@@ -151,4 +159,5 @@ jobs:
             echo "- архив: \`${ARCHIVE_NAME:-—}\`"
             echo "- выгрузка: ${{ inputs.dry_run && 'не выполнялась (dry-run)' || 'выполнена или прервана — см. лог шага выше' }}"
             echo "- каталог на Диске: \`${REMOTE_ROOT}/${GITHUB_REPOSITORY#*/}\`"
+            echo "- авторизация: ${AUTH_LABEL:-не определена}"
           } >> "$GITHUB_STEP_SUMMARY"

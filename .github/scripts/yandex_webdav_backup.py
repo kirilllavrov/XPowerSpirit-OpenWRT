@@ -5,6 +5,12 @@
 загружает файл (PUT), проверяет размер (PROPFIND) и удаляет старые архивы (DELETE).
 Скачивания и обратной синхронизации нет.
 
+Авторизация. Официальная справка Яндекса описывает для WebDAV пару
+«логин + пароль приложения (Файлы WebDAV)»; OAuth-токен для WebDAV там не описан.
+Поэтому при наличии YANDEX_DISK_TOKEN скрипт сам перебирает варианты передачи
+токена и фиксирует в логе тот, который сервер принял (`--check` показывает то же
+без выгрузки). Если ни один вариант не принят, значит нужен пароль приложения.
+
 Зависимостей нет — только стандартная библиотека, поэтому в workflow не нужен pip.
 """
 
@@ -34,11 +40,65 @@ class DavError(RuntimeError):
     """Ошибка обращения к WebDAV."""
 
 
+class Auth:
+    """Один вариант авторизации: заголовок Authorization и его человекочитаемое имя."""
+
+    def __init__(self, header: str, label: str):
+        self.header = header
+        self.label = label
+
+
+def _basic(user: str, password: str, label: str) -> Auth:
+    token = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
+    return Auth(f"Basic {token}", label)
+
+
+def auth_candidates(env) -> list:
+    """Варианты авторизации в порядке предпочтения; дубликаты заголовков убираются."""
+    user = (env.get("YANDEX_WEBDAV_USER") or "").strip()
+    password = (env.get("YANDEX_WEBDAV_PASSWORD") or "").strip()
+    token = (env.get("YANDEX_DISK_TOKEN") or "").strip()
+
+    candidates = []
+    # Документированный Яндексом способ: логин + пароль приложения «Файлы WebDAV».
+    if user and password:
+        candidates.append(_basic(user, password, "Basic: логин + пароль приложения"))
+    if token:
+        if user:
+            candidates.append(_basic(user, token, f"Basic: логин {user} + OAuth-токен"))
+        for name in ("oauth", "token"):
+            candidates.append(_basic(name, token, f"Basic: user={name} + OAuth-токен"))
+        candidates.append(Auth(f"OAuth {token}", "OAuth: Authorization: OAuth <токен>"))
+
+    unique, seen = [], set()
+    for candidate in candidates:
+        if candidate.header not in seen:
+            seen.add(candidate.header)
+            unique.append(candidate)
+    return unique
+
+
+NO_AUTH_HELP = (
+    "Не заданы учётные данные. Нужен один из вариантов:\n"
+    "  - секрет YANDEX_DISK_TOKEN (OAuth-токен), либо\n"
+    "  - секрет YANDEX_WEBDAV_USER + YANDEX_WEBDAV_PASSWORD (пароль приложения «Файлы WebDAV»).\n"
+    "Пароль приложения создаётся в Яндекс ID -> Безопасность -> Доступ к вашим данным ->"
+    " Пароли приложений -> тип «Файлы WebDAV»."
+)
+
+AUTH_FAILED_HELP = (
+    "Сервер отклонил все варианты авторизации (HTTP 401/403).\n"
+    "Если используется OAuth-токен: у токена может не быть прав на Диск или он отозван.\n"
+    "Для WebDAV официальная справка Яндекса описывает пароль приложения: создайте его в"
+    " Яндекс ID -> Безопасность -> Доступ к вашим данным -> Пароли приложений -> тип"
+    " «Файлы WebDAV» и сохраните в секреты YANDEX_WEBDAV_USER (логин) и YANDEX_WEBDAV_PASSWORD."
+)
+
+
 class YandexWebDav:
-    def __init__(self, base_url: str, user: str, password: str, timeout: int = 300, attempts: int = 4):
+    def __init__(self, base_url: str, auth: Auth, timeout: int = 300, attempts: int = 4):
         self.base_url = base_url.rstrip("/")
-        token = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
-        self.auth = f"Basic {token}"
+        self.auth = auth
         self.timeout = timeout
         self.attempts = attempts
 
@@ -49,7 +109,7 @@ class YandexWebDav:
     def _attempt(self, method: str, remote_path: str, data, headers):
         payload = data() if callable(data) else data
         request = urllib.request.Request(self._url(remote_path), data=payload, method=method)
-        request.add_header("Authorization", self.auth)
+        request.add_header("Authorization", self.auth.header)
         request.add_header("User-Agent", "github-yandex-webdav-backup/1.0")
         for name, value in (headers or {}).items():
             request.add_header(name, value)
@@ -81,11 +141,7 @@ class YandexWebDav:
             detail = body[:400].decode("utf-8", "replace").strip()
             last = f"{method} {remote_path}: HTTP {status} {detail}"
             if status in (401, 403):
-                raise DavError(
-                    last
-                    + "\nПроверьте YANDEX_WEBDAV_USER и YANDEX_WEBDAV_PASSWORD:"
-                    " нужен пароль приложения Яндекс ID или OAuth-токен, а не основной пароль."
-                )
+                raise DavError(last + "\n" + AUTH_FAILED_HELP)
             if status == 507:
                 raise DavError(last + "\nНа Яндекс Диске не хватает места.")
             if status < 500 and status != 429:
@@ -94,6 +150,24 @@ class YandexWebDav:
                 raise DavError(last)
             time.sleep(2 ** attempt)
         raise DavError(last or f"{method} {remote_path}: неизвестная ошибка")
+
+    def probe(self):
+        """Проверяет вариант авторизации запросом PROPFIND на корень.
+
+        Возвращает (принят, описание). Сетевые ошибки не считаются отказом авторизации
+        и пробрасываются вызывающему коду.
+        """
+        headers = {"Depth": "0", "Content-Type": "application/xml; charset=utf-8"}
+        try:
+            status, body = self._attempt("PROPFIND", "/", PROPFIND_BODY, headers)
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            raise DavError(f"сеть недоступна при проверке авторизации ({error})") from error
+        if status in (200, 207):
+            return True, f"HTTP {status}"
+        if status in (401, 403):
+            return False, f"HTTP {status}"
+        detail = body[:200].decode("utf-8", "replace").strip()
+        raise DavError(f"PROPFIND /: неожиданный HTTP {status} {detail}")
 
     def ensure_dir(self, remote_dir: str) -> None:
         current = ""
@@ -147,8 +221,8 @@ class YandexWebDav:
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(description="Выгрузка архива на Яндекс Диск по WebDAV (одно направление).")
-    parser.add_argument("--file", required=True, help="локальный файл архива")
-    parser.add_argument("--remote-dir", required=True, help="каталог на Диске, например /GitHubBackup/repo")
+    parser.add_argument("--file", help="локальный файл архива (не нужен вместе с --check)")
+    parser.add_argument("--remote-dir", help="каталог на Диске, например /GitHubBackup/repo")
     parser.add_argument("--keep", type=int, default=14, help="сколько последних архивов оставить (0 — не удалять)")
     parser.add_argument(
         "--retention-prefix",
@@ -161,12 +235,48 @@ def parse_args(argv):
         help="дополнительная копия с фиксированным именем (пустая строка — не создавать)",
     )
     parser.add_argument("--dry-run", action="store_true", help="только показать план, без обращения к Диску")
+    parser.add_argument("--check", action="store_true", help="только проверить авторизацию, ничего не выгружать")
     parser.add_argument("--base-url", default=os.environ.get("YANDEX_WEBDAV_URL") or DEFAULT_BASE_URL)
     return parser.parse_args(argv)
 
 
+def _export_auth_label(label: str) -> None:
+    """Пробрасывает название сработавшего варианта в следующий шаг workflow."""
+    env_file = os.environ.get("GITHUB_ENV")
+    if env_file:
+        with open(env_file, "a", encoding="utf-8") as handle:
+            handle.write(f"AUTH_LABEL={label}\n")
+
+
+def resolve_auth(base_url: str, verbose: bool = False):
+    """Возвращает первый принятый сервером вариант авторизации."""
+    candidates = auth_candidates(os.environ)
+    if not candidates:
+        raise DavError(NO_AUTH_HELP)
+
+    for candidate in candidates:
+        dav = YandexWebDav(base_url, candidate)
+        accepted, detail = dav.probe()
+        if verbose or len(candidates) > 1:
+            mark = "принят" if accepted else "отклонён"
+            print(f"авторизация: {candidate.label} — {mark} ({detail})", flush=True)
+        if accepted:
+            _export_auth_label(candidate.label)
+            return candidate
+    raise DavError(AUTH_FAILED_HELP)
+
+
 def main(argv=None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
+
+    if args.check:
+        auth = resolve_auth(args.base_url, verbose=True)
+        print(f"итог проверки: рабочий вариант — {auth.label}")
+        return 0
+
+    if not args.file or not args.remote_dir:
+        print("нужны --file и --remote-dir (или --check для проверки авторизации)", file=sys.stderr)
+        return 2
 
     local_path = os.path.abspath(args.file)
     if not os.path.isfile(local_path):
@@ -184,13 +294,7 @@ def main(argv=None) -> int:
         print(f"[dry-run] оставил бы {args.keep} последних архивов в {remote_dir}")
         return 0
 
-    user = os.environ.get("YANDEX_WEBDAV_USER", "")
-    password = os.environ.get("YANDEX_WEBDAV_PASSWORD", "")
-    if not user or not password:
-        print("не заданы YANDEX_WEBDAV_USER / YANDEX_WEBDAV_PASSWORD", file=sys.stderr)
-        return 1
-
-    dav = YandexWebDav(args.base_url, user, password)
+    dav = YandexWebDav(args.base_url, resolve_auth(args.base_url))
 
     dav.ensure_dir(remote_dir)
     uploaded = dav.put_file(remote_path, local_path)
