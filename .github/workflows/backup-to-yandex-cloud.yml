@@ -128,6 +128,7 @@ jobs:
             diagnose-xray-tproxy.sh        # диагностика, запускается отдельно
             README.md                      # описание проекта и инструкции по установке
             update-scripts.sh              # самообновление скриптов из latest.zip
+            xray-common.sh                 # общие функции: settings.json, архитектура, ротация
           )
 
           # Пути перечислены явно: справочники xray-config-*.md, LICENSE и .github

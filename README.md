@@ -356,9 +356,9 @@ curl -fsSL https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/XPowerSpirit-Open
    ```bash
    curl (User-Agent + x-hwid + X-Ver-Os/X-Device-Model/X-Device-Os) → sub.txt
    xray-sub-parser.py --ua <UA> [--remarks <фильтр>] → {"hole":…, "outbounds":[…]}
-   xray-generate-config.py --format unified --output /etc/xray/config.json.new
-   xray run -test -config /etc/xray/config.json.new
-   mv /etc/xray/config.json.new /etc/xray/config.json   # rename в одной ФС
+   xray-generate-config.py --format unified --output /etc/xray/config.new.json
+   xray run -test -config /etc/xray/config.new.json
+   mv /etc/xray/config.new.json /etc/xray/config.json   # rename в одной ФС
    ```
 
    **Подписка всегда в JSON** (Happ/Sing-box/Karing/XPower). `--ua` нужен, чтобы запросить её у провайдера с правильным User-Agent: без него провайдер может вернуть не JSON. На разбор формата User-Agent не влияет.
@@ -426,12 +426,12 @@ curl -fsSL https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/XPowerSpirit-Open
 1. **Ротация лога** — обнуляет `/tmp/log/xray-scripts.log` при > 256 KB
 2. **Проверка версии** — скачивает `latest.zip.sha256` (~70 байт) и сравнивает с установленным `/etc/xray/state/scripts.zip.sha256`; при совпадении выходит без изменений
 3. **Скачивание** — `latest.zip` с проверкой SHA-256 (две попытки: между чтением хеша и архива workflow мог выгрузить новую версию)
-4. **Проверка до применения** — `sh -n` для `.sh`, `compile()` для `.py`; при ошибке установка отменяется
+4. **Проверка до применения** — сначала наличие всех файлов комплекта в архиве (включая `xray-common.sh`), затем `sh -n` для `.sh` и `compile()` для `.py`; при ошибке установка отменяется
 5. **Бэкап и замена** — текущие скрипты копируются в `/etc/xray/state/scripts-prev`, новые кладутся в `/usr/share/xray/.new` и подменяются через `mv` (rename в пределах одной ФС — работающий скрипт продолжает читать свой прежний inode)
 6. **Доливка настроек** — из `settings.default.json` в `settings.json` добавляются **только отсутствующие** ключи (рекурсивный `jq`-merge, текущие значения и массивы не перезаписываются)
 7. **Запись версии** — SHA-256 архива в `/etc/xray/state/scripts.zip.sha256`
 
-**Обновляемые файлы:** `xray-generate-config.py`, `xray-sub-parser.py`, `update-xray.sh`, `update-nft.sh`, `update-scripts.sh` (сам себя — безопасно, см. шаг 5) + `settings.default.json` как эталон.
+**Обновляемые файлы:** `xray-common.sh` (общие функции), `xray-generate-config.py`, `xray-sub-parser.py`, `update-xray.sh`, `update-nft.sh`, `update-scripts.sh` (сам себя — безопасно, см. шаг 5) + `settings.default.json` как эталон.
 
 > **Не обновляется автоматически:** `/etc/init.d/xray`, `/etc/hotplug.d/iface/99-xray-autoupdate`, `/etc/sysctl.d/99-xray.conf`, правила `ip rule`/`rt_tables` и UCI-настройки сетей — они генерируются установщиком. Для их изменения нужен повторный запуск `install-openwrt-xray.sh`.
 
@@ -464,6 +464,27 @@ crontab -l 2>/dev/null | { cat; echo "20 2 * * * /usr/share/xray/update-scripts.
 ```
 
 Альтернатива — повторно запустить `install-openwrt-xray.sh`: он скачает скрипт и добавит cron-запись сам.
+
+---
+
+### xray-common.sh
+
+**Назначение:** общие функции, которые используют установщик и `update-xray.sh`. Подключается как библиотека: `. /usr/share/xray/xray-common.sh`.
+
+**Что содержит:**
+
+| Функция | Назначение |
+| --- | --- |
+| `settings_get <jq-путь>` | чтение значения из `/etc/xray/settings.json`; boolean → `1`/`0`, массив → построчно |
+| `settings_set <jq-путь> <значение>` | запись значения, права `600`; числовая строка пишется числом |
+| `detect_xray_machine` | суффикс релиза Xray по `DISTRIB_ARCH` из `/etc/openwrt_release` |
+| `resolve_xray_machine` | то же с резервным определением по `uname -m`; пусто — архитектура не поддерживается |
+| `extract_sha256 <dgst>` | SHA2-256 из `.dgst` релиза Xray |
+| `rotate_log <файл> [порог]` | обнуление журнала при превышении порога (по умолчанию 1 MB), факт пишется в `$LOG` |
+
+Требования: вызывающий скрипт задаёт `SETTINGS_JSON` (и `LOG` для `rotate_log`) до первого вызова; нужен `jq`.
+
+`update-scripts.sh` остаётся самодостаточным: если библиотеки на устройстве ещё нет, он использует встроенные упрощённые версии (он же её и устанавливает). `update-xray.sh` при отсутствии файла пробует скачать его один раз, а затем завершается с понятной ошибкой.
 
 ---
 
@@ -684,6 +705,7 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
     └── scripts-prev/         # Копия скриптов до последнего обновления (для --rollback)
 
 /usr/share/xray/
+├── xray-common.sh        # Общие функции: settings.json, архитектура, ротация журналов
 ├── xray-generate-config.py
 ├── xray-sub-parser.py
 ├── update-xray.sh

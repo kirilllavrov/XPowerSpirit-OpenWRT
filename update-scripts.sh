@@ -38,7 +38,7 @@ ARCHIVE_URL="${XRAY_SCRIPTS_URL:-}"
 
 # Файлы, которые разрешено заменять автоматически. Здесь же — сам этот скрипт:
 # его замена безопасна, потому что mv подменяет имя, а не содержимое inode.
-SCRIPTS="xray-generate-config.py xray-sub-parser.py update-xray.sh update-nft.sh update-scripts.sh"
+SCRIPTS="xray-common.sh xray-generate-config.py xray-sub-parser.py update-xray.sh update-nft.sh update-scripts.sh"
 
 MODE="apply"
 
@@ -64,16 +64,24 @@ die() {
     exit 1
 }
 
-rotate_log() {
-    local file="$1"
-    local max_size="${2:-262144}"
-    [ -f "$file" ] || return
-    local size
-    size=$(stat -c%s "$file" 2>/dev/null) || size=$(wc -c <"$file")
-    if [ "${size:-0}" -gt "$max_size" ]; then
-        : >"$file"
-    fi
-}
+# Общие хелперы (settings_get, rotate_log) — из xray-common.sh. Но этот скрипт
+# обязан работать и без библиотеки: именно он её и устанавливает, поэтому при
+# отсутствии файла остаются встроенные упрощённые версии.
+COMMON_SH="${XRAY_COMMON_SH:-$SCRIPTS_DIR/xray-common.sh}"
+[ -r "$COMMON_SH" ] && . "$COMMON_SH"
+
+if ! command -v rotate_log >/dev/null 2>&1; then
+    rotate_log() {
+        local file="$1"
+        local max_size="${2:-262144}"
+        [ -f "$file" ] || return
+        local size
+        size=$(stat -c%s "$file" 2>/dev/null) || size=$(wc -c <"$file")
+        if [ "${size:-0}" -gt "$max_size" ]; then
+            : >"$file"
+        fi
+    }
+fi
 
 usage() {
     cat <<'EOF'
@@ -90,12 +98,14 @@ EOF
 #   ХЕЛПЕРЫ
 # ============================================
 
-# Чтение значения из settings.json по jq-пути
-settings_get() {
-    local key="$1"
-    [ -f "$SETTINGS_JSON" ] || return 1
-    jq -r "$key // empty" "$SETTINGS_JSON" 2>/dev/null
-}
+# settings_get: из xray-common.sh, при его отсутствии — упрощённая версия
+if ! command -v settings_get >/dev/null 2>&1; then
+    settings_get() {
+        local key="$1"
+        [ -f "$SETTINGS_JSON" ] || return 1
+        jq -r "$key // empty" "$SETTINGS_JSON" 2>/dev/null
+    }
+fi
 
 # Скачивание с ретраями. Без заголовков подписки: Object Storage их не требует.
 fetch_url() {
@@ -168,6 +178,12 @@ download_verified() {
 check_syntax() {
     local f
     for f in $SCRIPTS; do
+        # Архив обязан содержать весь комплект: иначе после применения получилась бы
+        # смесь версий. Проверяем до sh -n, иначе отсутствие файла выглядит как ошибка синтаксиса.
+        if [ ! -f "$NEW_DIR/$f" ]; then
+            log "[X] В архиве нет файла $f — обновление отменено"
+            return 1
+        fi
         case "$f" in
         *.sh)
             if ! sh -n "$NEW_DIR/$f" 2>>"$LOG"; then
@@ -261,7 +277,7 @@ case "${1:-}" in
     ;;
 esac
 
-rotate_log "$LOG"
+rotate_log "$LOG" 262144
 
 # ============================================
 #   ОТКАТ
@@ -354,7 +370,7 @@ done
 log "→ версия архива: ${COMMIT:-неизвестна}"
 
 if ! check_syntax; then
-    die "Новые скрипты не прошли проверку синтаксиса — установка отменена"
+    die "Новый комплект скриптов отклонён (причина в журнале) — установка отменена"
 fi
 
 # ============================================

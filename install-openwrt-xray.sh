@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC1087 # $key[] внутри jq-программы — не shell-массив
 # OpenWrt 25.12.x — Xray TProxy (IPv4-only)
 
 # Логируем установку.
@@ -45,6 +46,7 @@ SETTINGS_JSON="$CONFIG_DIR/settings.json"
 TMP_DIR="/tmp/xray_install"
 GEO_DIR="/usr/share/xray"
 STATE_DIR="/etc/xray/state"
+COMMON_SH="/usr/share/xray/xray-common.sh"
 
 # Значения из CLI (если не указаны — берутся из settings.default.json)
 SUB_USER_AGENT=""
@@ -69,8 +71,9 @@ LOG_PRESET="quiet"
 #   ХЕЛПЕРЫ ДЛЯ ЕДИНОГО JSON-КОНФИГА
 # =============================================
 
-# Чтение значения из settings.json по jq-пути
-# Пример: settings_get ".subscription.url"
+# Bootstrap-чтение settings.json: нужно до того, как установлена xray-common.sh
+# (download_file берёт из настроек заголовки запроса). После установки библиотеки
+# эта версия заменяется на settings_get из xray-common.sh.
 settings_get() {
     local key="$1"
     [ -f "$SETTINGS_JSON" ] || return 1
@@ -83,22 +86,6 @@ settings_get() {
             $key // empty
         end
     " "$SETTINGS_JSON" 2>/dev/null
-}
-
-# Запись значения в settings.json по jq-пути
-# Пример: settings_set ".subscription.url" "https://..."
-settings_set() {
-    local key="$1"
-    local val="$2"
-    mkdir -p "$(dirname "$SETTINGS_JSON")"
-    [ -f "$SETTINGS_JSON" ] || echo '{}' > "$SETTINGS_JSON"
-    if echo "$val" | grep -qE '^[0-9]+$'; then
-        jq --argjson v "$val" "$key = \$v" "$SETTINGS_JSON" > "${SETTINGS_JSON}.tmp"
-    else
-        jq --arg v "$val" "$key = \$v" "$SETTINGS_JSON" > "${SETTINGS_JSON}.tmp"
-    fi
-    mv "${SETTINGS_JSON}.tmp" "$SETTINGS_JSON"
-    chmod 600 "$SETTINGS_JSON"
 }
 
 # =============================================
@@ -188,62 +175,6 @@ install_data() {
     chmod "$mode" "$dst"
 }
 
-# Определение суффикса релизного ZIP Xray под архитектуру устройства.
-# DISTRIB_ARCH из /etc/openwrt_release надёжнее uname: uname -m отдаёт "mips"
-# и для big-endian, и для little-endian MIPS, а armv6l/armv5l не отличить от armv7l.
-# XRAY_RELEASE_FILE переопределяется в тестах.
-XRAY_RELEASE_FILE="${XRAY_RELEASE_FILE:-/etc/openwrt_release}"
-
-detect_xray_machine() {
-    local os_arch=""
-    if [ -f "$XRAY_RELEASE_FILE" ]; then
-        os_arch=$(. "$XRAY_RELEASE_FILE" 2>/dev/null; echo "$DISTRIB_ARCH")
-    fi
-    case "$os_arch" in
-    aarch64*) echo "arm64-v8a" ;;
-    arm_arm1176*) echo "arm32-v6" ;;
-    arm_arm926* | arm_arm1136* | arm_xscale* | arm_fa526*) echo "arm32-v5" ;;
-    arm_*) echo "arm32-v7a" ;;
-    mips64el_*) echo "mips64le" ;;
-    mips64_*) echo "mips64" ;;
-    mipsel_*) echo "mips32le" ;;
-    mips_*) echo "mips32" ;;
-    riscv64*) echo "riscv64" ;;
-    loongarch64*) echo "loong64" ;;
-    powerpc64le*) echo "ppc64le" ;;
-    powerpc64*) echo "ppc64" ;;
-    s390x*) echo "s390x" ;;
-    i386 | i486 | i586 | i686) echo "32" ;;
-    x86_64) echo "64" ;;
-    esac
-}
-
-# Итоговое имя платформы; пустая строка — архитектура не поддерживается
-resolve_xray_machine() {
-    local m
-    m=$(detect_xray_machine)
-    if [ -z "$m" ]; then
-        case "$(uname -m)" in
-        x86_64 | amd64) m="64" ;;
-        i?86) m="32" ;;
-        aarch64 | arm64) m="arm64-v8a" ;;
-        armv8l | armv7l) m="arm32-v7a" ;;
-        armv6l) m="arm32-v6" ;;
-        armv5l | armv5tel) m="arm32-v5" ;;
-        mipsel) m="mips32le" ;;
-        mips) m="mips32" ;;
-        mips64el) m="mips64le" ;;
-        mips64) m="mips64" ;;
-        riscv64) m="riscv64" ;;
-        loongarch64) m="loong64" ;;
-        ppc64le) m="ppc64le" ;;
-        ppc64) m="ppc64" ;;
-        s390x) m="s390x" ;;
-        esac
-    fi
-    echo "$m"
-}
-
 # Парсер аргументов
 for arg in "$@"; do
 	case $arg in
@@ -310,6 +241,10 @@ install_script "xray-sub-parser.py" "$PARSER"
 install_script "update-xray.sh" "$UPDATER"
 install_script "update-nft.sh" "$NFT_UPDATER"
 install_script "update-scripts.sh" "$SCRIPTS_UPDATER"
+install_script "xray-common.sh" "$COMMON_SH"
+
+# Библиотека нужна остальным шагам установщика (settings_set, архитектура, SHA)
+. "$COMMON_SH" || die "Не удалось подключить $COMMON_SH"
 
 echo "[+] Все скрипты загружены и готовы к использованию"
 
@@ -368,98 +303,113 @@ uci commit dhcp
 echo "[+] Сеть настроена (изменения применятся после перезагрузки), IPv6 отключён"
 
 # =============================================
+# 5. Изолированные сети (гостевая, IoT)
+# =============================================
+# setup_client_network <имя> <ip> <dl> <ul> <подпись>
+# Одинаково настраивает изолированную сеть: bridge + interface, DHCP, firewall-зону
+# с правилами DNS/DHCP и forwarding в wan, SQM с лимитами. Подпись используется
+# в сообщениях и в именах firewall-правил.
+setup_client_network() {
+	local NET="$1"
+	local IP="$2"
+	local DL="$3"
+	local UL="$4"
+	local LABEL="$5"
+
+	# Bridge + Interface
+	uci -q delete network.${NET}_dev
+	uci set network.${NET}_dev="device"
+	uci set network.${NET}_dev.type="bridge"
+	uci set network.${NET}_dev.name="br-${NET}"
+	uci set network.${NET}_dev.bridge_empty="1"
+	uci set network.${NET}_dev.mtu="1500"
+
+	uci -q delete network.$NET
+	uci set network.$NET="interface"
+	uci set network.$NET.proto="static"
+	uci set network.$NET.device="br-${NET}"
+	uci set network.$NET.ipaddr="$IP"
+	uci set network.$NET.netmask="255.255.255.0"
+	uci set network.$NET.force_link="1"
+	uci commit network
+	echo "  → ${LABEL} Bridge + Interface настроены: br-${NET} (${IP}/24)"
+
+	# DHCP
+	uci -q delete dhcp.$NET
+	uci set dhcp.$NET="dhcp"
+	uci set dhcp.$NET.interface="$NET"
+	uci set dhcp.$NET.start="100"
+	uci set dhcp.$NET.limit="150"
+	uci set dhcp.$NET.leasetime="12h"
+	uci set dhcp.$NET.force="1"
+	uci set dhcp.$NET.ignore="0"
+	uci commit dhcp
+	echo "  → DHCP для ${LABEL} настроен: $NET"
+
+	# Firewall: зона
+	uci -q delete firewall.$NET
+	uci set firewall.$NET="zone"
+	uci set firewall.$NET.name="$NET"
+	uci set firewall.$NET.network="$NET"
+	uci set firewall.$NET.input="REJECT"
+	uci set firewall.$NET.output="ACCEPT"
+	uci set firewall.$NET.forward="REJECT"
+	uci set firewall.$NET.masq="1"
+	uci set firewall.$NET.mtu_fix="1"
+	echo "  → Firewall зона для ${LABEL} создана: $NET"
+
+	# Firewall: DNS
+	uci -q delete firewall.${NET}_dns
+	uci set firewall.${NET}_dns="rule"
+	uci set firewall.${NET}_dns.name="Allow-DNS-${LABEL}"
+	uci set firewall.${NET}_dns.src="$NET"
+	uci set firewall.${NET}_dns.dest_port="53"
+	uci set firewall.${NET}_dns.proto="tcp udp"
+	uci set firewall.${NET}_dns.target="ACCEPT"
+	echo "  → Firewall правило для DNS создано: $NET"
+
+	# Firewall: DHCP
+	uci -q delete firewall.${NET}_dhcp
+	uci set firewall.${NET}_dhcp="rule"
+	uci set firewall.${NET}_dhcp.name="Allow-DHCP-${LABEL}"
+	uci set firewall.${NET}_dhcp.src="$NET"
+	uci set firewall.${NET}_dhcp.dest_port="67-68"
+	uci set firewall.${NET}_dhcp.proto="udp"
+	uci set firewall.${NET}_dhcp.target="ACCEPT"
+	echo "  → Firewall правило для DHCP создано: $NET"
+
+	# Firewall: forwarding в wan
+	uci -q delete firewall.${NET}_wan
+	uci set firewall.${NET}_wan="forwarding"
+	uci set firewall.${NET}_wan.src="$NET"
+	uci set firewall.${NET}_wan.dest="wan"
+	uci commit firewall
+	echo "  → Firewall правило для доступа ${LABEL} в WAN создано: $NET → wan"
+
+	# SQM с лимитами (0/0 — без ограничений)
+	uci -q delete sqm.$NET
+	uci set sqm.$NET="queue"
+	uci set sqm.$NET.interface="br-${NET}"
+	uci set sqm.$NET.download="$DL"
+	uci set sqm.$NET.upload="$UL"
+	uci set sqm.$NET.qdisc="cake"
+	uci set sqm.$NET.script="piece_of_cake.qos"
+	if [ "$DL" = "0" ] && [ "$UL" = "0" ]; then
+		uci set sqm.$NET.enabled="0"
+		echo "  → SQM отключён для ${LABEL} (dl=0, ul=0 — без ограничений)"
+	else
+		uci set sqm.$NET.enabled="1"
+		echo "  → SQM настроен для ${LABEL}: ${DL}kbps down / ${UL}kbps up"
+	fi
+	uci commit sqm
+}
+
+# =============================================
 # 5a. Настраиваем гостевую сеть и лимиты скорости (если включена)
 # =============================================
 if [ $GUEST_ENABLED -eq 1 ]; then
 	echo "5. Настройка Guest Network и SQM:"
-
-	# 5a.1. Guest Bridge + Interface
-	uci -q delete network.${GUEST_NET}_dev
-	uci set network.${GUEST_NET}_dev="device"
-	uci set network.${GUEST_NET}_dev.type="bridge"
-	uci set network.${GUEST_NET}_dev.name="br-${GUEST_NET}"
-	uci set network.${GUEST_NET}_dev.bridge_empty="1"
-	uci set network.${GUEST_NET}_dev.mtu="1500"
-
-	uci -q delete network.$GUEST_NET
-	uci set network.$GUEST_NET="interface"
-	uci set network.$GUEST_NET.proto="static"
-	uci set network.$GUEST_NET.device="br-${GUEST_NET}"
-	uci set network.$GUEST_NET.ipaddr="$GUEST_IP"
-	uci set network.$GUEST_NET.netmask="255.255.255.0"
-	uci set network.$GUEST_NET.force_link="1"
-	uci commit network
-	echo "  → Guest Bridge + Interface настроены: br-${GUEST_NET} (${GUEST_IP}/24)"
-
-	# 5a.2. DHCP Guest
-	uci -q delete dhcp.$GUEST_NET
-	uci set dhcp.$GUEST_NET="dhcp"
-	uci set dhcp.$GUEST_NET.interface="$GUEST_NET"
-	uci set dhcp.$GUEST_NET.start="100"
-	uci set dhcp.$GUEST_NET.limit="150"
-	uci set dhcp.$GUEST_NET.leasetime="12h"
-	uci set dhcp.$GUEST_NET.force="1"
-	uci set dhcp.$GUEST_NET.ignore="0"
-	uci commit dhcp
-	echo "  → DHCP для Guest настроен: $GUEST_NET"
-
-	# 5a.3. Firewall Guest Zone + Rules
-	uci -q delete firewall.$GUEST_NET
-	uci set firewall.$GUEST_NET="zone"
-	uci set firewall.$GUEST_NET.name="$GUEST_NET"
-	uci set firewall.$GUEST_NET.network="$GUEST_NET"
-	uci set firewall.$GUEST_NET.input="REJECT"
-	uci set firewall.$GUEST_NET.output="ACCEPT"
-	uci set firewall.$GUEST_NET.forward="REJECT"
-	uci set firewall.$GUEST_NET.masq="1"
-	uci set firewall.$GUEST_NET.mtu_fix="1"
-	echo "  → Firewall зона для Guest создана: $GUEST_NET"
-
-	# 5a.4 Firewall DNS
-	uci -q delete firewall.${GUEST_NET}_dns
-	uci set firewall.${GUEST_NET}_dns="rule"
-	uci set firewall.${GUEST_NET}_dns.name="Allow-DNS-Guest"
-	uci set firewall.${GUEST_NET}_dns.src="$GUEST_NET"
-	uci set firewall.${GUEST_NET}_dns.dest_port="53"
-	uci set firewall.${GUEST_NET}_dns.proto="tcp udp"
-	uci set firewall.${GUEST_NET}_dns.target="ACCEPT"
-	echo "  → Firewall правило для DNS создано: $GUEST_NET"
-
-	# 5a.5 Firewall DHCP
-	uci -q delete firewall.${GUEST_NET}_dhcp
-	uci set firewall.${GUEST_NET}_dhcp="rule"
-	uci set firewall.${GUEST_NET}_dhcp.name="Allow-DHCP-Guest"
-	uci set firewall.${GUEST_NET}_dhcp.src="$GUEST_NET"
-	uci set firewall.${GUEST_NET}_dhcp.dest_port="67-68"
-	uci set firewall.${GUEST_NET}_dhcp.proto="udp"
-	uci set firewall.${GUEST_NET}_dhcp.target="ACCEPT"
-	echo "  → Firewall правило для DHCP создано: $GUEST_NET"
-
-	# 5a.6 Forward to WAN
-	uci -q delete firewall.${GUEST_NET}_wan
-	uci set firewall.${GUEST_NET}_wan="forwarding"
-	uci set firewall.${GUEST_NET}_wan.src="$GUEST_NET"
-	uci set firewall.${GUEST_NET}_wan.dest="wan"
-	uci commit firewall
-	echo "  → Firewall правило для доступа Guest в WAN создано: $GUEST_NET → wan"
-
-	# 5a.7 Настраиваем SQM только для Guest
-	uci -q delete sqm.$GUEST_NET
-	uci set sqm.$GUEST_NET="queue"
-	uci set sqm.$GUEST_NET.interface="br-${GUEST_NET}"
-	uci set sqm.$GUEST_NET.download="$DL_GUEST"
-	uci set sqm.$GUEST_NET.upload="$UL_GUEST"
-	uci set sqm.$GUEST_NET.qdisc="cake"
-	uci set sqm.$GUEST_NET.script="piece_of_cake.qos"
-	if [ "$DL_GUEST" = "0" ] && [ "$UL_GUEST" = "0" ]; then
-		uci set sqm.$GUEST_NET.enabled="0"
-		echo "  → SQM отключён для Guest (dl=0, ul=0 — без ограничений)"
-	else
-		uci set sqm.$GUEST_NET.enabled="1"
-		echo "  → SQM настроен для Guest: ${DL_GUEST}kbps down / ${UL_GUEST}kbps up"
-	fi
-	uci commit sqm
-
+	setup_client_network "$GUEST_NET" "$GUEST_IP" "$DL_GUEST" "$UL_GUEST" "Guest"
 	echo "[+] Настройка Guest Network и SQM завершена (изменения применятся после перезагрузки)"
 else
 	echo "5. Пропускаем настройку гостевой сети (--guest=1 не указан)"
@@ -470,94 +420,7 @@ fi
 # =============================================
 if [ $IOT_ENABLED -eq 1 ]; then
 	echo "5b. Настройка IoT Network и SQM:"
-
-	# 5b.1. IoT Bridge + Interface
-	uci -q delete network.${IOT_NET}_dev
-	uci set network.${IOT_NET}_dev="device"
-	uci set network.${IOT_NET}_dev.type="bridge"
-	uci set network.${IOT_NET}_dev.name="br-${IOT_NET}"
-	uci set network.${IOT_NET}_dev.bridge_empty="1"
-	uci set network.${IOT_NET}_dev.mtu="1500"
-
-	uci -q delete network.$IOT_NET
-	uci set network.$IOT_NET="interface"
-	uci set network.$IOT_NET.proto="static"
-	uci set network.$IOT_NET.device="br-${IOT_NET}"
-	uci set network.$IOT_NET.ipaddr="$IOT_IP"
-	uci set network.$IOT_NET.netmask="255.255.255.0"
-	uci set network.$IOT_NET.force_link="1"
-	uci commit network
-	echo "  → IoT Bridge + Interface настроены: br-${IOT_NET} (${IOT_IP}/24)"
-
-	# 5b.2. DHCP IoT
-	uci -q delete dhcp.$IOT_NET
-	uci set dhcp.$IOT_NET="dhcp"
-	uci set dhcp.$IOT_NET.interface="$IOT_NET"
-	uci set dhcp.$IOT_NET.start="100"
-	uci set dhcp.$IOT_NET.limit="150"
-	uci set dhcp.$IOT_NET.leasetime="12h"
-	uci set dhcp.$IOT_NET.force="1"
-	uci set dhcp.$IOT_NET.ignore="0"
-	uci commit dhcp
-	echo "  → DHCP для IoT настроен: $IOT_NET"
-
-	# 5b.3. Firewall IoT Zone
-	uci -q delete firewall.$IOT_NET
-	uci set firewall.$IOT_NET="zone"
-	uci set firewall.$IOT_NET.name="$IOT_NET"
-	uci set firewall.$IOT_NET.network="$IOT_NET"
-	uci set firewall.$IOT_NET.input="REJECT"
-	uci set firewall.$IOT_NET.output="ACCEPT"
-	uci set firewall.$IOT_NET.forward="REJECT"
-	uci set firewall.$IOT_NET.masq="1"
-	uci set firewall.$IOT_NET.mtu_fix="1"
-	echo "  → Firewall зона для IoT создана: $IOT_NET"
-
-	# 5b.4 Firewall DNS
-	uci -q delete firewall.${IOT_NET}_dns
-	uci set firewall.${IOT_NET}_dns="rule"
-	uci set firewall.${IOT_NET}_dns.name="Allow-DNS-IoT"
-	uci set firewall.${IOT_NET}_dns.src="$IOT_NET"
-	uci set firewall.${IOT_NET}_dns.dest_port="53"
-	uci set firewall.${IOT_NET}_dns.proto="tcp udp"
-	uci set firewall.${IOT_NET}_dns.target="ACCEPT"
-	echo "  → Firewall правило для DNS создано: $IOT_NET"
-
-	# 5b.5 Firewall DHCP
-	uci -q delete firewall.${IOT_NET}_dhcp
-	uci set firewall.${IOT_NET}_dhcp="rule"
-	uci set firewall.${IOT_NET}_dhcp.name="Allow-DHCP-IoT"
-	uci set firewall.${IOT_NET}_dhcp.src="$IOT_NET"
-	uci set firewall.${IOT_NET}_dhcp.dest_port="67-68"
-	uci set firewall.${IOT_NET}_dhcp.proto="udp"
-	uci set firewall.${IOT_NET}_dhcp.target="ACCEPT"
-	echo "  → Firewall правило для DHCP создано: $IOT_NET"
-
-	# 5b.6 Forward to WAN
-	uci -q delete firewall.${IOT_NET}_wan
-	uci set firewall.${IOT_NET}_wan="forwarding"
-	uci set firewall.${IOT_NET}_wan.src="$IOT_NET"
-	uci set firewall.${IOT_NET}_wan.dest="wan"
-	uci commit firewall
-	echo "  → Firewall правило для доступа IoT в WAN создано: $IOT_NET → wan"
-
-	# 5b.7 SQM для IoT
-	uci -q delete sqm.$IOT_NET
-	uci set sqm.$IOT_NET="queue"
-	uci set sqm.$IOT_NET.interface="br-${IOT_NET}"
-	uci set sqm.$IOT_NET.download="$DL_IOT"
-	uci set sqm.$IOT_NET.upload="$UL_IOT"
-	uci set sqm.$IOT_NET.qdisc="cake"
-	uci set sqm.$IOT_NET.script="piece_of_cake.qos"
-	if [ "$DL_IOT" = "0" ] && [ "$UL_IOT" = "0" ]; then
-		uci set sqm.$IOT_NET.enabled="0"
-		echo "  → SQM отключён для IoT (dl=0, ul=0 — без ограничений)"
-	else
-		uci set sqm.$IOT_NET.enabled="1"
-		echo "  → SQM настроен для IoT: ${DL_IOT}kbps down / ${UL_IOT}kbps up"
-	fi
-	uci commit sqm
-
+	setup_client_network "$IOT_NET" "$IOT_IP" "$DL_IOT" "$UL_IOT" "IoT"
 	echo "[+] Настройка IoT Network и SQM завершена (изменения применятся после перезагрузки)"
 else
 	echo "5b. Пропускаем настройку IoT сети (--iot=1 не указан)"
@@ -566,95 +429,84 @@ fi
 # =============================================
 # 6. Установка Xray из GitHub
 # =============================================
-echo "6. Устанавливаем Xray из GitHub..."
 
-# Ждём доступности GitHub API
-for i in $(seq 1 10); do
-	if curl -s --max-time 3 https://api.github.com >/dev/null 2>&1; then
-		break
+# Ставит /usr/bin/xray нужной версии. Кэш ZIP проверяется по SHA2-256 из .dgst,
+# поэтому повторная установка не скачивает архив заново.
+install_xray_binary() {
+	local latest latest_num current machine zip_url zip_dest sha_file dgst_file
+	local remote_sha local_sha free_tmp
+
+	# Ждём доступности GitHub API
+	for i in $(seq 1 10); do
+		curl -s --max-time 3 https://api.github.com >/dev/null 2>&1 && break
+		echo "  → Ожидание доступа к GitHub... ($i)"
+		sleep 2
+	done
+
+	latest=$(curl -fsS --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest |
+		jq -r '.tag_name // empty')
+	[ -n "$latest" ] || die "Не удалось получить версию Xray"
+
+	latest_num="${latest#v}"
+	current=""
+	[ -x /usr/bin/xray ] && current=$(/usr/bin/xray version 2>/dev/null | head -1 | awk '{print $2}')
+
+	if [ "$current" = "$latest_num" ]; then
+		echo "  ✓ Xray уже актуальной версии $latest, пропускаем установку"
+		return 0
 	fi
-	echo "  → Ожидание доступа к GitHub... ($i)"
-	sleep 2
-done
+	[ -n "$current" ] && echo "  → Текущая версия: $current, будет обновлено до $latest_num"
 
-# Получаем версию Xray
-LATEST_VERSION=$(curl -fsS --max-time 10 https://api.github.com/repos/XTLS/Xray-core/releases/latest |
-	jq -r '.tag_name // empty')
-
-[ -z "$LATEST_VERSION" ] && die "Не удалось получить версию Xray"
-
-LATEST_VER_NUM="${LATEST_VERSION#v}"
-
-# Проверяем, какая версия уже установлена
-CURRENT_VERSION=""
-if [ -x /usr/bin/xray ]; then
-	CURRENT_VERSION=$(/usr/bin/xray version 2>/dev/null | head -1 | awk '{print $2}')
-fi
-
-if [ "$CURRENT_VERSION" = "$LATEST_VER_NUM" ]; then
-	echo "  ✓ Xray уже актуальной версии $LATEST_VERSION, пропускаем установку"
-else
-	[ -n "$CURRENT_VERSION" ] && echo "  → Текущая версия: $CURRENT_VERSION, будет обновлено до $LATEST_VER_NUM"
-
-	MACHINE=$(resolve_xray_machine)
-	if [ -z "$MACHINE" ]; then
+	machine=$(resolve_xray_machine)
+	[ -n "$machine" ] ||
 		die "Архитектура $(uname -m) не поддерживается релизами Xray — установите пакет Xray вручную"
-	fi
 
-	ZIP_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_VERSION}/Xray-linux-${MACHINE}.zip"
-	ZIP_DEST="$TMP_DIR/xray.zip"
-	SHA_FILE="$STATE_DIR/xray.zip.sha256sum"
-	DGST_FILE="$STATE_DIR/xray.dgst"
+	zip_url="https://github.com/XTLS/Xray-core/releases/download/${latest}/Xray-linux-${machine}.zip"
+	zip_dest="$TMP_DIR/xray.zip"
+	sha_file="$STATE_DIR/xray.zip.sha256sum"
+	dgst_file="$STATE_DIR/xray.dgst"
 
-	extract_sha256() {
-		grep '^SHA2-256' "$1" |
-			sed 's/.*= *//' |
-			tr -cd '0-9a-fA-F' |
-			cut -c1-64
-	}
-
-	echo "  → Версия: $LATEST_VERSION, архитектура: $MACHINE"
-	echo "  → URL: ${ZIP_URL}.dgst"
-
+	echo "  → Версия: $latest, архитектура: $machine"
+	echo "  → URL: ${zip_url}.dgst"
 	echo "  → Скачиваем .dgst для Xray..."
-	download_file "${ZIP_URL}.dgst" "$DGST_FILE" || die "Не удалось скачать .dgst для Xray"
+	download_file "${zip_url}.dgst" "$dgst_file" || die "Не удалось скачать .dgst для Xray"
 
-	if [ ! -s "$DGST_FILE" ] || ! grep -q 'SHA2-256' "$DGST_FILE" 2>/dev/null; then
+	if [ ! -s "$dgst_file" ] || ! grep -q 'SHA2-256' "$dgst_file" 2>/dev/null; then
 		echo "  → Содержимое ответа:"
-		cat "$DGST_FILE" 2>/dev/null || echo " (файл пустой)"
+		cat "$dgst_file" 2>/dev/null || echo " (файл пустой)"
 		die ".dgst файл пустой или не содержит SHA2-256"
 	fi
 
-	REMOTE_SHA="$(extract_sha256 "$DGST_FILE")"
-	[ -z "$REMOTE_SHA" ] && die "Не удалось извлечь SHA2-256 из .dgst"
+	remote_sha=$(extract_sha256 "$dgst_file")
+	[ -n "$remote_sha" ] || die "Не удалось извлечь SHA2-256 из .dgst"
+	echo "  → Ожидаемый SHA2-256: ${remote_sha:0:16}..."
 
-	echo "  → Ожидаемый SHA2-256: ${REMOTE_SHA:0:16}..."
+	free_tmp=$(df /tmp | awk 'NR==2 {print $4}')
+	[ "$free_tmp" -ge 20480 ] || die "Недостаточно места в /tmp (нужно минимум 20MB)"
 
-	FREE_SPACE_TMP=$(df /tmp | awk 'NR==2 {print $4}')
-	[ "$FREE_SPACE_TMP" -ge 20480 ] || die "Недостаточно места в /tmp (нужно минимум 20MB)"
-
-	if [ -f "$SHA_FILE" ] && [ "$(cat "$SHA_FILE")" = "$REMOTE_SHA" ] && [ -f "$ZIP_DEST" ]; then
+	if [ -f "$sha_file" ] && [ "$(cat "$sha_file")" = "$remote_sha" ] && [ -f "$zip_dest" ]; then
 		echo "  ✓ Найден локальный ZIP с тем же SHA, повторное скачивание не требуется"
 	else
-		echo "  → Скачиваем Xray ZIP (${LATEST_VERSION})..."
-download_file "$ZIP_URL" "$ZIP_DEST" || die "Не удалось скачать Xray ZIP"
+		echo "  → Скачиваем Xray ZIP (${latest})..."
+		download_file "$zip_url" "$zip_dest" || die "Не удалось скачать Xray ZIP"
+		[ -s "$zip_dest" ] || die "Скачанный ZIP пустой"
 
-	[ -s "$ZIP_DEST" ] || die "Скачанный ZIP пустой"
+		local_sha=$(sha256sum "$zip_dest" | awk '{print $1}')
+		[ "$local_sha" = "$remote_sha" ] ||
+			die "SHA не совпадает! ожидалось: $remote_sha, получено: $local_sha"
+		echo "$remote_sha" >"$sha_file"
 
-		LOCAL_SHA="$(sha256sum "$ZIP_DEST" | awk '{print $1}')"
-		if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-			die "SHA не совпадает! ожидалось: $REMOTE_SHA, получено: $LOCAL_SHA"
-		fi
-		echo "$REMOTE_SHA" >"$SHA_FILE"
+		unzip -q "$zip_dest" -d "$TMP_DIR"
 
-	unzip -q "$ZIP_DEST" -d "$TMP_DIR"
+		cp "$TMP_DIR/xray" /usr/bin/xray
+		chmod 755 /usr/bin/xray
 
-	cp "$TMP_DIR/xray" /usr/bin/xray
-	chmod 755 /usr/bin/xray
-
-	echo "[+] Xray установлен версии $LATEST_VERSION"
+		echo "[+] Xray установлен версии $latest"
 	fi
-fi
+}
+
+echo "6. Устанавливаем Xray из GitHub..."
+install_xray_binary
 
 # =============================================
 # 7. Настройка DNS (dnsmasq → Xray)
