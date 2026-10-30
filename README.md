@@ -18,6 +18,7 @@
   - [setup-wifi-network.sh](#setup-wifi-networksh)
   - [update-xray.sh](#update-xraysh)
   - [update-nft.sh](#update-nftsh)
+  - [update-scripts.sh](#update-scriptssh)
   - [diagnose-xray-tproxy.sh](#diagnose-xray-tproxysh)
   - [xray-sub-parser.py](#xray-sub-parserpy)
   - [xray-generate-config.py](#xray-generate-configpy)
@@ -35,6 +36,7 @@
 - **Балансировка** — все серверы подписки идут через `balancer` (стратегия `leastLoad`) с `burstObservatory`, fallback — `direct`
 - **Умная маршрутизация** — гео-базы RU/private напрямую, блокировка рекламы и QUIC, DoH-домены в обход прокси
 - **Автообновление** — ежедневное обновление Xray, geoip/geosite и конфигурации по расписанию (cron)
+- **Самообновление скриптов** — установленные скрипты обновляются из `latest.zip` в Object Storage с проверкой SHA-256 и откатом
 - **Hotplug-обновление** — автоматическое обновление после восстановления WAN-соединения
 - **Безопасность WiFi** — WPA2+WPA3 (sae-mixed, PMF optional), изоляция клиентов гостевой/IoT сетей
 - **Гостевая и IoT сети** — изолированные сегменты с ограничением скорости (SQM)
@@ -342,8 +344,8 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 
 **Запуск:** Вручную или автоматически:
 
-- Cron: `30 2 * * *` (ежедневно в 2:30)
-- Hotplug: при событии `ifup wan` (после того как интернет станет доступен)
+- Cron: `30 2 * * *` (ежедневно в 2:30), после `update-scripts.sh` (2:20)
+- Hotplug: при событии `ifup wan` (после того как интернет станет доступен), после `update-scripts.sh`
 
 ---
 
@@ -379,6 +381,59 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 7. **Завершение** — запись в syslog (`logger -t update-nft`)
 
 > Явного правила bypass для порта 53 нет: DNS-запросы клиентов адресованы роутеру (`192.168.0.0/16`) и отсекаются bypass-правилом локальных адресов, а внешние резолверы исключены списком IP.
+
+---
+
+### update-scripts.sh
+
+**Назначение:** Обновление установленных скриптов (`/usr/share/xray/*`) из `latest.zip` в Yandex Object Storage, без повторного запуска установщика.
+
+**Источник:** `settings.json → update.archive_url` (по умолчанию `https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/XPowerSpirit-OpenWRT/latest.zip`). Архив собирается workflow `.github/workflows/backup-to-yandex-cloud.yml` при push в `main` и по расписанию; рядом лежит `latest.zip.sha256`.
+
+**Алгоритм:**
+
+0. **Блокировка от параллельного запуска** — `/var/lock/xray-scripts.lock` (`flock -n`)
+1. **Ротация лога** — обнуляет `/tmp/log/xray-scripts.log` при > 256 KB
+2. **Проверка версии** — скачивает `latest.zip.sha256` (~70 байт) и сравнивает с установленным `/etc/xray/state/scripts.zip.sha256`; при совпадении выходит без изменений
+3. **Скачивание** — `latest.zip` с проверкой SHA-256 (две попытки: между чтением хеша и архива workflow мог выгрузить новую версию)
+4. **Проверка до применения** — `sh -n` для `.sh`, `compile()` для `.py`; при ошибке установка отменяется
+5. **Бэкап и замена** — текущие скрипты копируются в `/etc/xray/state/scripts-prev`, новые кладутся в `/usr/share/xray/.new` и подменяются через `mv` (rename в пределах одной ФС — работающий скрипт продолжает читать свой прежний inode)
+6. **Доливка настроек** — из `settings.default.json` в `settings.json` добавляются **только отсутствующие** ключи (рекурсивный `jq`-merge, текущие значения и массивы не перезаписываются)
+7. **Запись версии** — SHA-256 архива в `/etc/xray/state/scripts.zip.sha256`
+
+**Обновляемые файлы:** `xray-generate-config.py`, `xray-sub-parser.py`, `update-xray.sh`, `update-nft.sh`, `update-scripts.sh` (сам себя — безопасно, см. шаг 5) + `settings.default.json` как эталон.
+
+> **Не обновляется автоматически:** `/etc/init.d/xray`, `/etc/hotplug.d/iface/99-xray-autoupdate`, `/etc/sysctl.d/99-xray.conf`, правила `ip rule`/`rt_tables` и UCI-настройки сетей — они генерируются установщиком. Для их изменения нужен повторный запуск `install-openwrt-xray.sh`.
+
+**Флаги:**
+
+| Флаг | Действие |
+|------|----------|
+| без флагов | применить `latest.zip`, если SHA-256 изменился |
+| `--check` | показать установленный и доступный SHA-256, ничего не менять |
+| `--force` | применить архив независимо от SHA-256 |
+| `--rollback` | вернуть скрипты из `/etc/xray/state/scripts-prev` |
+
+**Отказоустойчивость:** несовпадение SHA-256, битый архив, отсутствующие файлы или синтаксическая ошибка — установка отменяется, прежние скрипты остаются на месте. Если ошибка возникла уже после замены, скрипты восстанавливаются из `scripts-prev`.
+
+**Логирование:** `/tmp/log/xray-scripts.log`
+
+**Запуск:** Вручную или автоматически:
+
+- Cron: `20 2 * * *` (ежедневно в 2:20, за 10 минут до `update-xray.sh`)
+- Hotplug: при событии `ifup wan`, перед `update-xray.sh`
+
+**Переход на самообновление (роутер, установленный прежней версией).** В такой системе `update-scripts.sh` и cron-записи ещё нет, поэтому нужен однократный bootstrap:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/update-scripts.sh \
+    -o /usr/share/xray/update-scripts.sh
+chmod +x /usr/share/xray/update-scripts.sh
+crontab -l 2>/dev/null | { cat; echo "20 2 * * * /usr/share/xray/update-scripts.sh >>/tmp/log/xray-scripts.log 2>&1"; } | crontab -
+/usr/share/xray/update-scripts.sh --check    # убедиться, что источник доступен
+```
+
+Альтернатива — повторно запустить `install-openwrt-xray.sh`: он скачает скрипт и добавит cron-запись сам.
 
 ---
 
@@ -624,13 +679,17 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
     ├── xray.zip.sha256sum
     ├── xray.dgst
     ├── geoip.dat.sha256sum
-    └── geosite.dat.sha256sum
+    ├── geosite.dat.sha256sum
+    ├── scripts.zip.sha256    # SHA-256 установленного latest.zip (update-scripts.sh)
+    └── scripts-prev/         # Копия скриптов до последнего обновления (для --rollback)
 
 /usr/share/xray/
 ├── xray-generate-config.py
 ├── xray-sub-parser.py
 ├── update-xray.sh
 ├── update-nft.sh
+├── update-scripts.sh     # Самообновление скриптов из latest.zip
+├── settings.default.json # Эталон настроек: из него доливаются недостающие ключи
 ├── net-check.sh          # Скрипт проверки интернета для LED (создаётся setup-led-status.sh)
 ├── diagnose-xray-tproxy.sh   # НЕ устанавливается автоматически — скачивается вручную
 ├── geoip.dat             # Гео-база IP-адресов
@@ -642,7 +701,8 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 /tmp/log/                # создаётся установщиком и init.d (Xray не создаёт каталог сам)
 ├── xray-access.log       # Логи доступа Xray (ротация при > 512 KB)
 ├── xray-error.log        # Логи ошибок Xray (ротация при > 256 KB)
-└── xray-update.log       # Логи обновлений и cron-прогонов (ротация при > 256 KB)
+├── xray-update.log       # Логи обновлений и cron-прогонов (ротация при > 256 KB)
+└── xray-scripts.log      # Логи самообновления скриптов (ротация при > 256 KB)
 
 /tmp/xray_install.log     # Логи установки
 /tmp/setup-wifi.log       # Логи настройки Wi-Fi
@@ -695,6 +755,9 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
   "geo": {
     "geoip_url": "https://raw.githubusercontent.com/kirilllavrov/geoip-builder/release/geoip.dat",
     "geosite_url": "https://raw.githubusercontent.com/kirilllavrov/geosite-builder/release/geosite.dat"
+  },
+  "update": {
+    "archive_url": "https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/XPowerSpirit-OpenWRT/latest.zip"
   }
 }
 ```
@@ -718,6 +781,7 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 | `routing.proxy_domains` | array | Домены через прокси (стриминг, игры) |
 | `geo.geoip_url` | string | URL geoip.dat |
 | `geo.geosite_url` | string | URL geosite.dat |
+| `update.archive_url` | string | URL `latest.zip` для автообновления скриптов (`update-scripts.sh`) |
 
 > **Примечание:** `settings.json` — единственный источник правил роутинга, в генераторе их нет.
 > Обязательные ключи перечислены в `ROUTING_KEYS` (`xray-generate-config.py`). Если ключ
@@ -753,6 +817,26 @@ jq --arg u 'XPower/2.0' '.subscription.user_agent = $u' \
 ---
 
 ## 💡 Примеры использования
+
+### Проверка и откат обновления скриптов
+
+```bash
+# Есть ли новая версия скриптов в latest.zip (ничего не меняет)
+/usr/share/xray/update-scripts.sh --check
+
+# Применить обновление вручную (то же, что делает cron в 2:20)
+/usr/share/xray/update-scripts.sh
+
+# Вернуть скрипты, которые стояли до последнего обновления
+/usr/share/xray/update-scripts.sh --rollback
+
+# Лог самообновления
+tail -f /tmp/log/xray-scripts.log
+```
+
+> После откта следующий запуск снова поставит версию из `latest.zip`. Чтобы закрепить старую версию,
+> установите в `settings.json` свой `update.archive_url` или отключите cron-запись
+> `20 2 * * * /usr/share/xray/update-scripts.sh`.
 
 ### Обновление подписки вручную
 

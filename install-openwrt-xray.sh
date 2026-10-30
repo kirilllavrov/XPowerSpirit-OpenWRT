@@ -22,6 +22,7 @@ GENERATOR="/usr/share/xray/xray-generate-config.py"
 PARSER="/usr/share/xray/xray-sub-parser.py"
 UPDATER="/usr/share/xray/update-xray.sh"
 NFT_UPDATER="/usr/share/xray/update-nft.sh"
+SCRIPTS_UPDATER="/usr/share/xray/update-scripts.sh"
 CONFIG_DIR="/etc/xray"
 CONFIG_JSON="$CONFIG_DIR/config.json"
 SETTINGS_JSON="$CONFIG_DIR/settings.json"
@@ -256,6 +257,7 @@ download_script "$REPO/xray-generate-config.py" "$GENERATOR"
 download_script "$REPO/xray-sub-parser.py" "$PARSER"
 download_script "$REPO/update-xray.sh" "$UPDATER"
 download_script "$REPO/update-nft.sh" "$NFT_UPDATER"
+download_script "$REPO/update-scripts.sh" "$SCRIPTS_UPDATER"
 
 echo "[+] Все скрипты загружены и готовы к использованию"
 
@@ -747,14 +749,26 @@ sysctl -p /etc/sysctl.d/99-xray.conf >/dev/null 2>&1
 echo "[+] Sysctl настроен"
 
 # =============================================
-# 11. Cron: автообновление в 2.30 ночи
+# 11. Cron: самообновление скриптов (2.20) и Xray (2.30)
 # =============================================
 echo "11. Настройка Crontab..."
 
 uci set system.@system[0].cronloglevel='9'
 uci commit system
 
+SCRIPTS_CRON_ENTRY="20 2 * * * $SCRIPTS_UPDATER >>/tmp/log/xray-scripts.log 2>&1"
 CRON_ENTRY="30 2 * * * $UPDATER >>/tmp/log/xray-update.log 2>&1"
+
+if ! crontab -l 2>/dev/null | grep -qF "$SCRIPTS_UPDATER"; then
+	(
+		crontab -l 2>/dev/null || true
+		echo "$SCRIPTS_CRON_ENTRY"
+	) | crontab -
+	echo "[+] Cron-задача для обновления скриптов добавлена: $SCRIPTS_CRON_ENTRY"
+else
+	echo "[-] Cron-задача обновления скриптов уже существует, пропускаем"
+fi
+
 if ! crontab -l 2>/dev/null | grep -qF "$UPDATER"; then
 	(
 		crontab -l 2>/dev/null || true
@@ -783,6 +797,7 @@ fi
 for i in 1 2 3 4 5 6 7; do
     sleep 5
     if curl -fs --max-time 3 https://www.google.com/gen_204 >/dev/null; then
+        [ -x /usr/share/xray/update-scripts.sh ] && /usr/share/xray/update-scripts.sh
         /usr/share/xray/update-xray.sh &
         exit 0
     fi

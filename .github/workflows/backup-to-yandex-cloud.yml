@@ -3,28 +3,36 @@
 #
 # Направление только GitHub -> Object Storage. Обратной синхронизации и скачивания
 # из workflow нет: он собирает архив текущего коммита и загружает его в бакет.
+# Запуск: по push в main (только latest.zip + sha256), по расписанию и вручную
+# (датированный архив + latest.zip + sha256).
 # Ротация выполняется lifecycle-правилом бакета, а не кодом:
 #   STANDARD -> COLD через 30 дней -> удаление через 365 дней;
 #   неактуальные версии объектов (перезаписи latest) удаляются через 30 дней.
 #
 # В архив попадают только файлы, нужные для установки на роутер (полный список —
 # в шаге «Собрать архив»): установщик, settings.default.json, генератор конфига,
-# парсер подписки, update-*.sh и вспомогательные setup/diagnose-скрипты.
-# README, справочники xray-config-*.md, LICENSE и файлы .github в архив не входят:
-# на роутере они не используются.
+# парсер подписки, update-*.sh, вспомогательные setup/diagnose-скрипты, README.md
+# и update-scripts.sh. Справочники xray-config-*.md, LICENSE и файлы .github
+# в архив не входят: на роутере они не используются.
 #
 # Что нужно настроить один раз (Settings -> Secrets and variables -> Actions):
 #   секрет YC_S3_KEY_ID   — Key ID статического ключа сервисного аккаунта
 #   секрет YC_S3_SECRET   — Secret статического ключа
-#   секрет GPG_PASSPHRASE — необязательный; если задан, архив шифруется
+#   секрет GPG_PASSPHRASE — необязательный; если задан, шифруется датированный архив
+#                           (latest.zip всегда остаётся открытым — его читают роутеры)
 #
 # Сервисный аккаунт: github-uploader, роль storage.uploader (только запись).
 # Проверить доступность ключа заранее:
 #   AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
 #     aws s3 ls s3://flyz-cryp-olxn-mojw --endpoint-url https://storage.yandexcloud.net
 #
-# Куда пишем: s3://flyz-cryp-olxn-mojw/XPowerSpirit-OpenWRT/<repo>-<дата>-<sha>.zip
-# и перезаписываемый latest.zip рядом.
+# Куда пишем: s3://flyz-cryp-olxn-mojw/XPowerSpirit-OpenWRT/
+#   <repo>-<дата>-<sha>.zip          — датированная копия (может шифроваться GPG)
+#   latest.zip                       — источник автообновления роутеров (всегда открытый)
+#   latest.zip.sha256                — хеш latest.zip; роутер сравнивает его с установленным
+# latest.zip собирается детерминированно (фиксированные префикс/MANIFEST/TZ), поэтому
+# sha256 меняется только при изменении содержимого коммита: роутеры не переустанавливают
+# скрипты без причины.
 # Восстановление: скачать объект через консоль Yandex Cloud или aws-cli и распаковать.
 
 name: Backup to Yandex Cloud
@@ -33,6 +41,11 @@ on:
   schedule:
     # 03:17 UTC ежедневно: смещение от круглого часа уменьшает очередь на стороне GitHub
     - cron: "17 3 * * *"
+  push:
+    # latest.zip должен совпадать с main, иначе роутер после установки с raw.githubusercontent
+    # откатился бы на предыдущий коммит. Датированный архив при push не создаётся.
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       dry_run:
@@ -113,32 +126,46 @@ jobs:
             setup-led-status.sh            # индикатор состояния, запускается отдельно
             diagnose-xray-tproxy.sh        # диагностика, запускается отдельно
             README.md                      # описание проекта и инструкции по установке
+            update-scripts.sh              # самообновление скриптов из latest.zip
           )
 
-          # Пути перечислены явно: README, справочники и .github в архив не попадают.
+          # Пути перечислены явно: справочники xray-config-*.md, LICENSE и .github
+          # в архив не попадают — на роутере они не используются.
           git archive --format=zip --prefix="${NAME}/" -o "dist/${NAME}.zip" HEAD -- "${ROUTER_FILES[@]}"
 
           # Список содержимого берём из готового архива, чтобы MANIFEST не расходился с ним.
           ARCHIVED=$(unzip -Z1 "dist/${NAME}.zip" | sed "s|^${NAME}/||" | grep -v '/$' | LC_ALL=C sort)
           ARCHIVED_COUNT=$(printf '%s\n' "$ARCHIVED" | grep -c . || true)
 
+          # MANIFEST содержит только стабильные поля: дата сборки и номер запуска сделали бы
+          # sha256 latest.zip новым при каждом запуске workflow.
           cat > "dist/MANIFEST.txt" <<EOF
           repository: ${GITHUB_REPOSITORY}
           ref: ${GITHUB_REF}
           commit: $(git rev-parse HEAD)
-          run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-          created: $(TZ="$BACKUP_TZ" date -Iseconds)
-          contents: файлы для установки на роутер
+          commit_date: $(TZ=UTC git log -1 --format=%cI HEAD)
           files: ${ARCHIVED_COUNT}
-          storage: s3://${BUCKET}/${REPO_NAME}
+          contents: файлы для установки на роутер
 
           ${ARCHIVED}
           EOF
-          zip -q -j "dist/${NAME}.zip" dist/MANIFEST.txt
+          # mtime манифеста = время коммита: иначе запись в zip получает текущее время
+          touch -d "@$(git log -1 --format=%ct HEAD)" dist/MANIFEST.txt
+          zip -q -X -j "dist/${NAME}.zip" dist/MANIFEST.txt
+
+          # latest.zip для автообновления роутеров: фиксированный префикс и TZ=UTC,
+          # поэтому sha256 зависит только от содержимого коммита.
+          (
+            export TZ=UTC
+            git archive --format=zip --prefix="${REPO_NAME}/" -o dist/latest.zip HEAD -- "${ROUTER_FILES[@]}"
+            zip -q -X -j dist/latest.zip dist/MANIFEST.txt
+          )
           rm -f dist/MANIFEST.txt
+          (cd dist && sha256sum latest.zip > latest.zip.sha256)
 
           echo "Содержимое архива:"
           unzip -Z1 "dist/${NAME}.zip"
+          echo "sha256 latest.zip: $(cut -d' ' -f1 dist/latest.zip.sha256)"
 
           echo "ARCHIVE_NAME=${NAME}" >> "$GITHUB_ENV"
           echo "ARCHIVE_FILES=${ARCHIVED_COUNT}" >> "$GITHUB_ENV"
@@ -148,7 +175,8 @@ jobs:
           ls -lh "dist/${NAME}.zip"
 
       - name: Зашифровать архив
-        if: ${{ env.ENCRYPT_ARCHIVE == '1' }}
+        # При push датированный архив не выгружается, шифровать его незачем.
+        if: ${{ env.ENCRYPT_ARCHIVE == '1' && github.event_name != 'push' }}
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
@@ -166,21 +194,32 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.YC_S3_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.YC_S3_SECRET }}
+          # Датированная копия нужна только для истории бэкапов: при push её не создаём,
+          # чтобы не плодить объекты на каждый коммит.
+          UPLOAD_DATED: ${{ github.event_name != 'push' && '1' || '0' }}
         run: |
           set -euo pipefail
           KEY_DATED="${OBJECT_PREFIX}/${ARCHIVE_NAME}.${ARCHIVE_EXT}"
-          KEY_LATEST="${OBJECT_PREFIX}/latest.${ARCHIVE_EXT}"
 
           # aws s3 cp возвращает ненулевой код при любой ошибке сети или авторизации,
           # поэтому отдельная проверка размера не нужна: сервисному аккаунту
           # намеренно не выдано право чтения объектов (storage.uploader).
-          aws s3 cp "$ARCHIVE_PATH" "s3://${BUCKET}/${KEY_DATED}" \
+          if [ "$UPLOAD_DATED" = "1" ]; then
+            aws s3 cp "$ARCHIVE_PATH" "s3://${BUCKET}/${KEY_DATED}" \
+              --endpoint-url "$ENDPOINT" --only-show-errors
+            echo "UPLOADED_KEY=${KEY_DATED}" >> "$GITHUB_ENV"
+          else
+            echo "UPLOADED_KEY=" >> "$GITHUB_ENV"
+          fi
+
+          # latest.zip и его sha256 — источник автообновления роутеров; всегда открытые,
+          # GPG-шифрование к ним не применяется.
+          aws s3 cp dist/latest.zip "s3://${BUCKET}/${OBJECT_PREFIX}/latest.zip" \
             --endpoint-url "$ENDPOINT" --only-show-errors
-          aws s3 cp "$ARCHIVE_PATH" "s3://${BUCKET}/${KEY_LATEST}" \
+          aws s3 cp dist/latest.zip.sha256 "s3://${BUCKET}/${OBJECT_PREFIX}/latest.zip.sha256" \
             --endpoint-url "$ENDPOINT" --only-show-errors
 
-          echo "UPLOADED_KEY=${KEY_DATED}" >> "$GITHUB_ENV"
-          echo "UPLOADED_LATEST=${KEY_LATEST}" >> "$GITHUB_ENV"
+          echo "UPLOADED_LATEST=${OBJECT_PREFIX}/latest.zip" >> "$GITHUB_ENV"
 
       - name: Итог
         if: ${{ always() }}
@@ -193,6 +232,7 @@ jobs:
             echo "- файлов: ${ARCHIVE_FILES:-—} (только установочные для роутера)"
             echo "- объект: \`s3://${BUCKET}/${UPLOADED_KEY:-не выгружался}\`"
             echo "- latest: \`s3://${BUCKET}/${UPLOADED_LATEST:-не выгружался}\`"
+            echo "- sha256 latest: \`$(cut -d' ' -f1 dist/latest.zip.sha256 2>/dev/null || echo '—')\`"
             echo "- шифрование: $([ "${ENCRYPT_ARCHIVE:-0}" = "1" ] && echo 'GPG (AES256)' || echo 'нет')"
             echo "- выгрузка: ${{ inputs.dry_run && 'не выполнялась (dry-run)' || 'выполнена или прервана — см. лог шага выше' }}"
           } >> "$GITHUB_STEP_SUMMARY"
