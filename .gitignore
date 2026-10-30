@@ -1,5 +1,4 @@
 # --- Локальные настройки редакторов и кэш инструментов ---
-# AI-агентские конфиги (AGENTS.md, .github/) и кэш MCP держим только локально
 .codebase-memory/
 .vscode/
 AGENTS.md
@@ -8,6 +7,7 @@ AGENTS.md
 *.swp
 *.swo
 test/
+tests/
 
 # --- Python cache ---
 __pycache__/
