@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
 """
 Xray Subscription Parser
-Поддерживает два входных формата:
-  1. Base64 VLESS (традиционный) — без --ua или с любым неизвестным User-Agent
-  2. JSON (Happ/Sing-box/Karing/XPower) — с --ua happ/singbox/sfa/sfi/sfm/sft/karing/xpower
 
-Унифицированный режим (с --ua):
-  Определяет формат по User-Agent, парсит, проверяет hole,
-  выводит {"hole": bool, "outbounds": [...]}
+Подписка приходит только в JSON (Happ/Sing-box/Karing/XPower): список профилей
+с remarks и outbounds.
 
-Совместимость:
-  Без --ua — поведение не меняется (Base64 VLESS, вывод JSON-массива outbounds).
+Вход: JSON подписки в stdin (или HTTP(S) URL — тогда скачивается сам).
+Выход: {"hole": bool, "outbounds": [...]}.
+
+--ua обязателен: с ним подписка запрашивается у провайдера. На разбор формата
+User-Agent больше не влияет — формат всегда JSON.
 """
 from __future__ import annotations
 
 import sys
-import base64
 import json
 import urllib.parse as urlparse
 import urllib.request
@@ -62,6 +60,37 @@ def proxy_tag(name: str, fallback: str) -> str:
 
 
 # -----------------------------
+# ДЕДУПЛИКАЦИЯ СЕРВЕРОВ
+# -----------------------------
+def outbound_key(ob: dict) -> str:
+    """Идентичность сервера: адрес, порт, пользователь, транспорт — без учёта тега"""
+    body = {k: v for k, v in ob.items() if k != "tag"}
+    return json.dumps(body, sort_keys=True, ensure_ascii=False)
+
+
+def dedup_outbounds(outbounds: list) -> list:
+    """
+    Убирает повторяющиеся серверы. Профили подписки пересекаются: один и тот же
+    сервер приходит в «Автовыборе», в группе стран и в отдельной стране. Без
+    дедупликации балансировщик держит и пингует каждый такой сервер по нескольку
+    раз — лишняя память на роутере и лишний трафик observatory.
+    """
+    seen = set()
+    unique = []
+    for ob in outbounds:
+        key = outbound_key(ob)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(ob)
+
+    dropped = len(outbounds) - len(unique)
+    if dropped:
+        print(f"  → Удалено дубликатов серверов: {dropped}", file=sys.stderr)
+    return unique
+
+
+# -----------------------------
 # ЗАГРУЗКА URL
 # -----------------------------
 def try_download(data: str) -> tuple[str, bool]:
@@ -79,7 +108,7 @@ def try_download(data: str) -> tuple[str, bool]:
             # Проверяем, что это не HTML ошибка
             content_lower = content.lower()
             if b"<html" in content_lower or b"<!doctype" in content_lower:
-                log_error(f"Subscription returned HTML, not VLESS: {data}")
+                log_error(f"Subscription returned HTML, not data: {data}")
                 return "", False
 
             return content.decode("utf-8", errors="replace"), True
@@ -88,220 +117,9 @@ def try_download(data: str) -> tuple[str, bool]:
         return "", False
 
 
-# -----------------------------
-# УМНОЕ BASE64 (с поддержкой URL-safe)
-# -----------------------------
-def try_base64_decode(data: str) -> tuple[str, bool]:
-    """Декодирует Base64, если это возможно. Возвращает (результат, успех)."""
-    data = data.strip()
-
-    # Если уже содержит vless:// — не трогаем
-    if "vless://" in data:
-        return data, True
-
-    # Конвертируем URL-safe → стандартный Base64
-    b64 = data.replace('-', '+').replace('_', '/')
-
-    # Пробуем с padding и без
-    for s in (b64, b64 + '=' * (-len(b64) % 4)):
-        try:
-            decoded = base64.b64decode(s).decode("utf-8", errors="replace")
-            if "vless://" in decoded:
-                return decoded, True
-        except Exception:
-            continue
-
-    return data, False
-
-
-# -----------------------------
-# SAFE JSON PARSER FOR extra=
-# -----------------------------
-def parse_extra_json(extra_raw: str):
-    if not extra_raw:
-        return None
-    try:
-        return json.loads(extra_raw)
-    except Exception:
-        return None
-
-
-def get_raw_param(query: str, key: str):
-    """
-    Значение параметра из сырой query-строки.
-    Нужно для extra: parse_qs уже декодирует значения и превращает '+' в пробел,
-    поэтому повторное декодирование портит JSON.
-    """
-    prefix = key + "="
-    for pair in query.split("&"):
-        if pair.startswith(prefix):
-            return urlparse.unquote(pair[len(prefix):])
-    return None
-
-
-# -----------------------------
-# ПАРСЕР VLESS
-# -----------------------------
-def parse_vless_uri(uri: str, idx: int):
-    parsed = urlparse.urlparse(uri)
-
-    if parsed.scheme.lower() != "vless":
-        return None
-
-    user = parsed.username or ""
-    host = parsed.hostname or ""
-    port = parsed.port or 443
-
-    # ТЕГ
-    fragment = parsed.fragment or ""
-    tag = proxy_tag(fragment, f"vless-{idx}")
-
-    # QUERY
-    q = urlparse.parse_qs(parsed.query)
-
-    def get_param(key, default=None):
-        v = q.get(key)
-        return v[0] if v else default
-
-    # БАЗОВЫЕ ПОЛЯ
-    uuid = user
-    encryption = get_param("encryption", "none")
-    flow = get_param("flow", None)
-
-    # ТРАНСПОРТ
-    network = get_param("type", "tcp").lower()
-    if network in ("h2", "http2"):
-        network = "http"
-    if network not in ("tcp", "ws", "grpc", "http", "xhttp"):
-        network = "tcp"
-
-    # SECURITY
-    security = get_param("security", "none").lower()
-    if security in ("tls", "xtls"):
-        security_mode = "tls"
-    elif security == "reality":
-        security_mode = "reality"
-    else:
-        security_mode = "none"
-
-    sni = get_param("sni", None)
-    fp = get_param("fp", None)
-    alpn_raw = get_param("alpn", None)
-    alpn = [x.strip() for x in alpn_raw.split(",")] if alpn_raw else None
-    allow_insecure = get_param("allowInsecure", "0") in ("1", "true", "yes")
-
-    # REALITY
-    pbk = get_param("pbk", None)
-    sid = get_param("sid", None)
-    spx = get_param("spx", None)
-
-    # WS / HTTP / XHTTP / gRPC
-    path = get_param("path", "/")
-    host_header = get_param("host", None)
-    grpc_service = get_param("serviceName", None) or get_param("grpc-service-name", None)
-    xhttp_mode = get_param("mode", None)
-    extra_raw = get_raw_param(parsed.query, "extra")
-
-    # SETTINGS
-    user_obj = {"id": uuid, "encryption": encryption}
-    if flow:
-        user_obj["flow"] = flow
-
-    settings = {
-        "vnext": [
-            {
-                "address": host,
-                "port": port,
-                "users": [user_obj]
-            }
-        ]
-    }
-
-    # STREAM SETTINGS
-    stream = {"network": network}
-
-    # TLS / REALITY
-    if security_mode == "tls":
-        stream["security"] = "tls"
-        tls = {}
-        if sni:
-            tls["serverName"] = sni
-        if alpn:
-            tls["alpn"] = alpn
-        if fp:
-            tls["fingerprint"] = fp
-        if allow_insecure:
-            tls["allowInsecure"] = True
-        if tls:
-            stream["tlsSettings"] = tls
-
-    elif security_mode == "reality":
-        stream["security"] = "reality"
-        reality = {}
-        if sni:
-            reality["serverName"] = sni
-        if pbk:
-            # Документированное имя поля — password; publicKey оставлен для старых ядер
-            reality["password"] = pbk
-            reality["publicKey"] = pbk
-        if sid:
-            reality["shortId"] = sid
-        if spx:
-            reality["spiderX"] = spx
-        if fp:
-            reality["fingerprint"] = fp
-        stream["realitySettings"] = reality
-
-    # NETWORK-SPECIFIC
-    if network == "ws":
-        ws = {"path": path}
-        if host_header:
-            ws["headers"] = {"Host": host_header}
-        stream["wsSettings"] = ws
-
-    elif network == "grpc":
-        grpc = {}
-        if grpc_service:
-            grpc["serviceName"] = grpc_service
-        stream["grpcSettings"] = grpc
-
-    elif network == "http":
-        http = {"path": path}
-        if host_header:
-            http["host"] = [host_header]
-        stream["httpSettings"] = http
-
-    elif network == "xhttp":
-        xhttp = {"path": path}
-        if host_header:
-            xhttp["host"] = [host_header]
-        if xhttp_mode:
-            xhttp["mode"] = xhttp_mode
-
-        extra_obj = parse_extra_json(extra_raw)
-        if extra_obj:
-            xhttp["extra"] = extra_obj
-
-        stream["xhttpSettings"] = xhttp
-
-    return {
-        "tag": tag,
-        "protocol": "vless",
-        "settings": settings,
-        "streamSettings": stream
-    }
-
-
 # ============================================
-#   УНИФИЦИРОВАННЫЙ РЕЖИМ (--ua)
+#   РАЗБОР ПОДПИСКИ (JSON)
 # ============================================
-
-def _is_json_format(user_agent: str) -> bool:
-    """Определяет, является ли User-Agent признаком JSON-подписки"""
-    ua_lower = user_agent.lower()
-    json_markers = ["happ", "singbox", "sfa", "sfi", "sfm", "sft", "karing", "xpower"]
-    return any(m in ua_lower for m in json_markers)
-
 
 def is_hole(ob: dict) -> bool:
     """Проверяет, является ли outbound сигналом hole (окончание подписки)"""
@@ -352,6 +170,10 @@ def parse_json_subscription(raw_data: str, remarks_filter: str = '') -> dict:
     if not isinstance(data, list):
         log_error("Unexpected JSON structure (expected list or dict)")
         return {"hole": False, "outbounds": []}
+
+    if len(data) > 1 and not remarks_filter:
+        print(f"  [!] В подписке {len(data)} профилей, фильтр remarks не задан — "
+              f"серверы всех профилей объединяются", file=sys.stderr)
 
     # Один проход: hole, фильтрация, извлечение
     hole = False
@@ -410,17 +232,16 @@ def parse_json_subscription(raw_data: str, remarks_filter: str = '') -> dict:
         for config in data:
             print(f"      - {config.get('remarks', '')}", file=sys.stderr)
 
-    return {"hole": hole, "outbounds": all_outbounds}
+    return {"hole": hole, "outbounds": dedup_outbounds(all_outbounds)}
 
 
 def unified_main():
     """
-    Унифицированный режим: определяет формат по --ua, парсит подписку,
-    выводит {"hole": bool, "outbounds": [...]}.
+    Читает подписку, разбирает JSON и выводит {"hole": bool, "outbounds": [...]}.
     """
     parser = argparse.ArgumentParser(description='Xray subscription parser (unified)')
-    parser.add_argument('--ua', required=True, help='User-Agent used for subscription request')
-    parser.add_argument('--remarks', default='', help='Filter by remarks (JSON format only)')
+    parser.add_argument('--ua', required=True, help='User-Agent for subscription request (format is always JSON)')
+    parser.add_argument('--remarks', default='', help='Filter profiles by remarks substring')
     args = parser.parse_args()
 
     raw = sys.stdin.read().strip()
@@ -436,114 +257,17 @@ def unified_main():
         print(json.dumps({"hole": False, "outbounds": []}))
         sys.exit(1)
 
-    if _is_json_format(args.ua):
-        # --- JSON формат (Happ/Sing-box/XPower) ---
-        print("  → Определён JSON формат подписки (Happ/Sing-box/XPower)", file=sys.stderr)
-        result = parse_json_subscription(data, args.remarks)
-    else:
-        # --- Base64 VLESS формат ---
-        print("  → Определён Base64 VLESS формат подписки", file=sys.stderr)
-
-        data, decoded = try_base64_decode(data)
-        if not decoded:
-            log_error("Failed to decode Base64 (no vless:// found)")
-            print(json.dumps({"hole": False, "outbounds": []}))
-            sys.exit(1)
-
-        if "vless://" not in data:
-            log_error("No vless:// URIs found in subscription")
-            print(json.dumps({"hole": False, "outbounds": []}))
-            sys.exit(1)
-
-        lines = [l.strip() for l in data.splitlines() if l.strip()]
-        outbounds = []
-        hole = False
-        idx = 0
-
-        for line in lines:
-            if line.startswith("vless://"):
-                ob = parse_vless_uri(line, idx)
-                if ob:
-                    if is_hole(ob):
-                        hole = True
-                        continue
-                    if is_placeholder(ob):
-                        try:
-                            addr = ob.get("settings", {}).get("vnext", [{}])[0].get("address", "")
-                            print(f"  → Пропускаем заглушку: {addr}", file=sys.stderr)
-                        except Exception:
-                            pass
-                        continue
-                    outbounds.append(ob)
-                    idx += 1
-
-        if not outbounds:
-            log_error("No valid vless:// URIs parsed")
-
-        result = {"hole": hole, "outbounds": outbounds}
+    print("  → Разбор JSON-подписки", file=sys.stderr)
+    result = parse_json_subscription(data, args.remarks)
 
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
     # hole — осознанный сигнал провайдера (DIRECT), пустой результат без hole — сбой:
-    # не тот формат по UA, не найден remarks, все серверы оказались заглушками.
+    # не найден профиль по remarks или все серверы оказались заглушками.
     if not result["hole"] and not result["outbounds"]:
         log_error("No outbounds parsed and no hole signal — refusing to emit empty result")
         sys.exit(2)
 
 
-# ================================================
-#   СТАРЫЙ РЕЖИМ (без --ua) — обратная совместимость
-# ================================================
-def main():
-    raw = sys.stdin.read().strip()
-    if not raw:
-        log_error("Empty input")
-        print("[]")
-        sys.exit(1)
-
-    # Загружаем по URL, если нужно
-    data, success = try_download(raw)
-    if not success or not data:
-        log_error("Failed to download subscription")
-        print("[]")
-        sys.exit(1)
-
-    # Пробуем декодировать Base64
-    data, decoded = try_base64_decode(data)
-    if not decoded:
-        log_error("Failed to decode Base64 (no vless:// found after decoding)")
-        print("[]")
-        sys.exit(1)
-
-    # Проверяем, что в данных есть vless://
-    if "vless://" not in data:
-        log_error("No vless:// URIs found in subscription")
-        print("[]")
-        sys.exit(1)
-
-    lines = [l.strip() for l in data.splitlines() if l.strip()]
-
-    outbounds = []
-    idx = 0
-
-    for line in lines:
-        if line.startswith("vless://"):
-            ob = parse_vless_uri(line, idx)
-            if ob:
-                outbounds.append(ob)
-                idx += 1
-
-    if not outbounds:
-        log_error("No valid vless:// URIs parsed")
-        print("[]")
-        sys.exit(1)
-
-    print(json.dumps(outbounds, indent=2, ensure_ascii=False))
-
-
 if __name__ == "__main__":
-    # Если передан --ua → унифицированный режим
-    if "--ua" in sys.argv:
-        unified_main()
-    else:
-        main()
+    unified_main()

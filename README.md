@@ -31,7 +31,7 @@
 
 - **Автоматическая установка Xray** — загрузка последнего релиза с GitHub с проверкой SHA2-256 (по `.dgst`)
 - **TProxy через nftables** — прозрачная проксификация TCP/UDP: `prerouting` для LAN и `output` для трафика самого роутера
-- **Работа с подписками** — два формата: Base64 (VLESS URI) и JSON (Happ/Sing-box/Karing/XPower); транспорты TCP, WebSocket, gRPC, HTTP, XHTTP; TLS и Reality
+- **Работа с подписками** — JSON-подписка (Happ/Sing-box/Karing/XPower); транспорты TCP, WebSocket, gRPC, HTTP, XHTTP; TLS и Reality
 - **Балансировка** — все серверы подписки идут через `balancer` (стратегия `leastLoad`) с `burstObservatory`, fallback — `direct`
 - **Умная маршрутизация** — гео-базы RU/private напрямую, блокировка рекламы и QUIC, DoH-домены в обход прокси
 - **Автообновление** — ежедневное обновление Xray, geoip/geosite и конфигурации по расписанию (cron)
@@ -174,7 +174,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 | Параметр | Описание | По умолчанию |
 | ---------- | ---------- | -------------- |
 | `--sub=URL` | URL подписки (обязательно) | — |
-| `--sub-ua=STRING` | User-Agent для запроса подписки (он же определяет формат подписки) | `XPower/1.0` (из `settings.default.json`) |
+| `--sub-ua=STRING` | User-Agent для запроса подписки (подписка должна быть в JSON) | `XPower/1.2` (из `settings.default.json`) |
 | `--remarks=STRING` | Фильтр профиля по remarks (только для JSON-подписок) | — |
 | `--log=PRESET` | Пресет журналирования: `quiet`, `normal`, `debug`. Пишется в `settings.json` как `log.preset`, а в UCI выставляет `cronloglevel` (9 / 7 / 5) | `quiet` |
 | `--lan-ip=IP` | IP-адрес роутера в LAN | `192.168.1.1` |
@@ -361,11 +361,9 @@ curl -fsSL https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/XPowerSpirit-Open
    mv /etc/xray/config.json.new /etc/xray/config.json   # rename в одной ФС
    ```
 
-   **Формат подписки определяется по User-Agent** (см. [xray-sub-parser.py](#xray-sub-parserpy)):
-   - `*happ*`, `*singbox*`, `*karing*`, `*sfa*`, `*sfi*`, `*sfm*`, `*sft*`, `*xpower*` → **JSON** (Happ/Sing-box/XPower)
-   - Любой другой → **Base64/VLESS**
+   **Подписка всегда в JSON** (Happ/Sing-box/Karing/XPower). `--ua` нужен, чтобы запросить её у провайдера с правильным User-Agent: без него провайдер может вернуть не JSON. На разбор формата User-Agent не влияет.
 
-   Фильтр профилей (`--remarks`) берётся из `settings.json → subscription.remarks_filter` и применяется только к JSON-подпискам.
+   Фильтр профилей (`--remarks`) берётся из `settings.json → subscription.remarks_filter`.
 
    Новый конфиг устанавливается только после успешной проверки `xray run -test` и подменяется `mv` (rename) — генерация идёт сразу в каталог `/etc/xray`, потому что `/tmp` и `/etc/xray` разные ФС.
 
@@ -508,81 +506,55 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 
 **Назначение:** Парсинг подписки (URL или stdin) и преобразование серверов в outbound-ы Xray.
 
-**Поддерживаемые форматы подписки:**
-
-- **Base64 / VLESS URI** — список `vless://`-ссылок
-- **JSON** — Happ / Sing-box / Karing / XPower (список профилей с `remarks` и `outbounds`)
-
-**Поддерживаемые протоколы (VLESS URI):**
-
-- VLESS over TCP
-- VLESS over WebSocket (WS)
-- VLESS over gRPC
-- VLESS over HTTP/HTTP2
-- VLESS over XHTTP (с поддержкой `extra` JSON)
-
-**Поддерживаемые режимы безопасности:**
-
-- None (без шифрования)
-- TLS (с SNI, ALPN, fingerprint, allowInsecure)
-- Reality (с `password` — он же `publicKey` в старых ядрах, shortId, spiderX)
+**Поддерживаемый формат подписки:** JSON — Happ / Sing-box / Karing / XPower (список профилей с `remarks` и `outbounds`). Парсер не конвертирует транспорты и типы безопасности: outbound-ы берутся из подписки как есть, поэтому набор поддерживаемых транспортов (TCP, WebSocket, gRPC, HTTP, XHTTP) и режимов (TLS, Reality) определяется провайдером и ядром Xray.
 
 **Аргументы CLI:**
 
 | Аргумент | Описание |
 |----------|----------|
-| `--ua=STRING` | Включает унифицированный режим и задаёт User-Agent, по которому определяется формат подписки (обязателен в унифицированном режиме) |
-| `--remarks=STRING` | Фильтр профилей по `remarks` (регистронезависимая подстрока, только для JSON-подписок) |
-
-**Автоопределение формата по User-Agent** (`--ua`): маркеры `happ`, `singbox`, `sfa`, `sfi`, `sfm`, `sft`, `karing`, `xpower` → JSON; иначе → Base64/VLESS.
+| `--ua=STRING` | User-Agent для запроса подписки (обязателен). Тип подписки — всегда JSON |
+| `--remarks=STRING` | Фильтр профилей по `remarks` (регистронезависимая подстрока) |
 
 **Функции:**
 
 1. **Логирование** — ошибки пишутся в syslog (ident: `xray-parser`) и stderr
-2. **Нормализация тегов** — очистка названий серверов от спецсимволов, замена пробелов на `_`; для JSON-подписок дубликаты тегов получают суффикс `-2`, `-3`, …. Все теги прокси получают префикс `proxy-`: `selector` балансировщика и `subjectSelector` observatory сопоставляются **по префиксу**, поэтому тег вида `d` иначе подтянул бы служебные `direct`/`dns-out`
+2. **Нормализация тегов** — очистка названий серверов от спецсимволов, замена пробелов на `_`; дубликаты тегов получают суффикс `-2`, `-3`, …. Все теги прокси получают префикс `proxy-`: `selector` балансировщика и `subjectSelector` observatory сопоставляются **по префиксу**, поэтому тег вида `d` иначе подтянул бы служебные `direct`/`dns-out`
 3. **Загрузка URL** — автоматическое скачивание, если входные данные — HTTP(S) URL (с проверкой на HTML-ошибку)
-4. **Base64-декодирование** — умное определение (URL-safe, с/без padding), нужно ли декодировать
-5. **Парсинг query-параметров**:
-   - `encryption`, `flow`, `type` (транспорт)
-   - `security`, `sni`, `fp`, `alpn`, `allowInsecure`
-   - `pbk`, `sid`, `spx` (Reality)
-   - `path`, `host`, `serviceName`, `mode`, `extra` (транспорт)
-6. **Фильтрация заглушек** — пропускаются outbound-ы с `address` = `0.0.0.0` / `127.0.0.1` / `hole`, `port` = 1, UUID `00000000-0000-0000-0000-000000000000`; служебные `freedom`/`blackhole`/`dns` из JSON-подписки тоже пропускаются
-7. **Признак `hole`** — если в подписке найден сервер с `address = "hole"` (в `settings.vnext[0].address` или в `settings.address` для `freedom`), в результат пишется `"hole": true` (генератор после этого собирает DIRECT-конфиг)
+4. **Фильтрация заглушек** — пропускаются outbound-ы с `address` = `0.0.0.0` / `127.0.0.1` / `hole`, `port` = 1, UUID `00000000-0000-0000-0000-000000000000`; служебные `freedom`/`blackhole`/`dns`/`loopback` пропускаются
+5. **Признак `hole`** — если в подписке найден сервер с `address = "hole"` (в `settings.vnext[0].address` или в `settings.address` для `freedom`), в результат пишется `"hole": true` (генератор после этого собирает DIRECT-конфиг)
+6. **Дедупликация серверов** — один и тот же сервер (адрес, порт, пользователь, транспорт) остаётся в списке один раз, даже если пришёл из нескольких профилей. Профили подписки пересекаются: без дедупликации балансировщик держал бы и пингуял один сервер по нескольку раз. Удалённые дубликаты пишутся в stderr: `→ Удалено дубликатов серверов: N`
+7. **Предупреждение о нескольких профилях** — если в подписке больше одного профиля, а `--remarks` не задан, в stderr пишется `[!] В подписке N профилей, фильтр remarks не задан — серверы всех профилей объединяются`
 
-**Входные данные:** Чтение из stdin (URL подписки, base64-строка или JSON)
+**Входные данные:** JSON подписки в stdin (или URL подписки — тогда скачивается сам)
 
-**Выходные данные:**
+**Выходные данные:** `{"hole": bool, "outbounds": [...]}`
 
-- с `--ua` — унифицированный объект `{"hole": bool, "outbounds": [...]}`
-- без `--ua` (устаревший режим) — JSON-массив outbound-ов
-
-**Коды возврата (режим `--ua`):**
+**Коды возврата:**
 
 | Код | Значение |
 |-----|----------|
 | `0` | разбор успешен, в том числе при `hole` |
-| `2` | серверов не найдено и `hole` нет: формат не совпал с User-Agent, фильтр `--remarks` ничего не нашёл или все серверы оказались заглушками. Вызывающая сторона оставляет прежний `config.json` |
-| `1` | ошибка входа (пустые данные, не удалось скачать подписку, не декодируется Base64) |
+| `2` | серверов не найдено и `hole` нет: фильтр `--remarks` ничего не нашёл или все серверы оказались заглушками. Вызывающая сторона оставляет прежний `config.json` |
+| `1` | ошибка входа (пустые данные, не удалось скачать подписку, ответ не JSON) |
 
 **Пример использования:**
 
 ```bash
-# Унифицированный режим (используется update-xray.sh и установщиком)
-cat subscription.txt | python3 xray-sub-parser.py --ua "OpenWrt-Xray/1.0" > parsed.json
+# Так парсер вызывают update-xray.sh и установщик
+cat subscription.json | python3 xray-sub-parser.py --ua "XPower/1.2" > parsed.json
 
-# Устаревший режим: только Base64/VLESS, на выходе массив outbound-ов
-cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
+# Только один профиль по remarks
+cat subscription.json | python3 xray-sub-parser.py --ua "XPower/1.2" --remarks "Германия" > parsed.json
 ```
 
-**Пример выхода (для VLESS-outbound):**
+**Пример выхода:**
 
 ```json
 {
   "hole": false,
   "outbounds": [
     {
-      "tag": "proxy-vless-0",
+      "tag": "proxy-nl",
       "protocol": "vless",
       "settings": {
         "vnext": [{
@@ -623,7 +595,7 @@ cat subscription.txt | python3 xray-sub-parser.py > outbounds.json
 | `--output=PATH` | Путь к создаваемому конфигу (обязателен) |
 | `--format=unified` | Для обратной совместимости; значение игнорируется (формат всегда унифицированный) |
 
-> Аргументов выбора формата (`--format vless` / `--format json`), выбора сервера и `--remarks` **нет**: формат подписки определяет парсер, фильтр remarks передаётся парсеру. Выбор сервера не выполняется — все прокси из подписки попадают в балансировщик.
+> Аргументов выбора формата, выбора сервера и `--remarks` **нет**: подписка всегда JSON, фильтр remarks передаётся парсеру. Выбор сервера не выполняется — все прокси из подписки попадают в балансировщик.
 
 **Выходные данные:** Полный конфиг Xray с log, dns, inbounds, outbounds, routing и burstObservatory
 
@@ -798,7 +770,7 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 | Путь | Тип | Описание |
 |------|-----|----------|
 | `subscription.url` | string | URL подписки |
-| `subscription.user_agent` | string | User-Agent для запроса подписки (по нему же определяется формат подписки) |
+| `subscription.user_agent` | string | User-Agent для запроса подписки (провайдер отдаёт JSON; без правильного UA можно получить не JSON) |
 | `subscription.remarks_filter` | string | Фильтр профиля по remarks (только для JSON-подписок) |
 | `hwid` | string | Уникальный ID устройства (UUID без дефисов) |
 | `device_model` | string | Модель устройства (из dmesg) |
@@ -895,14 +867,14 @@ SUB_URL="https://…" REMARKS="Франция" docker compose run --rm stand
 XRAY_VERSION=v26.10.29 docker compose build stand
 ```
 
-Параметры прогона: `LOG_PRESET` (`quiet`/`normal`/`debug`), `SUB_URL` (если задан — добавляется реальная проверка подписки), `REMARKS` (фильтр профиля, только для JSON-подписок), `HWID` — по умолчанию `0123456789abcdef0123456789abcdef`, один и тот же во всех прогонах: провайдер считает устройства по HWID, и смена значения занимала бы новый слот в подписке. URL подписки в лог не печатается — только имя хоста.
+Параметры прогона: `LOG_PRESET` (`quiet`/`normal`/`debug`), `SUB_URL` (если задан — добавляется реальная проверка подписки), `REMARKS` (фильтр профиля, только для JSON-подписок), `RUNTIME_SECONDS` (длительность runtime-проверки, по умолчанию 6; `0` — пропустить), `HWID` — по умолчанию `0123456789abcdef0123456789abcdef`, один и тот же во всех прогонах: провайдер считает устройства по HWID, и смена значения занимала бы новый слот в подписке. URL подписки в лог не печатается — только имя хоста.
 
 Что делает прогон:
 
 1. собирает `settings.json` стенда из `settings.default.json` с выбранным пресетом, HWID и URL подписки;
 2. запускает `tests/run.sh` — если каталог `tests/` есть локально (в `.gitignore` и в архив он не входит);
 3. прогоняет демо-пайплайн «встроенная подписка → `xray-sub-parser.py` → `xray-generate-config.py` → `xray run -test`»;
-4. если задан `SUB_URL` — скачивает подписку с заголовками `User-Agent` + `x-hwid`, прогоняет тот же парсер и генератор и проверяет результат `xray run -test`;
+4. если задан `SUB_URL` — скачивает подписку с заголовками `User-Agent` + `x-hwid`, прогоняет тот же парсер и генератор, проверяет результат тремя способами: `xray run -test` (разбор конфига), структурная проверка (уникальность тегов и что `selector` балансировщика ссылается на существующие теги) и `runtime` — Xray реально запускается на `RUNTIME_SECONDS` секунд, проверяется, что процесс жив, порт 12345 слушается и в журнале нет `[Error]`;
 5. печатает секцию `log` сгенерированного `config.json` и список журнальных файлов.
 
 Файлы стенда: [docker/Dockerfile](./docker/Dockerfile), [docker/run-stand.sh](./docker/run-stand.sh), [docker-compose.yml](./docker-compose.yml).
@@ -945,7 +917,7 @@ SUB_UA=$(jq -r '.subscription.user_agent' /etc/xray/settings.json)
 curl -s -L -H "User-Agent: $SUB_UA" -H "x-hwid: $HWID" "$SUB_URL" > /tmp/sub.txt
 ```
 
-**Единый пайплайн (формат подписки определяется автоматически по UA):**
+**Единый пайплайн (подписка в JSON):**
 ```bash
 python3 /usr/share/xray/xray-sub-parser.py --ua "$SUB_UA" < /tmp/sub.txt > /tmp/parsed.json \
   && python3 /usr/share/xray/xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.json
@@ -1116,7 +1088,7 @@ curl -s -L -H "User-Agent: $SUB_UA" -H "x-hwid: $HWID" "$SUB_URL" | \
   python3 /usr/share/xray/xray-sub-parser.py --ua "$SUB_UA" 2>&1 | tee /tmp/debug.json
 ```
 
-В `/tmp/debug.json` ожидается объект `{"hole": …, "outbounds": […]}`. Если `outbounds` пуст — проверьте формат подписки: при несовпадении формата парсер пишет в stderr `Failed to parse JSON subscription` (см. определение формата по User-Agent).
+В `/tmp/debug.json` ожидается объект `{"hole": …, "outbounds": […]}`. Если `outbounds` пуст — проверьте, что подписка пришла в JSON: при не-JSON ответе парсер пишет в stderr `Failed to parse JSON subscription`.
 
 ### Geo-файлы не загружаются
 

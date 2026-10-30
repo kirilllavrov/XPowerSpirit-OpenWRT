@@ -34,6 +34,51 @@ printf 'HWID: %s\n\n' "$HWID"
 # Имя хоста подписки без токена: логи стенда не должны светить URL целиком
 sub_host() { printf '%s' "$1" | awk -F/ '{print $3}'; }
 
+# Runtime-проверка: `xray run -test` разбирает конфиг, но не запускает его.
+# Здесь Xray реально стартует, и мы проверяем, что он жив, слушает 12345
+# и не пишет [Error] в журнал.
+runtime_smoke() {
+    cfg=$1
+    secs=${RUNTIME_SECONDS:-6}
+    if [ "$secs" = "0" ]; then
+        printf '[SKIP] runtime: RUNTIME_SECONDS=0\n'
+        return 0
+    fi
+
+    printf -- '--- runtime: запуск Xray на %s с ---\n' "$secs"
+    xray run -config "$cfg" >"$WORK/run.log" 2>&1 &
+    pid=$!
+    sleep "$secs"
+
+    # Порт проверяем до остановки процесса: после kill сокет уже закрыт.
+    # tproxy-inbound биндится на 0.0.0.0:12345 (0x3039) и виден в dual-stack таблицах.
+    listening=0
+    if grep -qi ':3039' /proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6 2>/dev/null; then
+        listening=1
+    fi
+
+    alive=0
+    kill -0 "$pid" 2>/dev/null && alive=1
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+
+    errors=$(grep -c '\[Error\]' /tmp/log/xray-error.log 2>/dev/null || true)
+
+    if [ "$alive" = 1 ] && [ "$listening" = 1 ] && [ "${errors:-0}" = 0 ]; then
+        printf '[ OK ] Xray запустился, порт 12345 слушается, [Error] в журнале нет\n'
+        return 0
+    fi
+
+    printf '[FAIL] Xray: жив=%s, порт 12345=%s, строк [Error]=%s\n' \
+        "$alive" "$listening" "${errors:-0}"
+    printf -- '--- сокеты (tcp6, первые 3 строки) ---\n'
+    head -3 /proc/net/tcp6 2>/dev/null || true
+    printf -- '--- run.log ---\n'
+    head -20 "$WORK/run.log"
+    grep '\[Error\]' /tmp/log/xray-error.log 2>/dev/null | head -10 || true
+    return 1
+}
+
 # Реальная подписка: ровно тот путь, которым идёт update-xray.sh на устройстве
 real_subscription() {
     url=$1
@@ -74,6 +119,34 @@ PY
         return 1
     fi
     printf '[ OK ] конфиг из реальной подписки прошёл проверку ядром\n'
+
+    # Структурные проверки, которых нет в `xray run -test`: дубли тегов ломают
+    # балансировщик (он выбирает по тегу), а селектор с несуществующим тегом
+    # молча оставляет балансировщик без серверов.
+    if ! python3 - "$WORK/config_real.json" <<'PY'; then
+import json, sys
+
+cfg = json.load(open(sys.argv[1]))
+tags = [o.get("tag") for o in cfg.get("outbounds", [])]
+dups = sorted({t for t in tags if tags.count(t) > 1})
+balancers = (cfg.get("routing") or {}).get("balancers") or []
+selector = balancers[0].get("selector") if balancers else []
+missing = [s for s in selector if s not in tags]
+
+print(f"  outbounds: {len(tags)}, дубликатов тегов: {len(dups)}")
+print(f"  селектор балансировщика: {len(selector)}, нет среди outbounds: {len(missing)}")
+if dups:
+    print("  дубли: " + ", ".join(dups[:5]))
+if missing:
+    print("  нет в outbounds: " + ", ".join(missing[:5]))
+sys.exit(0 if not dups and not missing else 1)
+PY
+        printf '[FAIL] структурная проверка конфига\n'
+        return 1
+    fi
+    printf '[ OK ] структура конфига: теги уникальны, селектор ссылается на существующие\n'
+
+    runtime_smoke "$WORK/config_real.json" || return 1
     printf 'секция log:\n'
     jq '.log' "$WORK/config_real.json"
 }
@@ -91,13 +164,20 @@ fi
 # 2. Полный пайплайн на встроенной подписке
 printf -- '--- демо-пайплайн на встроенной подписке ---\n'
 cat >"$WORK/sub.txt" <<'SUBS'
-vless://11111111-1111-1111-1111-111111111111@nl.example.com:443?type=tcp&security=tls&sni=nl.example.com#NL
-vless://22222222-2222-2222-2222-222222222222@de.example.com:443?type=tcp&security=tls&sni=de.example.com#DE
+[{"remarks": "Demo", "outbounds": [
+  {"tag": "nl", "protocol": "vless",
+   "settings": {"vnext": [{"address": "nl.example.com", "port": 443,
+                           "users": [{"id": "11111111-1111-1111-1111-111111111111", "encryption": "none"}]}]},
+   "streamSettings": {"network": "tcp", "security": "tls", "tlsSettings": {"serverName": "nl.example.com"}}},
+  {"tag": "de", "protocol": "vless",
+   "settings": {"vnext": [{"address": "de.example.com", "port": 443,
+                           "users": [{"id": "22222222-2222-2222-2222-222222222222", "encryption": "none"}]}]},
+   "streamSettings": {"network": "tcp", "security": "tls", "tlsSettings": {"serverName": "de.example.com"}}}
+]}]
 SUBS
 
-# UA определяет ожидаемый формат подписки: happ/singbox/karing/xpower — JSON,
-# любой другой — Base64/VLESS. Для демо с vless:// берём нейтральный UA.
-python3 "$SRC/xray-sub-parser.py" --ua "OpenWrt-Xray/1.0" <"$WORK/sub.txt" >"$WORK/parsed.json"
+# Подписка всегда JSON; UA нужен только для запроса у провайдера.
+python3 "$SRC/xray-sub-parser.py" --ua "XPower/1.2" <"$WORK/sub.txt" >"$WORK/parsed.json"
 python3 "$SRC/xray-generate-config.py" --output "$WORK/config.json" <"$WORK/parsed.json"
 xray run -test -config "$WORK/config.json"
 
@@ -111,7 +191,7 @@ if [ -n "$SUB_URL" ]; then
     printf '\n'
     real_subscription "$SUB_URL" || exit 1
 else
-    printf '\n[SKIP] реальная подписка: SUB_URL не задан\n'
+    printf '\n[SKIP] реальная подписка: SUB_URL не задан (вместе с ней пропускается runtime-проверка)\n'
 fi
 
 printf '\n=== Готово ===\n'

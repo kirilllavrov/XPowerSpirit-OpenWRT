@@ -536,7 +536,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 | `blackhole` c `response.type: "http"` | [make_block_outbound](./xray-generate-config.py) | подтверждено |
 | DNS-outbound: `action: "hijack"`, `qType: "1,28"` | [build_dns_outbound](./xray-generate-config.py) | подтверждено |
 | Freedom: `sockopt.domainStrategy: "UseIPv4"` | [make_direct_outbound](./xray-generate-config.py) | подтверждено |
-| REALITY: `password` (+ `publicKey` для старых ядер) | [parse_vless_uri](./xray-sub-parser.py) | подтверждено; `publicKey` — прежнее имя |
+| REALITY: `password` (+ `publicKey` для старых ядер) — приходит из JSON-подписки как есть | [xray-sub-parser.py](./xray-sub-parser.py) | подтверждено; `publicKey` — прежнее имя |
 
 ### Проверено на живом стенде (OpenWrt 25.12 в контейнере)
 
