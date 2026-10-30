@@ -207,6 +207,17 @@ quiet | normal | debug) ;;
 *) die "--log=$LOG_PRESET: допустимые значения quiet, normal, debug" ;;
 esac
 
+# Проверка зависимостей до любых изменений. Иначе установщик успевает сменить
+# timezone и сеть, а падает на шаге 6 (curl/jq/unzip) — устройство остаётся
+# полу-настроенным. Список соответствует README → «Программные зависимости».
+_missing=""
+for _cmd in curl jq unzip python3 nft uci; do
+	command -v "$_cmd" >/dev/null 2>&1 || _missing="$_missing $_cmd"
+done
+[ -n "$_missing" ] && die "Не хватает команд:$_missing
+Установите пакеты и запустите установщик снова:
+  apk update && apk add curl ca-bundle nftables-json kmod-nft-tproxy kmod-nft-socket python3 resolveip unzip jq"
+
 # Создаём необходимые директории
 mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR" /tmp/log
 

@@ -24,6 +24,17 @@ die() {
     exit 1
 }
 
+# Бутстрапу нужны curl (скачать), unzip и sha256sum (проверить архив).
+# Проверяем сразу и говорим, что поставить: иначе пользователь видит
+# только «sh: unzip: not found» на середине установки.
+_missing=""
+for _cmd in curl unzip sha256sum; do
+    command -v "$_cmd" >/dev/null 2>&1 || _missing="$_missing $_cmd"
+done
+[ -n "$_missing" ] && die "Не хватает команд:$_missing
+Установите пакеты и повторите:
+  apk update && apk add curl ca-bundle nftables-json kmod-nft-tproxy kmod-nft-socket python3 resolveip unzip jq"
+
 # Запасной путь: установщик прямо с GitHub, без архива
 fallback_github() {
     local reason="$1"
@@ -38,7 +49,6 @@ fallback_github() {
 rm -rf "$WORK_DIR"
 mkdir -p "$WORK_DIR" || die "Не удалось создать $WORK_DIR"
 cd "$WORK_DIR" || die "Не удалось перейти в $WORK_DIR"
-
 echo "→ Источник: $ARCHIVE_BASE"
 
 curl -fsSLo latest.zip.sha256 "$ARCHIVE_BASE/latest.zip.sha256" ||

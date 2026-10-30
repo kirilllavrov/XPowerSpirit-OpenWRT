@@ -32,14 +32,22 @@ settings_get() {
 settings_set() {
     local key="$1"
     local val="$2"
+    local tmp="${SETTINGS_JSON}.tmp"
     mkdir -p "$(dirname "$SETTINGS_JSON")"
     [ -f "$SETTINGS_JSON" ] || echo '{}' > "$SETTINGS_JSON"
+    rm -f "$tmp"
     if echo "$val" | grep -qE '^[0-9]+$'; then
-        jq --argjson v "$val" "$key = \$v" "$SETTINGS_JSON" > "${SETTINGS_JSON}.tmp"
+        jq --argjson v "$val" "$key = \$v" "$SETTINGS_JSON" >"$tmp" 2>/dev/null
     else
-        jq --arg v "$val" "$key = \$v" "$SETTINGS_JSON" > "${SETTINGS_JSON}.tmp"
+        jq --arg v "$val" "$key = \$v" "$SETTINGS_JSON" >"$tmp" 2>/dev/null
     fi
-    mv "${SETTINGS_JSON}.tmp" "$SETTINGS_JSON"
+    # jq мог отсутствовать или упасть: пустой/битый результат не должен затирать
+    # настройки — иначе на устройстве остаётся settings.json нулевой длины
+    if [ ! -s "$tmp" ] || ! jq -e . "$tmp" >/dev/null 2>&1; then
+        rm -f "$tmp"
+        return 1
+    fi
+    mv "$tmp" "$SETTINGS_JSON"
     chmod 600 "$SETTINGS_JSON"
 }
 
