@@ -71,6 +71,23 @@ LOG_PRESETS = {
 # Отсутствие log.preset в settings.json (старый файл) = quiet: поведение как раньше
 DEFAULT_LOG_PRESET = "quiet"
 
+# Подписки приходят в старой нотации: поле streamSettings.network и ключи
+# *Settings к нему. В документации поле называется method, а транспорт TCP
+# переименован в RAW («更名自曾经的 TCP 传输层»). Оставляем в конфиге только
+# документированные имена; значения без документированного эквивалента не трогаем.
+NETWORK_TO_METHOD = {
+    "tcp": "raw",
+    "ws": "websocket",
+    "kcp": "mkcp",
+    "grpc": "grpc",
+    "httpupgrade": "httpupgrade",
+    "xhttp": "xhttp",
+    "hysteria": "hysteria",
+    "masque": "masque",
+}
+# Ключи настроек транспорта, которые переименованы вместе с транспортом
+NETWORK_SETTINGS_KEYS = {"tcp": ("tcpSettings", "rawSettings")}
+
 LOG_CONFIG = {}
 
 
@@ -123,6 +140,46 @@ def log_error(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
+def normalize_stream_settings(stream: dict) -> None:
+    """
+    Приводит выбор транспорта к документированному виду: network → method.
+    Если в подписке уже есть method, ничего не меняем и предупреждаем только при
+    расхождении: угадывать, какой из двух селекторов верный, нельзя.
+    """
+    if "network" not in stream:
+        return
+
+    network = stream.pop("network")
+    method = stream.get("method")
+
+    if method:
+        if method != NETWORK_TO_METHOD.get(str(network), network):
+            print(
+                f"  [!] В подписке указаны и network={network!r}, и method={method!r} — "
+                f"оставлен method, как документированное поле",
+                file=sys.stderr,
+            )
+        return
+
+    mapped = NETWORK_TO_METHOD.get(str(network))
+    if not mapped:
+        # Документированного эквивалента нет — возвращаем как было, без догадок
+        stream["network"] = network
+        print(
+            f"  [!] Транспорт network={network!r} не имеет документированного имени "
+            f"в method — оставлен как есть",
+            file=sys.stderr,
+        )
+        return
+
+    stream["method"] = mapped
+
+    old_key = NETWORK_SETTINGS_KEYS.get(str(network))
+    if old_key and old_key[0] in stream:
+        src, dst = old_key
+        stream[dst] = stream.pop(src)
+
+
 def normalize_outbound(ob: dict) -> dict:
     """
     Дополняет outbound из подписки недостающими полями.
@@ -131,6 +188,8 @@ def normalize_outbound(ob: dict) -> dict:
     # Убеждаемся, что streamSettings существует
     if "streamSettings" not in ob:
         ob["streamSettings"] = {}
+
+    normalize_stream_settings(ob["streamSettings"])
     
     # Добавляем sockopt с правильными параметрами
     if "sockopt" not in ob["streamSettings"]:
@@ -186,12 +245,14 @@ def base_config() -> dict:
                 }
             ]
         },
+        # Протокол inbound документирован как tunnel (см. xray-config-reference.md);
+        # dokodemo-door — его прежнее название, в перечне protocol его больше нет
         "inbounds": [
             {
                 "tag": "tproxy-in",
                 "listen": "0.0.0.0",
                 "port": 12345,
-                "protocol": "dokodemo-door",
+                "protocol": "tunnel",
                 "settings": {
                     "allowedNetwork": "tcp,udp",
                     "followRedirect": True
@@ -211,7 +272,7 @@ def base_config() -> dict:
                 "tag": "dns-local",
                 "listen": "127.0.0.1",
                 "port": 5353,
-                "protocol": "dokodemo-door",
+                "protocol": "tunnel",
                 "settings": {
                     "allowedNetwork": "tcp,udp"
                 }

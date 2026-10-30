@@ -4,6 +4,12 @@
 #
 # TProxy и nftables внутри контейнера не эмулируются — стенд проверяет пайплайн
 # (парсер → генератор → xray run -test) и регрессию tests/run.sh.
+#
+# ВАЖНО: этот сервис намеренно НЕ привилегированный и без procd. Полный OpenWrt
+# (openwrt/rootfs, /sbin/init) с --privileged взводит хостовый /dev/watchdog0 и при
+# SIGKILL оставляет его без magic close → hard reset хоста. Если нужен такой
+# контейнер, добавляйте -v /dev/null:/dev/watchdog0 -v /dev/null:/dev/watchdog
+# и останавливайте через `docker stop -t 30` (подробнее — README).
 services:
   stand:
     build:

@@ -82,7 +82,7 @@
 2. **Трафик самого роутера** → отдельная таблица `inet xray_self` с цепочкой `type route hook output priority mangle`: пакет помечается `meta mark set 1` и через policy routing (таблица 100) возвращается в `prerouting`, где попадает под TProxy. Тип цепочки `route` обязателен — в цепочке `type filter` (как `fw4 output`) mark не влияет на маршрутизацию
 3. **nftables**: bypass локальных адресов, DNS-резолверов, DHCP, IP прокси-серверов; полный bypass интерфейсов `br-guest` и `br-iot`; блокировка QUIC (UDP/443) с LAN **до** TProxy; остальное — `tproxy ip to 127.0.0.1:12345` c `meta mark set 0x1`
 4. **Защита от петель**: Xray-аутбаунды ставят `sockopt.mark = 2`, а обе цепочки начинаются с `meta mark 2 return`
-5. **Xray TProxy** (inbound `tunnel`, он же `dokodemo-door`, `tproxy`, сниффинг http/tls в режиме `routeOnly`): прозрачно перехватывает трафик; DNS от dnsmasq (`127.0.0.1:5353`) уходит в встроенный DNS (DoH)
+5. **Xray TProxy** (inbound `tunnel` — прежнее название `dokodemo-door`; `tproxy`, сниффинг http/tls в режиме `routeOnly`): прозрачно перехватывает трафик; DNS от dnsmasq (`127.0.0.1:5353`) уходит в встроенный DNS (DoH)
 6. **Маршрутизация**:
    - `geoip:ru`, `geoip:private` → напрямую (`direct`)
    - `geosite:private`, `geosite:category-browser`, `geosite:category-cdn-ru`, `geosite:category-mobile`, `geosite:category-ru` → напрямую
@@ -624,7 +624,18 @@ cat subscription.json | python3 xray-sub-parser.py --ua "XPower/1.2" --remarks "
 
 1. **Нормализация прокси-аутбаундов** — каждому outbound из подписки добавляется `streamSettings.sockopt` (`mark: 2`, `tcpKeepAliveInterval: 30`) и отключается Mux (`mux.enabled: false`)
 
-2. **Балансировка (всегда, даже для одного прокси)**:
+2. **Нормализация транспорта** — подписки приходят в старой нотации `streamSettings.network`, документация описывает `method`. Генератор переводит селектор и связанные имена:
+
+   | В подписке | В конфиге |
+   | --- | --- |
+   | `network: "tcp"` + `tcpSettings` | `method: "raw"` + `rawSettings` |
+   | `network: "ws"` | `method: "websocket"` (ключ `wsSettings` не меняется) |
+   | `network: "kcp"` | `method: "mkcp"` |
+   | `network: "xhttp"` / `"grpc"` / `"httpupgrade"` / `"hysteria"` / `"masque"` | то же значение в `method` |
+
+   Значения без документированного эквивалента (например `network: "http"`) остаются как есть, в stderr пишется предупреждение — генератор не угадывает. Если в подписке есть и `network`, и `method`, остаётся `method`, а при расхождении значений пишется предупреждение.
+
+3. **Балансировка (всегда, даже для одного прокси)**:
    - Все outbound-ы из подписки добавляются в конфиг
    - Создаётся балансировщик `tag: "balancer"` со стратегией `leastLoad` и `fallbackTag: "direct"`
      (`selector`/`subjectSelector` сопоставляются с тегами outbound-ов **по префиксу** — по
@@ -632,21 +643,21 @@ cat subscription.json | python3 xray-sub-parser.py --ua "XPower/1.2" --remarks "
    - **burstObservatory** на корневом уровне: `subjectSelector` = все прокси, `pingConfig` = `http://connectivitycheck.gstatic.com/generate_204`, `interval 1m`, `sampling 10`, `timeout 15s`, `httpMethod GET`
    - `leastLoad` выбирает outbound по данным observatory; если выбрать не удалось, используется `fallbackTag` → `direct`
 
-3. **Режим "hole" (DIRECT-конфиг)**:
+4. **Режим "hole" (DIRECT-конфиг)**:
    - Если парсер вернул `"hole": true` или пустой список outbound-ов — генерируется конфиг без прокси
    - Весь трафик идёт напрямую (`direct`), реклама блокируется
    - Полезно при окончании срока подписки
 
-4. **Базовая конфигурация:**
-   - **Логирование:** `loglevel: "none"`, access/error логи в `/tmp/log/`
+5. **Базовая конфигурация:**
+   - **Логирование:** значения берутся из пресета `log.preset` (по умолчанию `quiet` → `loglevel: "none"`, `access`/`error` = `none`), см. раздел «Пресеты журналирования»
    - **DNS** (tag `dns-inbuilt`): `queryStrategy: "UseIPv4"`, `serveStale`, `serveExpiredTTL: 600`, `enableParallelQuery`, `disableFallbackIfMatch`
      - `hosts`: DoH-домены закреплены за IP (`common.dot.dns.yandex.net` → `77.88.8.1/8.8`, `cloudflare-dns.com` → `1.0.0.1/1.1.1.1`, `dns.nextdns.io` → `45.90.28.0/45.90.30.0`)
      - `servers`: Yandex DoH для `geosite:category-ru` (`expectedIPs: geoip:ru`, `skipFallback`), Cloudflare DoH, NextDNS DoH
    - **Inbound:**
-     - `tproxy-in`: `dokodemo-door` (документированное имя протокола — `tunnel`), `0.0.0.0:12345`, `allowedNetwork: tcp,udp`, `followRedirect: true`, `sockopt.tproxy: "tproxy"`, сниффинг `http`/`tls` с `routeOnly: true`
-     - `dns-local`: `dokodemo-door` (`tunnel`), `127.0.0.1:5353`, `tcp,udp` — приём DNS от dnsmasq
+     - `tproxy-in`: `tunnel` (прежнее название протокола — `dokodemo-door`), `0.0.0.0:12345`, `allowedNetwork: tcp,udp`, `followRedirect: true`, `sockopt.tproxy: "tproxy"`, сниффинг `http`/`tls` с `routeOnly: true`
+     - `dns-local`: `tunnel`, `127.0.0.1:5353`, `tcp,udp` — приём DNS от dnsmasq
 
-5. **Правила маршрутизации** (порядок важен, правила собираются из `settings.json → routing`):
+6. **Правила маршрутизации** (порядок важен, правила собираются из `settings.json → routing`):
    1. `inboundTag: ["dns-local"]` → `dns-out` (hijack во встроенный DNS)
    2. `geosite:category-ipcheck` → `direct` — раньше всех остальных правил, чтобы сервисы проверки IP видели реальный адрес провайдера, а не прокси. Домены живут в `geosite.dat` (категория `category-ipcheck`), в `settings.json` их нет
    3. `doh_domains` → `direct` (чтобы DNS-запросы не уходили в прокси)
@@ -666,13 +677,13 @@ cat subscription.json | python3 xray-sub-parser.py --ua "XPower/1.2" --remarks "
    >
    > Это предотвращает ошибку `XTLS rejected UDP/443 traffic`
 
-6. **Stream settings прокси** — `mark: 2` (по нему nftables распознаёт пакеты Xray и не зацикливает их), `tcpKeepAliveInterval: 30`; Mux отключён
+7. **Stream settings прокси** — `mark: 2` (по нему nftables распознаёт пакеты Xray и не зацикливает их), `tcpKeepAliveInterval: 30`; Mux отключён
 
-7. **Freedom (direct) outbound** — `tag: "direct"`, `sockopt.domainStrategy: "UseIPv4"` для корректной работы в IPv4-only среде, `sockopt.mark: 2`
+8. **Freedom (direct) outbound** — `tag: "direct"`, `sockopt.domainStrategy: "UseIPv4"` для корректной работы в IPv4-only среде, `sockopt.mark: 2`
 
-8. **Blackhole (block) outbound** — `tag: "block"`, `response.type: "http"`: возвращает HTTP 403 вместо глухого закрытия соединения, чтобы браузер сразу показывал ошибку, а не висел в таймауте
+9. **Blackhole (block) outbound** — `tag: "block"`, `response.type: "http"`: возвращает HTTP 403 вместо глухого закрытия соединения, чтобы браузер сразу показывал ошибку, а не висел в таймауте
 
-9. **DNS outbound** — `tag: "dns-out"`, протокол `dns`, правило `hijack` для `qType` `1,28`
+10. **DNS outbound** — `tag: "dns-out"`, протокол `dns`, правило `hijack` для `qType` `1,28`
 
 **Режим без серверов:** DIRECT-конфиг создаётся только по явному сигналу `"hole": true`. Если парсер вернул ошибку (код 2), установщик и `update-xray.sh` прежний конфиг не меняют — DIRECT-режим больше не включается из-за сбоя разбора.
 
@@ -902,6 +913,21 @@ XRAY_VERSION=v26.10.29 docker compose build stand
 Файлы стенда: [docker/Dockerfile](./docker/Dockerfile), [docker/run-stand.sh](./docker/run-stand.sh), [docker-compose.yml](./docker-compose.yml).
 
 > В пресете `debug` Xray открывает журнальные файлы уже на `xray run -test`, поэтому каталог `/tmp/log` должен существовать: на устройстве его создают установщик и `init.d`, в контейнере — `docker/run-stand.sh`.
+
+### ⚠️ OpenWrt в привилегированном контейнере на том же хосте
+
+Это про запуск *полного* OpenWrt (`openwrt/rootfs`, `/sbin/init`) для лабораторных прогонов установщика, а не про стенд выше.
+
+`procd` в OpenWrt — это PID 1, и он работает с watchdog. В контейнере с `--privileged` он видит **хостовые** `/dev/watchdog0` и `/dev/watchdog` и взводит аппаратный таймер (на AMD-ноутбуке — `sp5100_tco`, таймаут 60 с). Если такой контейнер завершить не штатно (SIGKILL, `docker rm -f`, `docker stop -t 0`), watchdog остаётся взведённым без «magic close» — и хост уходит в **hard reset** через остаток таймаута. Симптом в журнале: `watchdog0: watchdog did not stop!`.
+
+Правила:
+
+- при `--privileged` всегда добавлять маску: `-v /dev/null:/dev/watchdog0 -v /dev/null:/dev/watchdog`;
+- останавливать только `docker stop -t 30`, а перед `rm` проверять `wdctl /dev/watchdog0` — должно быть `Timeleft: 0`;
+- если контейнер уже убит силой: `sudo sh -c 'printf V > /dev/watchdog0'`;
+- без `--privileged` (только нужные `--cap-add`) устройства внутри нет — проблемы не возникает.
+
+Стенд проекта (`docker compose run --rm stand`) не затронут: он без `--privileged` и без `procd`.
 
 ---
 

@@ -446,8 +446,13 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 ### 9.6. XHTTP
 
 Страница <https://xtls.github.io/ru/config/transports/xhttp.html> — это статья
-«XHTTP: Beyond REALITY» со ссылкой на внешний материал; **поля `xhttpSettings`
-(`path`, `host`, `mode`, `extra`) в документации не описаны.**
+«XHTTP: Beyond REALITY» со ссылкой на внешний материал.
+
+* Контейнер **`streamSettings.xhttpSettings` документирован**: в `StreamSettingsObject`
+  он объявлен как `xhttpSettings: XHTTPObject` и действует только при `method: "xhttp"`.
+* Сами поля `XHTTPObject` (`path`, `host`, `mode`, `extra`) **не описаны**: страница
+  `transports/xhttp.md` состоит из одной строки `See XHTTP: Beyond REALITY` со ссылкой
+  на обсуждение в GitHub, а `splithttp.html` отдаёт то же самое.
 
 ---
 
@@ -509,12 +514,12 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 
 | Сущность | Статус |
 |---|---|
-| `streamSettings.network` (`tcp`/`ws`/`grpc`/`http`) | не описано; документировано `streamSettings.method`. На Xray 26.10.21 `network` принимается (совместимость), но это не документированное поведение |
+| `streamSettings.network` (`tcp`/`ws`/`grpc`/`http`) | поле не описано; документировано `streamSettings.method`: `raw`\|`xhttp`\|`mkcp`\|`grpc`\|`websocket`\|`httpupgrade`\|`hysteria`\|`masque`. Транспорт TCP переименован в RAW («更名自曾经的 TCP 传输层»). Ядро принимает `network` (проверено на 26.10.29), но это не документированное поведение; генератор переводит `network` → `method` |
 | `sockopt.tcpNoDelay` | отсутствует в списке полей SockoptObject |
 | `settings.domainStrategy` у Freedom и direct-подобных outbound | нет; документировано `sockopt.domainStrategy` |
 | `realitySettings.publicKey` | переименовано в `password`; `publicKey` упомянуто только как прежнее имя |
 | `settings.vnext[].address/port/users[]` у VLESS | на странице VLESS документирован плоский вид `settings.address/port/id/...` |
-| `xhttpSettings.path/host/mode/extra` | полей нет — страница XHTTP является статьёй |
+| Поля `xhttpSettings.path/host/mode/extra` | полей нет; сам контейнер `streamSettings.xhttpSettings` документирован (см. 9.6) |
 | Правило DNS-outbound с ключом `qtype` (нижний регистр) | документировано `qType` |
 | Название протокола inbound `dokodemo-door` | документировано `tunnel` («Dokodemo door» — прежнее название) |
 
@@ -532,7 +537,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 | `routing.domainStrategy: "IPOnDemand"`, правила `domain`/`ip`/`port`/`network`/`inboundTag` | [build_rules](./xray-generate-config.py) | подтверждено |
 | `balancers[].selector` + `leastLoad` + `fallbackTag`; теги прокси с префиксом `proxy-` | [build_balancer](./xray-generate-config.py), [proxy_tag](./xray-sub-parser.py) | подтверждено; `selector` и `subjectSelector` **префиксные** |
 | `burstObservatory.pingConfig` (`destination`, `GET`, `1m`, `10`, `15s`) | [build_burst_observatory](./xray-generate-config.py) | подтверждено; предупреждение о перехвате TProxy |
-| inbound `tunnel` (в конфиге — `dokodemo-door`) + `sockopt.tproxy` + `sniffing.routeOnly` | [base_config](./xray-generate-config.py) | подтверждено; `dokodemo-door` — прежнее имя протокола |
+| inbound `tunnel` (документированный `protocol`) + `sockopt.tproxy` + `sniffing.routeOnly` | [base_config](./xray-generate-config.py) | подтверждено; `dokodemo-door` — прежнее имя протокола, в перечне `protocol` его нет |
 | `blackhole` c `response.type: "http"` | [make_block_outbound](./xray-generate-config.py) | подтверждено |
 | DNS-outbound: `action: "hijack"`, `qType: "1,28"` | [build_dns_outbound](./xray-generate-config.py) | подтверждено |
 | Freedom: `sockopt.domainStrategy: "UseIPv4"` | [make_direct_outbound](./xray-generate-config.py) | подтверждено |
@@ -671,10 +676,15 @@ LAN — tap+netns-клиент, VLESS-сервер на amd64-хосте. Рез
 
 ### Остаётся осознанно (документацией не подтверждено)
 
-1. **`protocol: "dokodemo-door"`** — работает как совместимое имя; в документации протокол называется `tunnel`.
-2. **`network` вместо `method`** — легаси-вид `streamSettings`; валидатор принимает, новые примеры документации используют `method`.
-3. **`xhttpSettings`** — проект генерирует `path`, `host`, `mode`, `extra`; официального описания полей нет (страница XHTTP — статья).
-4. **`settings.vnext[]`** у VLESS — документирован плоский вид `settings.address/port/id/...`; `vnext` принимается как совместимый.
+1. **`xhttpSettings`** — контейнер документирован, но его поля (`path`, `host`, `mode`, `extra`) — нет (страница XHTTP — статья). Проект их не генерирует: они приходят из подписки как есть.
+2. **`settings.vnext[]`** у VLESS — документирован плоский вид `settings.address/port/id/...`; `vnext` принимается как совместимый.
+
+Закрыто 2026-10-30:
+
+* `protocol: "dokodemo-door"` → **`tunnel`** (документированное имя; `dokodemo-door` — прежнее, в перечне `protocol` отсутствует).
+* `streamSettings.network` → **`method`**: генератор переводит селектор, а также `tcp`→`raw`, `ws`→`websocket`, `kcp`→`mkcp` и `tcpSettings`→`rawSettings`. Значения без документированного эквивалента остаются как есть с предупреждением в stderr.
+
+Требование: `tunnel` и `method` поддерживает актуальное ядро (проект ставит latest-релиз Xray). На старой версии, установленной вручную пакетом, имена могут не распознаться.
 
 При любой правке конфигурации: сначала подтвердить поле по первоисточнику, затем менять код,
 затем `./tests/run.sh` (включая `xray run -test`) и только после этого считать изменение рабочим.
