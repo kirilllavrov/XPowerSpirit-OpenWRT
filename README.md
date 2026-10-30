@@ -885,16 +885,25 @@ docker compose run --rm stand
 # как на роутере: журналы Xray отключены
 LOG_PRESET=quiet docker compose run --rm stand
 
+# проверить реальную подписку тем же путём, что и update-xray.sh
+SUB_URL="https://…" docker compose run --rm stand
+
+# только один профиль JSON-подписки (по remarks)
+SUB_URL="https://…" REMARKS="Франция" docker compose run --rm stand
+
 # зафиксировать версию Xray в образе
 XRAY_VERSION=v26.10.29 docker compose build stand
 ```
 
+Параметры прогона: `LOG_PRESET` (`quiet`/`normal`/`debug`), `SUB_URL` (если задан — добавляется реальная проверка подписки), `REMARKS` (фильтр профиля, только для JSON-подписок), `HWID` — по умолчанию `0123456789abcdef0123456789abcdef`, один и тот же во всех прогонах: провайдер считает устройства по HWID, и смена значения занимала бы новый слот в подписке. URL подписки в лог не печатается — только имя хоста.
+
 Что делает прогон:
 
-1. собирает `settings.json` стенда из `settings.default.json` с выбранным пресетом;
+1. собирает `settings.json` стенда из `settings.default.json` с выбранным пресетом, HWID и URL подписки;
 2. запускает `tests/run.sh` — если каталог `tests/` есть локально (в `.gitignore` и в архив он не входит);
-3. прогоняет пайплайн «подписка → `xray-sub-parser.py` → `xray-generate-config.py` → `xray run -test`»;
-4. печатает секцию `log` сгенерированного `config.json` и список журнальных файлов.
+3. прогоняет демо-пайплайн «встроенная подписка → `xray-sub-parser.py` → `xray-generate-config.py` → `xray run -test`»;
+4. если задан `SUB_URL` — скачивает подписку с заголовками `User-Agent` + `x-hwid`, прогоняет тот же парсер и генератор и проверяет результат `xray run -test`;
+5. печатает секцию `log` сгенерированного `config.json` и список журнальных файлов.
 
 Файлы стенда: [docker/Dockerfile](./docker/Dockerfile), [docker/run-stand.sh](./docker/run-stand.sh), [docker-compose.yml](./docker-compose.yml).
 
