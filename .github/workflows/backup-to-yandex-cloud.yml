@@ -1,10 +1,17 @@
-# Односторонний бэкап репозитория в Yandex Cloud Object Storage (S3 API).
+# Односторонняя выгрузка в Yandex Cloud Object Storage (S3 API) установочного
+# комплекта XPowerSpirit-OpenWRT: собранного на GitHub архива и его latest.zip.
 #
 # Направление только GitHub -> Object Storage. Обратной синхронизации и скачивания
 # из workflow нет: он собирает архив текущего коммита и загружает его в бакет.
 # Ротация выполняется lifecycle-правилом бакета, а не кодом:
 #   STANDARD -> COLD через 30 дней -> удаление через 365 дней;
 #   неактуальные версии объектов (перезаписи latest) удаляются через 30 дней.
+#
+# В архив попадают только файлы, нужные для установки на роутер (полный список —
+# в шаге «Собрать архив»): установщик, settings.default.json, генератор конфига,
+# парсер подписки, update-*.sh и вспомогательные setup/diagnose-скрипты.
+# README, справочники xray-config-*.md, LICENSE и файлы .github в архив не входят:
+# на роутере они не используются.
 #
 # Что нужно настроить один раз (Settings -> Secrets and variables -> Actions):
 #   секрет YC_S3_KEY_ID   — Key ID статического ключа сервисного аккаунта
@@ -48,7 +55,7 @@ env:
 
 jobs:
   backup:
-    name: Архив репозитория -> Object Storage
+    name: Установочные файлы -> Object Storage
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -77,7 +84,7 @@ jobs:
             echo "ENCRYPT_ARCHIVE=0" >> "$GITHUB_ENV"
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -91,8 +98,29 @@ jobs:
           NAME="${REPO_NAME}-${STAMP}-${SHA_SHORT}"
 
           mkdir -p dist
-          # git archive кладёт в архив только отслеживаемые файлы и не тащит .git
-          git archive --format=zip --prefix="${NAME}/" -o "dist/${NAME}.zip" HEAD
+
+          # Белый список файлов, которые нужны на роутере. Менять состав архива нужно
+          # только здесь: отсутствующий в HEAD путь — ошибка git archive, поэтому
+          # список не устареет молча после переименования скрипта.
+          ROUTER_FILES=(
+            install-openwrt-xray.sh        # установщик: скачивает остальное на роутер
+            settings.default.json          # значения по умолчанию для /etc/xray/settings.json
+            xray-generate-config.py        # сборка /etc/xray/config.json
+            xray-sub-parser.py             # разбор подписки
+            update-xray.sh                 # обновление бинарника, geo-файлов и конфига
+            update-nft.sh                  # пересборка правил nftables
+            setup-wifi-network.sh          # настройка Wi-Fi, запускается отдельно
+            setup-led-status.sh            # индикатор состояния, запускается отдельно
+            diagnose-xray-tproxy.sh        # диагностика, запускается отдельно
+            README.md                      # описание проекта и инструкции по установке
+          )
+
+          # Пути перечислены явно: README, справочники и .github в архив не попадают.
+          git archive --format=zip --prefix="${NAME}/" -o "dist/${NAME}.zip" HEAD -- "${ROUTER_FILES[@]}"
+
+          # Список содержимого берём из готового архива, чтобы MANIFEST не расходился с ним.
+          ARCHIVED=$(unzip -Z1 "dist/${NAME}.zip" | sed "s|^${NAME}/||" | grep -v '/$' | LC_ALL=C sort)
+          ARCHIVED_COUNT=$(printf '%s\n' "$ARCHIVED" | grep -c . || true)
 
           cat > "dist/MANIFEST.txt" <<EOF
           repository: ${GITHUB_REPOSITORY}
@@ -100,13 +128,20 @@ jobs:
           commit: $(git rev-parse HEAD)
           run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           created: $(TZ="$BACKUP_TZ" date -Iseconds)
-          files: $(git ls-files | wc -l)
+          contents: файлы для установки на роутер
+          files: ${ARCHIVED_COUNT}
           storage: s3://${BUCKET}/${REPO_NAME}
+
+          ${ARCHIVED}
           EOF
           zip -q -j "dist/${NAME}.zip" dist/MANIFEST.txt
           rm -f dist/MANIFEST.txt
 
+          echo "Содержимое архива:"
+          unzip -Z1 "dist/${NAME}.zip"
+
           echo "ARCHIVE_NAME=${NAME}" >> "$GITHUB_ENV"
+          echo "ARCHIVE_FILES=${ARCHIVED_COUNT}" >> "$GITHUB_ENV"
           echo "ARCHIVE_PATH=dist/${NAME}.zip" >> "$GITHUB_ENV"
           echo "ARCHIVE_EXT=zip" >> "$GITHUB_ENV"
           echo "OBJECT_PREFIX=${REPO_NAME}" >> "$GITHUB_ENV"
@@ -155,6 +190,7 @@ jobs:
             echo ""
             echo "- архив: \`${ARCHIVE_NAME:-—}.${ARCHIVE_EXT:-zip}\`"
             echo "- размер: $(du -h "${ARCHIVE_PATH:-/dev/null}" 2>/dev/null | cut -f1 || echo '—')"
+            echo "- файлов: ${ARCHIVE_FILES:-—} (только установочные для роутера)"
             echo "- объект: \`s3://${BUCKET}/${UPLOADED_KEY:-не выгружался}\`"
             echo "- latest: \`s3://${BUCKET}/${UPLOADED_LATEST:-не выгружался}\`"
             echo "- шифрование: $([ "${ENCRYPT_ARCHIVE:-0}" = "1" ] && echo 'GPG (AES256)' || echo 'нет')"
