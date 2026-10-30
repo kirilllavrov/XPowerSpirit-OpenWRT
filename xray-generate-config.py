@@ -180,6 +180,18 @@ def normalize_stream_settings(stream: dict) -> None:
         stream[dst] = stream.pop(src)
 
 
+def normalize_reality(reality: dict) -> None:
+    """
+    publicKey — прежнее имя ключа REALITY, в документации поле называется password.
+    Оставляем документированное имя; если пришли оба, побеждает password.
+    """
+    if "publicKey" not in reality:
+        return
+    legacy = reality.pop("publicKey")
+    if not reality.get("password"):
+        reality["password"] = legacy
+
+
 def normalize_outbound(ob: dict) -> dict:
     """
     Дополняет outbound из подписки недостающими полями.
@@ -190,6 +202,10 @@ def normalize_outbound(ob: dict) -> dict:
         ob["streamSettings"] = {}
 
     normalize_stream_settings(ob["streamSettings"])
+
+    reality = ob["streamSettings"].get("realitySettings")
+    if isinstance(reality, dict):
+        normalize_reality(reality)
     
     # Добавляем sockopt с правильными параметрами
     if "sockopt" not in ob["streamSettings"]:
@@ -407,7 +423,6 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
     rules = [
         # Клиентский DNS (от dnsmasq) → dns-out (hijack → dns-inbuilt)
         {
-            "type": "field",
             "inboundTag": ["dns-local"],
             "outboundTag": "dns-out"
         }
@@ -417,7 +432,6 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
     # иначе провайдер/сервис увидит IP прокси и определит VPN
     if ip_check_geosite_available():
         rules.append({
-            "type": "field",
             "domain": [IP_CHECK_GEOSITE],
             "outboundTag": "direct"
         })
@@ -425,39 +439,33 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
     rules += [
         # Ловим DNS через DoH, которые прошли мимо dnsmasq (от браузера)
         {
-            "type": "field",
             "domain": ROUTING_CONFIG["doh_domains"],
             "outboundTag": "direct"
         },
         # Блокировка рекламы
         {
-            "type": "field",
             "domain": ROUTING_CONFIG["block_domains"],
             "outboundTag": "block"
         },
         # NTP (порт 123) — напрямую
         {
-            "type": "field",
             "port": "123",
             "network": "udp",
             "outboundTag": "direct"
         },
         # QUIC (UDP/443) — блокируем на уровне Xray (VLESS+XTLS не поддерживает UDP)
         {
-            "type": "field",
             "port": "443",
             "network": "udp",
             "outboundTag": "block"
         },
         # Локальные и российские IP — напрямую
         {
-            "type": "field",
             "ip": ROUTING_CONFIG["direct_ips"],
             "outboundTag": "direct"
         },
         # Локальные и российские домены — напрямую
         {
-            "type": "field",
             "domain": ROUTING_CONFIG["direct_domains"],
             "outboundTag": "direct"
         },
@@ -466,19 +474,16 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
     if not direct_mode and proxy_outbounds:
         # Всегда через balancer — даже для одного прокси (observatory следит, fallback на direct)
         rules.append({
-            "type": "field",
             "domain": ROUTING_CONFIG["proxy_domains"],
             "balancerTag": "balancer"
         })
         
         rules.append({
-            "type": "field",
             "network": "tcp,udp",
             "balancerTag": "balancer"
         })
     else:
         rules.append({
-            "type": "field",
             "network": "tcp,udp",
             "outboundTag": "direct"
         })

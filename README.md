@@ -590,7 +590,7 @@ cat subscription.json | python3 xray-sub-parser.py --ua "XPower/1.2" --remarks "
         "realitySettings": {
           "serverName": "example.com",
           "password": "...",   // документированное имя; publicKey — прежнее
-          "publicKey": "...",  // оставлено для совместимости
+          "publicKey": "...",  // так поле приходит в подписке; генератор переименует в password
           "shortId": "...",
           "spiderX": "...",
           "fingerprint": "chrome"
@@ -635,7 +635,11 @@ cat subscription.json | python3 xray-sub-parser.py --ua "XPower/1.2" --remarks "
 
    Значения без документированного эквивалента (например `network: "http"`) остаются как есть, в stderr пишется предупреждение — генератор не угадывает. Если в подписке есть и `network`, и `method`, остаётся `method`, а при расхождении значений пишется предупреждение.
 
-3. **Балансировка (всегда, даже для одного прокси)**:
+3. **Нормализация REALITY** — ключ `realitySettings.publicKey` переименовывается в `password`: в документации поле называется `password`, а `publicKey` упомянуто только как прежнее имя. Если пришли оба, значение берётся из `password`.
+
+4. **Правила без недокументированных полей** — в правила роутинга не добавляется `type: "field"`: в актуальном `RuleObject` такого поля нет (ядро его игнорирует).
+
+5. **Балансировка (всегда, даже для одного прокси)**:
    - Все outbound-ы из подписки добавляются в конфиг
    - Создаётся балансировщик `tag: "balancer"` со стратегией `leastLoad` и `fallbackTag: "direct"`
      (`selector`/`subjectSelector` сопоставляются с тегами outbound-ов **по префиксу** — по
@@ -643,12 +647,12 @@ cat subscription.json | python3 xray-sub-parser.py --ua "XPower/1.2" --remarks "
    - **burstObservatory** на корневом уровне: `subjectSelector` = все прокси, `pingConfig` = `http://connectivitycheck.gstatic.com/generate_204`, `interval 1m`, `sampling 10`, `timeout 15s`, `httpMethod GET`
    - `leastLoad` выбирает outbound по данным observatory; если выбрать не удалось, используется `fallbackTag` → `direct`
 
-4. **Режим "hole" (DIRECT-конфиг)**:
+6. **Режим "hole" (DIRECT-конфиг)**:
    - Если парсер вернул `"hole": true` или пустой список outbound-ов — генерируется конфиг без прокси
    - Весь трафик идёт напрямую (`direct`), реклама блокируется
    - Полезно при окончании срока подписки
 
-5. **Базовая конфигурация:**
+7. **Базовая конфигурация:**
    - **Логирование:** значения берутся из пресета `log.preset` (по умолчанию `quiet` → `loglevel: "none"`, `access`/`error` = `none`), см. раздел «Пресеты журналирования»
    - **DNS** (tag `dns-inbuilt`): `queryStrategy: "UseIPv4"`, `serveStale`, `serveExpiredTTL: 600`, `enableParallelQuery`, `disableFallbackIfMatch`
      - `hosts`: DoH-домены закреплены за IP (`common.dot.dns.yandex.net` → `77.88.8.1/8.8`, `cloudflare-dns.com` → `1.0.0.1/1.1.1.1`, `dns.nextdns.io` → `45.90.28.0/45.90.30.0`)
@@ -657,7 +661,7 @@ cat subscription.json | python3 xray-sub-parser.py --ua "XPower/1.2" --remarks "
      - `tproxy-in`: `tunnel` (прежнее название протокола — `dokodemo-door`), `0.0.0.0:12345`, `allowedNetwork: tcp,udp`, `followRedirect: true`, `sockopt.tproxy: "tproxy"`, сниффинг `http`/`tls` с `routeOnly: true`
      - `dns-local`: `tunnel`, `127.0.0.1:5353`, `tcp,udp` — приём DNS от dnsmasq
 
-6. **Правила маршрутизации** (порядок важен, правила собираются из `settings.json → routing`):
+8. **Правила маршрутизации** (порядок важен, правила собираются из `settings.json → routing`):
    1. `inboundTag: ["dns-local"]` → `dns-out` (hijack во встроенный DNS)
    2. `geosite:category-ipcheck` → `direct` — раньше всех остальных правил, чтобы сервисы проверки IP видели реальный адрес провайдера, а не прокси. Домены живут в `geosite.dat` (категория `category-ipcheck`), в `settings.json` их нет
    3. `doh_domains` → `direct` (чтобы DNS-запросы не уходили в прокси)
@@ -677,13 +681,13 @@ cat subscription.json | python3 xray-sub-parser.py --ua "XPower/1.2" --remarks "
    >
    > Это предотвращает ошибку `XTLS rejected UDP/443 traffic`
 
-7. **Stream settings прокси** — `mark: 2` (по нему nftables распознаёт пакеты Xray и не зацикливает их), `tcpKeepAliveInterval: 30`; Mux отключён
+9. **Stream settings прокси** — `mark: 2` (по нему nftables распознаёт пакеты Xray и не зацикливает их), `tcpKeepAliveInterval: 30`; Mux отключён
 
-8. **Freedom (direct) outbound** — `tag: "direct"`, `sockopt.domainStrategy: "UseIPv4"` для корректной работы в IPv4-only среде, `sockopt.mark: 2`
+10. **Freedom (direct) outbound** — `tag: "direct"`, `sockopt.domainStrategy: "UseIPv4"` для корректной работы в IPv4-only среде, `sockopt.mark: 2`
 
-9. **Blackhole (block) outbound** — `tag: "block"`, `response.type: "http"`: возвращает HTTP 403 вместо глухого закрытия соединения, чтобы браузер сразу показывал ошибку, а не висел в таймауте
+11. **Blackhole (block) outbound** — `tag: "block"`, `response.type: "http"`: возвращает HTTP 403 вместо глухого закрытия соединения, чтобы браузер сразу показывал ошибку, а не висел в таймауте
 
-10. **DNS outbound** — `tag: "dns-out"`, протокол `dns`, правило `hijack` для `qType` `1,28`
+12. **DNS outbound** — `tag: "dns-out"`, протокол `dns`, правило `hijack` для `qType` `1,28`
 
 **Режим без серверов:** DIRECT-конфиг создаётся только по явному сигналу `"hole": true`. Если парсер вернул ошибку (код 2), установщик и `update-xray.sh` прежний конфиг не меняют — DIRECT-режим больше не включается из-за сбоя разбора.
 
