@@ -31,10 +31,14 @@ uci set system.@led[-1].mode='tx rx'
 uci commit system
 service led restart
 
-# LED 2: Интернет (проверка через gen_204)
+# LED 2: Интернет (проверка через probe-URL из settings.json → health.probe_url)
 cat > /usr/share/xray/net-check.sh << 'EOF'
 #!/bin/sh
-if curl -fs --max-time 5 https://www.google.com/gen_204 >/dev/null 2>&1; then
+# Адрес проверки берётся из настроек: он же используется burstObservatory,
+# поэтому лампочка и балансировщик проверяют один и тот же endpoint
+PROBE_URL=$(jq -r '.health.probe_url // empty' /etc/xray/settings.json 2>/dev/null)
+[ -n "$PROBE_URL" ] || PROBE_URL="https://connectivitycheck.gstatic.com/generate_204"
+if curl -fs --max-time 5 "$PROBE_URL" >/dev/null 2>&1; then
     echo "default-on" > /sys/class/leds/white:wan-online/trigger
 else
     echo "none" > /sys/class/leds/white:wan-online/trigger

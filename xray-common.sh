@@ -51,6 +51,18 @@ settings_set() {
     chmod 600 "$SETTINGS_JSON"
 }
 
+# settings_get_default <ключ> <значение-по-умолчанию>
+# Нужен скриптам, которые обязаны работать и без settings.json (nftables на
+# загрузке, LED-индикатор, диагностика): пустой результат settings_get → дефолт.
+settings_get_default() {
+    local _key="$1"
+    local _def="$2"
+    local _val
+    _val=$(settings_get "$_key" 2>/dev/null)
+    [ -n "$_val" ] || _val="$_def"
+    printf '%s' "$_val"
+}
+
 # =============================================
 #   АРХИТЕКТУРА XRAY
 # =============================================

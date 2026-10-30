@@ -529,12 +529,20 @@ uci set dhcp.@dnsmasq[0].cachesize='1000'
 uci set dhcp.@dnsmasq[0].min_cache_ttl='300'
 uci set dhcp.@dnsmasq[0].max_cache_ttl='600'
 
+# Порт Xray DNS и резервный апстрим — из settings.json → tproxy.dns_port и
+# dns.dnsmasq_fallback: те же значения уходят в config.json, поэтому порт
+# нельзя держать литералом в двух местах
+DNS_PORT=$(settings_get ".tproxy.dns_port" 2>/dev/null)
+[ -n "$DNS_PORT" ] || DNS_PORT=5353
+DNS_FALLBACK=$(settings_get ".dns.dnsmasq_fallback" 2>/dev/null)
+[ -n "$DNS_FALLBACK" ] || DNS_FALLBACK=77.88.8.8
+
 uci -q delete dhcp.@dnsmasq[0].server
-uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'
-uci add_list dhcp.@dnsmasq[0].server='77.88.8.8'
+uci add_list dhcp.@dnsmasq[0].server="127.0.0.1#$DNS_PORT"
+uci add_list dhcp.@dnsmasq[0].server="$DNS_FALLBACK"
 uci commit dhcp
 
-echo "[+] DNS настроен (dnsmasq → Xray:5353 + fallback 77.88.8.8)"
+echo "[+] DNS настроен (dnsmasq → Xray:$DNS_PORT + fallback $DNS_FALLBACK)"
 
 # =============================================
 # 8. Создаём init.d для Xray
@@ -604,6 +612,15 @@ start_service() {
 }
 
 stop_service() {
+    # Параметры policy routing читаются в рантайме: init.d не перегенерируется
+    # при изменении settings.json, а правила должны сниматься теми же метками,
+    # которыми были поставлены
+    local _fwmark _table
+    _fwmark=$(jq -r '.tproxy.fwmark // 1' /etc/xray/settings.json 2>/dev/null)
+    _table=$(jq -r '.tproxy.route_table // 100' /etc/xray/settings.json 2>/dev/null)
+    [ -n "$_fwmark" ] || _fwmark=1
+    [ -n "$_table" ] || _table=100
+
     # Убираем jump-правила из fw4
     local _handle
     _handle=$(nft -a list chain inet fw4 prerouting 2>/dev/null \
@@ -621,8 +638,8 @@ stop_service() {
     nft delete chain inet fw4 xray_output 2>/dev/null
     nft delete table inet xray_self 2>/dev/null
 
-    while ip rule del fwmark 1 table 100 2>/dev/null; do :; done
-    ip route flush table 100 2>/dev/null
+    while ip rule del fwmark "$_fwmark" table "$_table" 2>/dev/null; do :; done
+    ip route flush table "$_table" 2>/dev/null
     logger -t xray "Stopped, network restored"
 }
 
@@ -641,11 +658,17 @@ echo "[+] init.d для Xray создан и включён"
 # =============================================
 echo "9. Настраиваем routing..."
 
-if ! grep -q "^100[[:space:]]\+xray$" /etc/iproute2/rt_tables; then
-	echo "100 xray" >>/etc/iproute2/rt_tables
+# Имя таблицы для fwmark — из settings.json → tproxy.route_table
+ROUTE_TABLE=$(settings_get ".tproxy.route_table" 2>/dev/null)
+[ -n "$ROUTE_TABLE" ] || ROUTE_TABLE=100
+
+if ! grep -q "^$ROUTE_TABLE[[:space:]]\+xray$" /etc/iproute2/rt_tables; then
+	# Таблица с другим номером могла остаться от прежней установки
+	sed -i '/[[:space:]]xray$/d' /etc/iproute2/rt_tables 2>/dev/null
+	echo "$ROUTE_TABLE xray" >>/etc/iproute2/rt_tables
 fi
 
-echo "[+] Routing настроен"
+echo "[+] Routing настроен (таблица $ROUTE_TABLE)"
 
 # =============================================
 # 10. Настраиваем sysctl
@@ -680,8 +703,16 @@ uci set system.@system[0].cronloglevel="$CRON_LOGLEVEL"
 uci commit system
 echo "[+] cronloglevel=$CRON_LOGLEVEL (пресет журналирования: $LOG_PRESET)"
 
-SCRIPTS_CRON_ENTRY="20 2 * * * $SCRIPTS_UPDATER >>/tmp/log/xray-scripts.log 2>&1"
-CRON_ENTRY="30 2 * * * $UPDATER >>/tmp/log/xray-update.log 2>&1"
+# Расписание — из settings.json → update.cron: то же значение применяет
+# update-xray.sh при каждом запуске, поэтому правка настроек не требует
+# переустановки
+CRON_SCRIPTS=$(settings_get ".update.cron.scripts" 2>/dev/null)
+[ -n "$CRON_SCRIPTS" ] || CRON_SCRIPTS="20 2 * * *"
+CRON_XRAY=$(settings_get ".update.cron.xray" 2>/dev/null)
+[ -n "$CRON_XRAY" ] || CRON_XRAY="30 2 * * *"
+
+SCRIPTS_CRON_ENTRY="$CRON_SCRIPTS $SCRIPTS_UPDATER >>/tmp/log/xray-scripts.log 2>&1"
+CRON_ENTRY="$CRON_XRAY $UPDATER >>/tmp/log/xray-update.log 2>&1"
 
 if ! crontab -l 2>/dev/null | grep -qF "$SCRIPTS_UPDATER"; then
 	(

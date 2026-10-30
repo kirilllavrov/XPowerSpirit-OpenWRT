@@ -532,15 +532,15 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 | Использование | Где в проекте | Как в документации |
 |---|---|---|
 | `log.loglevel: "none"` + файлы access/error; каталог создают установщик и `init.d` | [xray-generate-config.py](./xray-generate-config.py), [install-openwrt-xray.sh](./install-openwrt-xray.sh) | `access`/`error`/`loglevel` — подтверждено; сам ядро каталог не создаёт. С 2026-10-30 значения приходят из пресета `log.preset`: `quiet` → `none`/`none`/`none`, `normal` → `warning`+error-файл, `debug` → `info`+access-файл (все значения документированы) |
-| `dns` c `hosts`, `queryStrategy`, `serveStale`, `serveExpiredTTL`, `disableFallbackIfMatch`, `enableParallelQuery` | [xray-generate-config.py](./xray-generate-config.py) | подтверждено |
+| `dns` c `hosts`, `queryStrategy`, `serveStale`, `serveExpiredTTL`, `disableFallbackIfMatch`, `enableParallelQuery` | [xray-generate-config.py](./xray-generate-config.py) | подтверждено. С 2026-10-30 все поля, кроме `hosts`/`servers`, задаются в `settings.json → dns`; там же `disableCache` и `disableFallback`, литеральные дефолты остались в `DNS_TUNING_DEFAULTS` |
 | `servers` в режиме `https+local://` (DOHL) + `domains`, `expectedIPs`, `skipFallback` | там же | подтверждено; DOHL не проходит routing |
 | `routing.domainStrategy: "IPOnDemand"`, правила `domain`/`ip`/`port`/`network`/`inboundTag` | [build_rules](./xray-generate-config.py) | подтверждено |
-| `balancers[].selector` + `leastLoad` + `fallbackTag`; теги прокси с префиксом `proxy-` | [build_balancer](./xray-generate-config.py), [proxy_tag](./xray-sub-parser.py) | подтверждено; `selector` и `subjectSelector` **префиксные** |
-| `burstObservatory.pingConfig` (`destination`, `GET`, `1m`, `10`, `15s`) | [build_burst_observatory](./xray-generate-config.py) | подтверждено; предупреждение о перехвате TProxy |
-| inbound `tunnel` (документированный `protocol`) + `sockopt.tproxy` + `sniffing.routeOnly` | [base_config](./xray-generate-config.py) | подтверждено; `dokodemo-door` — прежнее имя протокола, в перечне `protocol` его нет |
+| `balancers[].selector` + `leastLoad` + `fallbackTag`; теги прокси с префиксом `proxy-` | [build_balancer](./xray-generate-config.py), [proxy_tag](./xray-sub-parser.py) | подтверждено; `selector` и `subjectSelector` **префиксные**. С 2026-10-30 `strategy.type` и `strategy.settings` приходят из `settings.json → balancer`; `settings` добавляется только когда `strategySettings` непуст (по документации применим лишь к `leastLoad`) |
+| `burstObservatory.pingConfig` (`destination`, `GET`, `1m`, `10`, `15s`) | [build_burst_observatory](./xray-generate-config.py) | подтверждено; предупреждение о перехвате TProxy. С 2026-10-30 `destination` — единственный ключ `settings.json → health.probe_url` (он же для LED), остальные — `settings.json → balancer.pingConfig`; `pingConfig.destination` в настройках запрещён, чтобы не было двух источников адреса |
+| inbound `tunnel` (документированный `protocol`) + `sockopt.tproxy` + `sniffing.routeOnly` | [base_config](./xray-generate-config.py) | подтверждено; `dokodemo-door` — прежнее имя протокола, в перечне `protocol` его нет. Порты inbounds с 2026-10-30 — из `settings.json → tproxy.port` / `tproxy.dns_port` |
 | `blackhole` c `response.type: "http"` | [make_block_outbound](./xray-generate-config.py) | подтверждено |
 | DNS-outbound: `action: "hijack"`, `qType: "1,28"` | [build_dns_outbound](./xray-generate-config.py) | подтверждено |
-| Freedom: `sockopt.domainStrategy: "UseIPv4"` | [make_direct_outbound](./xray-generate-config.py) | подтверждено |
+| Freedom: `sockopt.domainStrategy: "UseIPv4"`, `sockopt.mark` (loop prevention) | [make_direct_outbound](./xray-generate-config.py) | подтверждено; значение `mark` с 2026-10-30 — из `settings.json → tproxy.mark`, и nftables использует ту же метку |
 | REALITY: `password` (+ `publicKey` для старых ядер) — приходит из JSON-подписки как есть | [xray-sub-parser.py](./xray-sub-parser.py) | подтверждено; `publicKey` — прежнее имя |
 
 ### Проверено на живом стенде (OpenWrt 25.12 в контейнере)

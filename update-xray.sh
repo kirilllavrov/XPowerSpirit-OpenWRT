@@ -94,6 +94,10 @@ TMP_DIR="/tmp/xray_update"
 GENERATOR="/usr/share/xray/xray-generate-config.py"
 PARSER="/usr/share/xray/xray-sub-parser.py"
 
+# Пути нужны sync_cron: по ним распознаются и перезаписываются строки crontab
+UPDATER="/usr/share/xray/update-xray.sh"
+SCRIPTS_UPDATER="/usr/share/xray/update-scripts.sh"
+
 GEO_DIR="/usr/share/xray"
 GEOIP="$GEO_DIR/geoip.dat"
 GEOSITE="$GEO_DIR/geosite.dat"
@@ -104,6 +108,51 @@ GEOSITE_URL=$(settings_get ".geo.geosite_url")
 mkdir -p "$STATE_DIR" "$TMP_DIR"
 
 echo "===== $(date) =====" >>"$LOG"
+
+# =============================================
+#   Синхронизация crontab по settings.json → update.cron
+# =============================================
+# Расписание живёт в настройках, а не в crontab: при изменении update.cron.*
+# строки перезаписываются здесь, переустановка не нужна.
+sync_cron() {
+    local scripts_cron xray_cron tmpfile
+    scripts_cron=$(settings_get ".update.cron.scripts" 2>/dev/null)
+    xray_cron=$(settings_get ".update.cron.xray" 2>/dev/null)
+    [ -n "$scripts_cron" ] || scripts_cron="20 2 * * *"
+    [ -n "$xray_cron" ] || xray_cron="30 2 * * *"
+
+    # Ровно пять полей: иначе cron молча не выполнит задачу.
+    # Считаем через awk, а не `set -- $_c`: звёздочки в расписании раскрылись бы
+    # как имена файлов текущего каталога.
+    local _c _n
+    for _c in "$scripts_cron" "$xray_cron"; do
+        _n=$(printf '%s' "$_c" | awk '{print NF}')
+        if [ "$_n" -ne 5 ]; then
+            echo "[!] Расписание '$_c' из update.cron некорректно (нужно 5 полей) — оставлено прежнее" >>"$LOG"
+            return 0
+        fi
+    done
+
+    tmpfile=$(mktemp) || return 0
+    crontab -l 2>/dev/null |
+        grep -v -e "$SCRIPTS_UPDATER" -e "$UPDATER" -e '^[[:space:]]*$' >"$tmpfile"
+    echo "$scripts_cron $SCRIPTS_UPDATER >>/tmp/log/xray-scripts.log 2>&1" >>"$tmpfile"
+    echo "$xray_cron $UPDATER >>/tmp/log/xray-update.log 2>&1" >>"$tmpfile"
+
+    # Сравнение строк, а не diff: в OpenWrt утилиты diff по умолчанию нет
+    if [ "$(crontab -l 2>/dev/null | grep -v '^[[:space:]]*$')" = "$(cat "$tmpfile")" ]; then
+        rm -f "$tmpfile"
+        return 0
+    fi
+    if crontab "$tmpfile"; then
+        echo "[+] Расписание обновлений синхронизировано: скрипты '$scripts_cron', Xray '$xray_cron'" >>"$LOG"
+    else
+        echo "[!] Не удалось обновить crontab" >>"$LOG"
+    fi
+    rm -f "$tmpfile"
+}
+
+sync_cron
 
 # =============================================
 #   Очистка/ротация логов (rotate_log из xray-common.sh)

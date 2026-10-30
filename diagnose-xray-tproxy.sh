@@ -6,15 +6,27 @@ _ok()   { printf "[OK]   %s\n" "$1"; }
 _warn() { printf "[WARN] %s\n" "$1"; }
 _fail() { printf "[FAIL] %s\n" "$1"; }
 
+# Параметры TProxy — из settings.json → tproxy: проверяем ровно те значения,
+# с которыми собраны config.json и правила nftables
+SETTINGS_JSON="${XRAY_SETTINGS_JSON:-/etc/xray/settings.json}"
+_sset() {
+    jq -r "$1 // empty" "$SETTINGS_JSON" 2>/dev/null
+}
+TPROXY_PORT=$(_sset '.tproxy.port');         [ -n "$TPROXY_PORT" ] || TPROXY_PORT=12345
+DNS_PORT=$(_sset '.tproxy.dns_port');        [ -n "$DNS_PORT" ] || DNS_PORT=5353
+TPROXY_MARK=$(_sset '.tproxy.mark');         [ -n "$TPROXY_MARK" ] || TPROXY_MARK=2
+TPROXY_FWMARK=$(_sset '.tproxy.fwmark');     [ -n "$TPROXY_FWMARK" ] || TPROXY_FWMARK=1
+ROUTE_TABLE=$(_sset '.tproxy.route_table');  [ -n "$ROUTE_TABLE" ] || ROUTE_TABLE=100
+
 # 1. Процесс
 printf "[1] Xray process:\n"
 pgrep -a xray >/dev/null && _ok "Xray запущен" || _fail "Xray НЕ запущен"
 
 # 2. Порты
-printf "\n[2] Listening on port 12345:\n"
-ss -tuln 2>/dev/null | grep -q ':12345' && \
-    _ok "Порт 12345 слушается" || \
-    _warn "Порт 12345 не найден в ss (для TProxy это норма)"
+printf "\n[2] Listening on port %s:\n" "$TPROXY_PORT"
+ss -tuln 2>/dev/null | grep -q ":$TPROXY_PORT" && \
+    _ok "Порт $TPROXY_PORT слушается" || \
+    _warn "Порт $TPROXY_PORT не найден в ss (для TProxy это норма)"
 
 # 3. Конфиг (TProxy + Mark)
 printf "\n[3] Config Xray:\n"
@@ -25,10 +37,10 @@ if jq -e 'any(.inbounds[]?; .streamSettings.sockopt.tproxy == "tproxy")' "$CFG" 
 else
     _fail "TProxy не настроен"
 fi
-if jq -e 'any(.outbounds[]?; .streamSettings.sockopt.mark == 2)' "$CFG" >/dev/null 2>&1; then
-    _ok "Mark 2 на месте (sockopt) — loop prevention через OUTPUT"
+if jq -e "any(.outbounds[]?; .streamSettings.sockopt.mark == $TPROXY_MARK)" "$CFG" >/dev/null 2>&1; then
+    _ok "Mark $TPROXY_MARK на месте (sockopt) — loop prevention через OUTPUT"
 else
-    _warn "Mark 2 не найден (может быть не указан явно)"
+    _warn "Mark $TPROXY_MARK не найден (может быть не указан явно)"
 fi
 
 # 4. nftables (inet fw4, цепочка xray_tproxy)
@@ -55,9 +67,9 @@ if [ -n "$CHAIN_EXISTS" ]; then
     [ "$BYPASS_CNT" -gt 0 ] && _ok "Bypass для серверов: $BYPASS_CNT правил" || _warn "Bypass для серверов не найден"
 
     # Проверяем TProxy правилa
-    echo "$CHAIN_EXISTS" | grep -q "tproxy ip to 127.0.0.1:12345" && \
-        _ok "TProxy на порт 12345 настроен" || \
-        _fail "TProxy на порт 12345 НЕ настроен!"
+    echo "$CHAIN_EXISTS" | grep -q "tproxy ip to 127.0.0.1:$TPROXY_PORT" && \
+        _ok "TProxy на порт $TPROXY_PORT настроен" || \
+        _fail "TProxy на порт $TPROXY_PORT НЕ настроен!"
 
     # Проверяем блокировку QUIC
     echo "$CHAIN_EXISTS" | grep -q "udp dport 443 drop" && \
@@ -77,12 +89,12 @@ if [ -n "$SELF_CHAIN" ]; then
         _fail "Цепочка xray_self есть, но без type route — mark не повлияет на маршрутизацию"
     fi
 
-    echo "$SELF_CHAIN" | grep -qE "meta mark (0x0*2|2) return" && \
-        _ok "Loop prevention (mark 2 return) настроена" || \
-        _warn "Loop prevention (mark 2 return) не найдена"
+    echo "$SELF_CHAIN" | grep -qE "meta mark (0x0*$TPROXY_MARK|$TPROXY_MARK) return" && \
+        _ok "Loop prevention (mark $TPROXY_MARK return) настроена" || \
+        _warn "Loop prevention (mark $TPROXY_MARK return) не найдена"
 
-    echo "$SELF_CHAIN" | grep -qE "mark set (0x0*1|0x00000001|1)$" && \
-        _ok "Маркировка трафика роутера (mark 1) настроена" || \
+    echo "$SELF_CHAIN" | grep -qE "mark set (0x0*$TPROXY_FWMARK|$(printf '0x%08x' "$TPROXY_FWMARK")|$TPROXY_FWMARK)\$" && \
+        _ok "Маркировка трафика роутера (mark $TPROXY_FWMARK) настроена" || \
         _warn "Маркировка трафика роутера не найдена"
 else
     _warn "Таблица inet xray_self отсутствует (трафик роутера не проксируется)"
@@ -95,13 +107,13 @@ fi
 
 # 6. Routing
 printf "\n[6] Policy Routing:\n"
-ip rule show 2>/dev/null | grep -qE "fwmark (0x1|1) lookup (100|xray)" && _ok "ip rule fwmark 1 → table 100" || _fail "ip rule отсутствует"
+ip rule show 2>/dev/null | grep -qE "fwmark (0x0*$TPROXY_FWMARK|$TPROXY_FWMARK) lookup ($ROUTE_TABLE|xray)" && _ok "ip rule fwmark $TPROXY_FWMARK → table $ROUTE_TABLE" || _fail "ip rule отсутствует"
 ip route show table 100 2>/dev/null | grep -q "local default" && _ok "Таблица 100: local default dev lo" || _fail "Таблица 100 неверна"
 
-# 7. dnsmasq → Xray DNS (порт 5353)
-printf "\n[7] DNS Forwarding (dnsmasq → Xray:5353):\n"
-uci show dhcp.@dnsmasq[0].server 2>/dev/null | grep -q "127.0.0.1#5353" && \
-    _ok "dnsmasq → 127.0.0.1:5353" || _fail "dnsmasq НЕ настроен на Xray DNS (5353)"
+# 7. dnsmasq → Xray DNS (tproxy.dns_port)
+printf "\n[7] DNS Forwarding (dnsmasq → Xray:%s):\n" "$DNS_PORT"
+uci show dhcp.@dnsmasq[0].server 2>/dev/null | grep -q "127.0.0.1#$DNS_PORT" && \
+    _ok "dnsmasq → 127.0.0.1:$DNS_PORT" || _fail "dnsmasq НЕ настроен на Xray DNS ($DNS_PORT)"
 
 # 8. Ошибки Xray
 printf "\n[8] Ошибки Xray:\n"
@@ -147,14 +159,14 @@ nslookup google.com 77.88.8.8 2>/dev/null | grep -q "Address:" && _ok "Внеш�
 
 # Рекомендации
 printf "\n============= РЕКОМЕНДАЦИИ =============\n"
-if ! nft list chain inet fw4 xray_tproxy 2>/dev/null | grep -q "tproxy ip to 127.0.0.1:12345"; then
+if ! nft list chain inet fw4 xray_tproxy 2>/dev/null | grep -q "tproxy ip to 127.0.0.1:$TPROXY_PORT"; then
     printf "[FIX NFT] TProxy правила отсутствуют — выполни:\n"
     printf "  /usr/share/xray/update-nft.sh\n"
 fi
-if ! uci show dhcp.@dnsmasq[0].server 2>/dev/null | grep -q "127.0.0.1#5353"; then
+if ! uci show dhcp.@dnsmasq[0].server 2>/dev/null | grep -q "127.0.0.1#$DNS_PORT"; then
     printf "[FIX DNSMASQ] Выполни:\n"
     printf "  uci set dhcp.@dnsmasq[0].noresolv='1'\n"
-    printf "  uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'\n"
+    printf "  uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#%s'\n" "$DNS_PORT"
     printf "  uci commit && /etc/init.d/dnsmasq restart\n"
 fi
 printf "\n=== END ===\n"

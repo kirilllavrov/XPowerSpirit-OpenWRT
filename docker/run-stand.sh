@@ -25,6 +25,8 @@ jq --arg p "$PRESET" --arg h "$HWID" --arg u "$SUB_URL" \
     '.log.preset = $p | .hwid = $h | .subscription.url = $u' \
     "$SRC/settings.default.json" >"$SETTINGS"
 export XRAY_SETTINGS_FILE="$SETTINGS"
+TPROXY_PORT=$(jq -r '.tproxy.port // 12345' "$SETTINGS" 2>/dev/null)
+[ -n "$TPROXY_PORT" ] || TPROXY_PORT=12345
 
 printf '=== Стенд XPowerSpirit-OpenWRT ===\n'
 printf 'xray: %s\n' "$(xray version | head -1)"
@@ -35,8 +37,8 @@ printf 'HWID: %s\n\n' "$HWID"
 sub_host() { printf '%s' "$1" | awk -F/ '{print $3}'; }
 
 # Runtime-проверка: `xray run -test` разбирает конфиг, но не запускает его.
-# Здесь Xray реально стартует, и мы проверяем, что он жив, слушает 12345
-# и не пишет [Error] в журнал.
+# Здесь Xray реально стартует, и мы проверяем, что он жив, слушает порт
+# tproxy-in из settings.json → tproxy.port и не пишет [Error] в журнал.
 runtime_smoke() {
     cfg=$1
     secs=${RUNTIME_SECONDS:-6}
@@ -51,9 +53,10 @@ runtime_smoke() {
     sleep "$secs"
 
     # Порт проверяем до остановки процесса: после kill сокет уже закрыт.
-    # tproxy-inbound биндится на 0.0.0.0:12345 (0x3039) и виден в dual-stack таблицах.
+    # В /proc/net/* порт записан в hex, поэтому переводим значение из настроек.
+    port_hex=$(printf '%04X' "$TPROXY_PORT")
     listening=0
-    if grep -qi ':3039' /proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6 2>/dev/null; then
+    if grep -qi ":$port_hex" /proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6 2>/dev/null; then
         listening=1
     fi
 
@@ -65,12 +68,12 @@ runtime_smoke() {
     errors=$(grep -c '\[Error\]' /tmp/log/xray-error.log 2>/dev/null || true)
 
     if [ "$alive" = 1 ] && [ "$listening" = 1 ] && [ "${errors:-0}" = 0 ]; then
-        printf '[ OK ] Xray запустился, порт 12345 слушается, [Error] в журнале нет\n'
+        printf '[ OK ] Xray запустился, порт %s слушается, [Error] в журнале нет\n' "$TPROXY_PORT" 
         return 0
     fi
 
-    printf '[FAIL] Xray: жив=%s, порт 12345=%s, строк [Error]=%s\n' \
-        "$alive" "$listening" "${errors:-0}"
+    printf '[FAIL] Xray: жив=%s, порт %s=%s, строк [Error]=%s\n' \
+        "$alive" "$TPROXY_PORT" "$listening" "${errors:-0}"
     printf -- '--- сокеты (tcp6, первые 3 строки) ---\n'
     head -3 /proc/net/tcp6 2>/dev/null || true
     printf -- '--- run.log ---\n'

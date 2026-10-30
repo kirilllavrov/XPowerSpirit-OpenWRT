@@ -22,6 +22,7 @@ import json
 import sys
 import argparse
 import os
+import ipaddress
 
 # ============================================
 #   КОНФИГУРАЦИЯ
@@ -60,10 +61,21 @@ ROUTING_KEYS = (
 ROUTING_OPTIONAL_KEYS = {
     # Протоколы (sniffing), которым разрешён прямой выход — например bittorrent
     "direct_protocols": [],
+    # QUIC (UDP/443) блокируется и в Xray, и в nftables — переключатель общий
+    "block_quic": True,
 }
 
 # Значения, документированные для RuleObject.protocol
 ROUTING_PROTOCOLS = ("http", "tls", "quic", "bittorrent")
+
+# Подсети, которые nftables не заворачивает в TProxy (локальные и служебные)
+DEFAULT_BYPASS_CIDRS = [
+    "127.0.0.0/8",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+]
 
 # Пресеты журналирования Xray. Роутер пишет минимум (журналы живут в tmpfs, то есть
 # в RAM), стенд в контейнере — подробно. Значения полей log.* — из официальной
@@ -101,10 +113,317 @@ NETWORK_SETTINGS_KEYS = {"tcp": ("tcpSettings", "rawSettings")}
 
 LOG_CONFIG = {}
 
+# DNS: hosts (прибитые IP для DoH-доменов) и servers (адреса резолверов).
+# Живут в settings.json → dns, потому что это данные, а не логика: адреса
+# меняются у провайдеров, а правка кода требует обновления скриптов на роутере.
+# DEFAULT_DNS_* применяются только к старым settings.json без секции dns —
+# иначе после обновления роутер остался бы без резолверов.
+DEFAULT_DNS_HOSTS = {
+    "common.dot.dns.yandex.net": ["77.88.8.1", "77.88.8.8"],
+    "cloudflare-dns.com": ["1.0.0.1", "1.1.1.1"],
+    "dns.nextdns.io": ["45.90.28.0", "45.90.30.0"],
+}
+DEFAULT_DNS_SERVERS = [
+    {
+        "address": "https+local://common.dot.dns.yandex.net/dns-query",
+        "domains": ["geosite:category-ru"],
+        "expectedIPs": ["geoip:ru"],
+        "skipFallback": True,
+    },
+    {
+        "address": "https+local://cloudflare-dns.com/dns-query",
+        "skipFallback": False,
+    },
+    {
+        "address": "https+local://dns.nextdns.io",
+        "skipFallback": False,
+    },
+]
+
+# Схемы адреса DNS-сервера, описанные в документации (раздел DNS)
+DNS_ADDRESS_SCHEMES = (
+    "https+local://",
+    "https://",
+    "h2c://",
+    "tcp+local://",
+    "tcp://",
+    "quic+local://",
+    "udp://",
+)
+
+# Настройки DNS-модуля (раздел DNS документации). Имена — как в Xray, чтобы
+# значение переносилось в конфиг без переименования: settings — это данные.
+DNS_TUNING_DEFAULTS = {
+    "queryStrategy": "UseIPv4",
+    "disableCache": False,
+    "serveStale": True,
+    "serveExpiredTTL": 600,
+    "disableFallback": False,
+    "disableFallbackIfMatch": True,
+    "enableParallelQuery": True,
+}
+DNS_QUERY_STRATEGIES = ("UseIP", "UseIPv4", "UseIPv6", "UseSystem")
+DNS_BOOL_KEYS = ("disableCache", "serveStale", "disableFallback",
+                 "disableFallbackIfMatch", "enableParallelQuery")
+# Резервный апстрим dnsmasq: нужен, когда Xray ещё не поднялся
+DEFAULT_DNSMASQ_FALLBACK = "77.88.8.8"
+
+DNS_CONFIG = {}
+
+# Параметры TProxy. Продублированы в nftables, init.d, диагностике и на стенде —
+# поэтому живут в settings, а не в коде: рассогласование порта или метки даёт
+# трафик «в никуда» без единой ошибки в журнале.
+DEFAULT_TPROXY = {
+    "port": 12345,     # tproxy-in в Xray + цель tproxy в nftables
+    "dns_port": 5353,  # dns-local в Xray + апстрим dnsmasq
+    "mark": 2,         # метка пакетов самого Xray (loop prevention)
+    "fwmark": 1,       # метка трафика роутера для policy routing
+    "route_table": 100,  # таблица, куда уходит fwmark
+}
+TPROXY_CONFIG = {}
+
+
+def load_tproxy(section: dict) -> dict:
+    """
+    Читает параметры TProxy из settings.json → tproxy.
+    Значения попадают не только в config.json, но и в nftables/init.d, поэтому
+    проверяются здесь: опечатка в метке ломает маршрутизацию молча.
+    """
+    cfg = dict(DEFAULT_TPROXY)
+    cfg.update({k: v for k, v in section.items() if k in DEFAULT_TPROXY})
+
+    unknown = [k for k in section if k not in DEFAULT_TPROXY]
+    if unknown:
+        print(f"  [!] В settings.json → tproxy неизвестные ключи проигнорированы: "
+              f"{', '.join(unknown)}", file=sys.stderr)
+
+    for key, value in cfg.items():
+        if not isinstance(value, int) or isinstance(value, bool):
+            log_error(f"В {SETTINGS_FILE} → tproxy.{key} должно быть целым числом")
+            sys.exit(1)
+        if value <= 0:
+            log_error(f"В {SETTINGS_FILE} → tproxy.{key} должно быть больше нуля")
+            sys.exit(1)
+        if key in ("port", "dns_port") and value > 65535:
+            log_error(f"В {SETTINGS_FILE} → tproxy.{key} вне диапазона 1..65535")
+            sys.exit(1)
+
+    # mark — метка пакетов Xray, fwmark — метка трафика роутера. Совпадение
+    # означает, что правило loop prevention пропустит весь трафик роутера мимо
+    # TProxy, а трафик Xray попадёт в policy routing — прокси перестанет работать.
+    if cfg["mark"] == cfg["fwmark"]:
+        log_error(f"В {SETTINGS_FILE} → tproxy.mark и tproxy.fwmark совпадают "
+                  f"({cfg['mark']}): трафик Xray и роутера нельзя маркировать одинаково")
+        sys.exit(1)
+
+    return cfg
+
+
+# Проверка probe-URL балансировщика: один адрес на observatory и на LED-индикатор.
+DEFAULT_PROBE_URL = "https://connectivitycheck.gstatic.com/generate_204"
+PROBE_URL = DEFAULT_PROBE_URL
+
+# Балансировщик: strategy/strategySettings — из BalancerObject, pingConfig — из
+# burstObservatory.pingConfig. destination намеренно НЕ читается из pingConfig:
+# единственный источник — health.probe_url, иначе получаются два разных URL.
+BALANCER_STRATEGIES = ("random", "roundRobin", "leastPing", "leastLoad")
+BALANCER_STRATEGY_SETTINGS_KEYS = ("expected", "maxRTT", "tolerance", "baselines", "costs")
+PING_CONFIG_KEYS = ("connectivity", "interval", "sampling", "timeout", "httpMethod")
+DEFAULT_BALANCER = {
+    "strategy": "leastLoad",
+    "strategySettings": {},
+    "pingConfig": {
+        "interval": "1m",
+        "sampling": 10,
+        "timeout": "15s",
+        "httpMethod": "GET",
+    },
+}
+BALANCER_CONFIG = {}
+
+
+def load_health(section: dict) -> str:
+    """Читает health.probe_url — адрес проверки доступности для observatory и LED"""
+    url = section.get("probe_url")
+    if url is None:
+        return DEFAULT_PROBE_URL
+    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        log_error(f"В {SETTINGS_FILE} → health.probe_url должен быть http(s)-адресом")
+        sys.exit(1)
+    return url
+
+
+def load_balancer(section: dict) -> dict:
+    """
+    Читает balancer: strategy, strategySettings, pingConfig.
+    Неизвестные ключи — ошибка, а не молчаливый пропуск: опечатка в strategy
+    оставила бы конфиг с недокументированным значением, который ядро отвергнет.
+    """
+    unknown = [k for k in section if k not in ("strategy", "strategySettings", "pingConfig")]
+    if unknown:
+        log_error(f"В {SETTINGS_FILE} → balancer неизвестные ключи: {', '.join(unknown)}")
+        log_error("Допустимые ключи: strategy, strategySettings, pingConfig")
+        sys.exit(1)
+
+    cfg = {
+        "strategy": section.get("strategy", DEFAULT_BALANCER["strategy"]),
+        "strategySettings": dict(section.get("strategySettings") or {}),
+        "pingConfig": dict(DEFAULT_BALANCER["pingConfig"]),
+    }
+
+    if cfg["strategy"] not in BALANCER_STRATEGIES:
+        log_error(f"В {SETTINGS_FILE} → balancer.strategy недопустимое значение: "
+                  f"{cfg['strategy']!r}")
+        log_error(f"Документированные значения: {', '.join(BALANCER_STRATEGIES)}")
+        sys.exit(1)
+
+    # strategySettings документированы только для leastLoad
+    if cfg["strategySettings"] and cfg["strategy"] != "leastLoad":
+        log_error(f"В {SETTINGS_FILE} → balancer.strategySettings применимы только "
+                  f"к strategy=leastLoad, а выбрано {cfg['strategy']!r}")
+        sys.exit(1)
+    bad = [k for k in cfg["strategySettings"] if k not in BALANCER_STRATEGY_SETTINGS_KEYS]
+    if bad:
+        log_error(f"В {SETTINGS_FILE} → balancer.strategySettings неизвестные ключи: "
+                  f"{', '.join(bad)}")
+        log_error(f"Документированные ключи: {', '.join(BALANCER_STRATEGY_SETTINGS_KEYS)}")
+        sys.exit(1)
+    expected = cfg["strategySettings"].get("expected")
+    if expected is not None and (not isinstance(expected, int) or isinstance(expected, bool)
+                                 or expected <= 0):
+        log_error(f"В {SETTINGS_FILE} → balancer.strategySettings.expected "
+                  f"должно быть целым числом больше нуля")
+        sys.exit(1)
+
+    ping = section.get("pingConfig") or {}
+    if not isinstance(ping, dict):
+        log_error(f"В {SETTINGS_FILE} → balancer.pingConfig должен быть объектом")
+        sys.exit(1)
+    if "destination" in ping:
+        log_error(f"В {SETTINGS_FILE} → balancer.pingConfig.destination не поддерживается: "
+                  f"адрес проверки задаётся один раз в health.probe_url")
+        sys.exit(1)
+    bad = [k for k in ping if k not in PING_CONFIG_KEYS]
+    if bad:
+        log_error(f"В {SETTINGS_FILE} → balancer.pingConfig неизвестные ключи: {', '.join(bad)}")
+        log_error(f"Документированные ключи: {', '.join(PING_CONFIG_KEYS)}")
+        sys.exit(1)
+    cfg["pingConfig"].update(ping)
+
+    sampling = cfg["pingConfig"].get("sampling")
+    if not isinstance(sampling, int) or isinstance(sampling, bool) or sampling <= 0:
+        log_error(f"В {SETTINGS_FILE} → balancer.pingConfig.sampling "
+                  f"должно быть целым числом больше нуля")
+        sys.exit(1)
+
+    return cfg
+
+
+def load_dns(dns_section: dict) -> dict:
+    """
+    Читает hosts, servers и настройки DNS-модуля из settings.json → dns и проверяет их.
+    Пустая секция (старый settings.json) — встроенные значения по умолчанию.
+    Ошибка в адресе сервера фатальна: с невалидным DNS роутер останется без
+    резолвинга, а xray run -test такую ошибку увидит уже после записи конфига.
+    """
+    hosts = dns_section.get("hosts")
+    servers = dns_section.get("servers")
+
+    cfg = dict(DNS_TUNING_DEFAULTS)
+    for key in DNS_TUNING_DEFAULTS:
+        if key in dns_section:
+            cfg[key] = dns_section[key]
+
+    if cfg["queryStrategy"] not in DNS_QUERY_STRATEGIES:
+        log_error(f"В {SETTINGS_FILE} → dns.queryStrategy недопустимое значение: "
+                  f"{cfg['queryStrategy']!r}")
+        log_error(f"Документированные значения: {', '.join(DNS_QUERY_STRATEGIES)}")
+        sys.exit(1)
+    for key in DNS_BOOL_KEYS:
+        if not isinstance(cfg[key], bool):
+            log_error(f"В {SETTINGS_FILE} → dns.{key} должно быть true или false")
+            sys.exit(1)
+    ttl = cfg["serveExpiredTTL"]
+    if not isinstance(ttl, int) or isinstance(ttl, bool) or ttl < 0:
+        log_error(f"В {SETTINGS_FILE} → dns.serveExpiredTTL должно быть целым числом "
+                  f"секунд (0 и больше)")
+        sys.exit(1)
+
+    fallback = dns_section.get("dnsmasq_fallback", DEFAULT_DNSMASQ_FALLBACK)
+    if not isinstance(fallback, str) or not fallback:
+        log_error(f"В {SETTINGS_FILE} → dns.dnsmasq_fallback должен быть непустой строкой")
+        sys.exit(1)
+    cfg["dnsmasq_fallback"] = fallback
+
+    unknown = [k for k in dns_section
+               if k not in ("hosts", "servers", "dnsmasq_fallback", *DNS_TUNING_DEFAULTS)]
+    if unknown:
+        print(f"  [!] В settings.json → dns неизвестные ключи проигнорированы: "
+              f"{', '.join(unknown)}", file=sys.stderr)
+
+    if hosts is None and servers is None:
+        print("  [!] В settings.json нет секции dns — используются встроенные DNS",
+              file=sys.stderr)
+        cfg["hosts"] = dict(DEFAULT_DNS_HOSTS)
+        cfg["servers"] = [dict(s) for s in DEFAULT_DNS_SERVERS]
+        return cfg
+
+    if hosts is None:
+        hosts = {}
+    if servers is None:
+        servers = []
+
+    if not isinstance(hosts, dict):
+        log_error(f"В {SETTINGS_FILE} → dns.hosts должен быть объектом")
+        sys.exit(1)
+    if not isinstance(servers, list):
+        log_error(f"В {SETTINGS_FILE} → dns.servers должен быть массивом")
+        sys.exit(1)
+
+    clean_hosts = {}
+    for name, value in hosts.items():
+        values = value if isinstance(value, list) else [value]
+        if not values or not all(isinstance(v, str) and v for v in values):
+            log_error(f"В {SETTINGS_FILE} → dns.hosts[{name!r}]: нужен IP или список IP")
+            sys.exit(1)
+        clean_hosts[name] = list(values)
+
+    if not servers:
+        log_error(f"В {SETTINGS_FILE} → dns.servers пуст: без резолверов конфиг нерабочий")
+        sys.exit(1)
+
+    clean_servers = []
+    for i, server in enumerate(servers):
+        if not isinstance(server, dict) or not isinstance(server.get("address"), str):
+            log_error(f"В {SETTINGS_FILE} → dns.servers[{i}]: нужен объект с полем address")
+            sys.exit(1)
+        address = server["address"]
+        if "://" in address and not address.startswith(DNS_ADDRESS_SCHEMES):
+            log_error(f"В {SETTINGS_FILE} → dns.servers[{i}].address: "
+                      f"недокументированная схема {address!r}")
+            log_error(f"Документированные схемы: {', '.join(DNS_ADDRESS_SCHEMES)}")
+            sys.exit(1)
+        clean_servers.append(dict(server))
+
+    # DOHL-сервер резолвится сам собой: если его адрес не прибит в hosts,
+    # получается петля (документация: «注意可能的回环问题, hosts 可能有帮助»)
+    unpinned = [s["address"].split("://", 1)[1].split("/")[0]
+                for s in clean_servers
+                if s["address"].startswith(("https+local://", "tcp+local://", "quic+local://"))
+                and "." in s["address"].split("://", 1)[1].split("/")[0]
+                and s["address"].split("://", 1)[1].split("/")[0] not in clean_hosts]
+    if unpinned:
+        print(f"  [!] Адреса резолверов не прибиты в dns.hosts: {', '.join(unpinned)} — "
+              f"возможна петля при резолвинге", file=sys.stderr)
+
+    cfg["hosts"] = clean_hosts
+    cfg["servers"] = clean_servers
+    return cfg
+
 
 def load_settings():
-    """Загружает routing и пресет журналирования из settings.json"""
-    global ROUTING_CONFIG, LOG_CONFIG
+    """Загружает routing, пресет журналирования и DNS из settings.json"""
+    global ROUTING_CONFIG, LOG_CONFIG, DNS_CONFIG, TPROXY_CONFIG, BALANCER_CONFIG, PROBE_URL
 
     if not os.path.isfile(SETTINGS_FILE):
         log_error(f"Нет {SETTINGS_FILE} — правила роутинга задаются только там")
@@ -140,6 +459,25 @@ def load_settings():
         log_error(f"Документированные значения RuleObject.protocol: {', '.join(ROUTING_PROTOCOLS)}")
         sys.exit(1)
 
+    if not isinstance(ROUTING_CONFIG["block_quic"], bool):
+        log_error(f"В {SETTINGS_FILE} → routing.block_quic должно быть true или false")
+        sys.exit(1)
+
+    # bypass_cidrs читает update-nft.sh (сам по себе он не умеет проверять CIDR),
+    # поэтому проверка здесь: update-xray.sh запускает генератор раньше nftables и
+    # не даст применить правила с битой подсетью.
+    bypass_cidrs = routing.get("bypass_cidrs", DEFAULT_BYPASS_CIDRS)
+    if not isinstance(bypass_cidrs, list) or not bypass_cidrs:
+        log_error(f"В {SETTINGS_FILE} → routing.bypass_cidrs должен быть непустым массивом")
+        sys.exit(1)
+    for cidr in bypass_cidrs:
+        try:
+            ipaddress.ip_network(str(cidr), strict=False)
+        except ValueError:
+            log_error(f"В {SETTINGS_FILE} → routing.bypass_cidrs: не подсеть {cidr!r}")
+            sys.exit(1)
+    ROUTING_CONFIG["bypass_cidrs"] = [str(c) for c in bypass_cidrs]
+
     log_section = settings.get("log") or {}
     preset = log_section.get("preset") or DEFAULT_LOG_PRESET
     if preset not in LOG_PRESETS:
@@ -148,6 +486,11 @@ def load_settings():
         sys.exit(1)
     LOG_CONFIG = LOG_PRESETS[preset]
     print(f"  → Пресет журналирования: {preset}", file=sys.stderr)
+
+    DNS_CONFIG = load_dns(settings.get("dns") or {})
+    TPROXY_CONFIG = load_tproxy(settings.get("tproxy") or {})
+    BALANCER_CONFIG = load_balancer(settings.get("balancer") or {})
+    PROBE_URL = load_health(settings.get("health") or {})
 
 
 # ============================================
@@ -229,7 +572,7 @@ def normalize_outbound(ob: dict) -> dict:
     if "sockopt" not in ob["streamSettings"]:
         ob["streamSettings"]["sockopt"] = {}
     
-    ob["streamSettings"]["sockopt"]["mark"] = 2
+    ob["streamSettings"]["sockopt"]["mark"] = TPROXY_CONFIG["mark"]
     ob["streamSettings"]["sockopt"]["tcpKeepAliveInterval"] = 30
     
     # Отключаем mux (не нужен для TProxy)
@@ -246,46 +589,23 @@ def normalize_outbound(ob: dict) -> dict:
 
 def base_config() -> dict:
     """Возвращает базовую конфигурацию Xray с TProxy и DNS"""
+    dns = {
+        "tag": "dns-inbuilt",
+        # hosts и servers, а также настройки DNS-модуля — из settings.json → dns
+        "hosts": {k: list(v) for k, v in DNS_CONFIG["hosts"].items()},
+        "servers": [dict(s) for s in DNS_CONFIG["servers"]],
+    }
+    dns.update({key: DNS_CONFIG[key] for key in DNS_TUNING_DEFAULTS})
     return {
         "log": dict(LOG_CONFIG),
-        "dns": {
-            "tag": "dns-inbuilt",
-            "queryStrategy": "UseIPv4",
-            "disableCache": False,
-            "serveStale": True,
-            "serveExpiredTTL": 600,
-            "disableFallback": False,
-            "disableFallbackIfMatch": True,
-            "enableParallelQuery": True,
-            "hosts": {
-                "common.dot.dns.yandex.net": ["77.88.8.1", "77.88.8.8"],
-                "cloudflare-dns.com": ["1.0.0.1", "1.1.1.1"],
-                "dns.nextdns.io": ["45.90.28.0", "45.90.30.0"]
-            },
-            "servers": [
-                {
-                    "address": "https+local://common.dot.dns.yandex.net/dns-query",
-                    "domains": ["geosite:category-ru"],
-                    "expectedIPs": ["geoip:ru"],
-                    "skipFallback": True
-                },
-                {
-                    "address": "https+local://cloudflare-dns.com/dns-query",
-                    "skipFallback": False
-                },
-                {
-                    "address": "https+local://dns.nextdns.io",
-                    "skipFallback": False
-                }
-            ]
-        },
+        "dns": dns,
         # Протокол inbound документирован как tunnel (см. xray-config-reference.md);
         # dokodemo-door — его прежнее название, в перечне protocol его больше нет
         "inbounds": [
             {
                 "tag": "tproxy-in",
                 "listen": "0.0.0.0",
-                "port": 12345,
+                "port": TPROXY_CONFIG["port"],
                 "protocol": "tunnel",
                 "settings": {
                     "allowedNetwork": "tcp,udp",
@@ -305,7 +625,7 @@ def base_config() -> dict:
             {
                 "tag": "dns-local",
                 "listen": "127.0.0.1",
-                "port": 5353,
+                "port": TPROXY_CONFIG["dns_port"],
                 "protocol": "tunnel",
                 "settings": {
                     "allowedNetwork": "tcp,udp"
@@ -350,7 +670,7 @@ def make_direct_outbound() -> dict:
         "settings": {},
         "streamSettings": {
             "sockopt": {
-                "mark": 2,
+                "mark": TPROXY_CONFIG["mark"],
                 "domainStrategy": "UseIPv4",
                 "tcpKeepAliveInterval": 30
             }
@@ -471,12 +791,18 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
             "network": "udp",
             "outboundTag": "direct"
         },
-        # QUIC (UDP/443) — блокируем на уровне Xray (VLESS+XTLS не поддерживает UDP)
-        {
+    ]
+
+    # QUIC (UDP/443): VLESS+XTLS не поддерживает UDP, поэтому по умолчанию
+    # блокируем. Тот же переключатель управляет drop-правилом в nftables.
+    if ROUTING_CONFIG["block_quic"]:
+        rules.append({
             "port": "443",
             "network": "udp",
             "outboundTag": "block"
-        },
+        })
+
+    rules += [
         # Локальные и российские IP — напрямую
         {
             "ip": ROUTING_CONFIG["direct_ips"],
@@ -519,17 +845,18 @@ def build_rules(proxy_outbounds: list, direct_mode: bool = False) -> list:
 
 def build_balancer(proxy_outbounds: list) -> dict:
     """
-    Создаёт конфигурацию балансировщика для нескольких прокси (leastLoad).    
-    leastLoad выбирает наиболее стабильные серверы на основе данных burstObservatory.    
+    Создаёт конфигурацию балансировщика (стратегия — из settings.json → balancer).
+    leastLoad выбирает наиболее стабильные серверы на основе данных burstObservatory.
     Если все серверы не проходят — fallback на direct.
     """
     selector = [ob["tag"] for ob in proxy_outbounds]
+    strategy = {"type": BALANCER_CONFIG["strategy"]}
+    if BALANCER_CONFIG["strategySettings"]:
+        strategy["settings"] = dict(BALANCER_CONFIG["strategySettings"])
     return {
         "tag": "balancer",
         "selector": selector,
-        "strategy": {
-            "type": "leastLoad",
-        },
+        "strategy": strategy,
         "fallbackTag": "direct"
     }
 
@@ -537,24 +864,18 @@ def build_balancer(proxy_outbounds: list) -> dict:
 def build_burst_observatory(proxy_outbounds: list) -> dict:
     """
     Создаёт конфигурацию burstObservatory для мониторинга прокси.
-    Используется со стратегией leastLoad.
-    
-    Пингует connectivitycheck.gstatic.com (Google Connectivity Check) —
-    более надёжный endpoint, чем google.com, не троттлится.
+
+    Пингует адрес из settings.json → health.probe_url — он же используется
+    LED-индикатором, чтобы проверка доступности была одна на всю систему.
     GET вместо HEAD — лучше совместимость с прокси-протоколами.
-    Таймаут 15s — с запасом на Reality/TLS handshake.
     """
     subject_selector = [ob["tag"] for ob in proxy_outbounds]
+    ping_config = {"destination": PROBE_URL}
+    ping_config.update({k: v for k, v in BALANCER_CONFIG["pingConfig"].items()})
     return {
         "burstObservatory": {
             "subjectSelector": subject_selector,
-            "pingConfig": {
-                "destination": "http://connectivitycheck.gstatic.com/generate_204",
-                "interval": "1m",
-                "sampling": 10,
-                "timeout": "15s",
-                "httpMethod": "GET"
-            }
+            "pingConfig": ping_config
         }
     }
 

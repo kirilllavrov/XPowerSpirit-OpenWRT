@@ -86,7 +86,7 @@
 6. **Маршрутизация**:
    - `geoip:ru`, `geoip:private` → напрямую (`direct`)
    - `geosite:private`, `geosite:category-browser`, `geosite:category-cdn-ru`, `geosite:category-mobile`, `geosite:category-ru` → напрямую
-   - `geosite:category-ads` → `block`, QUIC (UDP/443) → `block`, NTP (UDP/123) → `direct`
+   - `geosite:category-ads` → `block`, QUIC (UDP/443) → `block` (отключается ключом `routing.block_quic`), NTP (UDP/123) → `direct`
    - `geosite:category-streaming`, `geosite:category-games` и весь остальной TCP/UDP → `balancer` (leastLoad, fallback `direct`)
 
 ---
@@ -234,9 +234,9 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
    - Пропускает установку, если версия уже актуальна; кэширует ZIP по SHA
 8. **Настройка DNS** — dnsmasq без `resolv`-файла, `strictorder`, кэш 1000 записей, TTL 300–600, серверы `127.0.0.1#5353` (Xray) + fallback `77.88.8.8`
 9. **Init-скрипт** — `/etc/init.d/xray` (`procd`): ожидание сети, синхронизация времени, проверка geo-файлов и конфига, применение nftables-правил, `respawn 3600 5 5`
-10. **Маршрутизация** — таблица `xray` (ID 100) в `/etc/iproute2/rt_tables`
+10. **Маршрутизация** — таблица `xray` (ID из `settings.json → tproxy.route_table`, по умолчанию 100) в `/etc/iproute2/rt_tables`
 11. **Sysctl** — `route_localnet`, `ip_forward` (+ `/etc/sysctl.d/99-xray.conf`)
-12. **Cron** — автообновление в 2:30 (`30 2 * * *`)
+12. **Cron** — автообновление по расписанию из `settings.json → update.cron` (по умолчанию 2:30)
 13. **Hotplug** — автообновление при подъёме WAN (`ifup wan`), но только после успешной проверки интернета
 14. **Гео-базы** — `geoip.dat` / `geosite.dat` с проверкой SHA256
 15. **HWID** — уникальный ID устройства (`/proc/sys/kernel/random/uuid` без дефисов). При переустановке берётся прежний HWID из `settings.json`: подписка на одно устройство не тратит ещё один слот
@@ -376,7 +376,8 @@ curl -fsSL https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/XPowerSpirit-Open
 
 **Запуск:** Вручную или автоматически:
 
-- Cron: `30 2 * * *` (ежедневно в 2:30), после `update-scripts.sh` (2:20)
+- Cron: расписание из `settings.json → update.cron.xray` (по умолчанию `30 2 * * *`), после `update-scripts.sh`
+- Строки crontab перезаписываются при каждом запуске (`sync_cron`), поэтому расписание меняется правкой настроек
 - Hotplug: при событии `ifup wan` (после того как интернет станет доступен), после `update-scripts.sh`
 
 ---
@@ -390,25 +391,27 @@ curl -fsSL https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/XPowerSpirit-Open
 1. **Автоопределение интерфейсов** — `br-lan` (fallback: `network.lan`), `br-guest` (fallback: `network.guest`), `br-iot` (fallback: `network.iot`)
 2. **Извлечение IP серверов и DNS** — Python-парсер `config.json` собирает `vnext[].address` из всех outbound-ов (пропуская `hole`, `0.0.0.0`, `127.0.0.1` и имена без точки) и IP из `dns.hosts`/`dns.servers`; при неудачном применении правил скрипт завершается с ошибкой
 3. **Policy Routing** (идемпотентно — старые правила удаляются):
-   - `ip rule add fwmark 1 table 100`
-   - `ip route add local 0.0.0.0/0 dev lo table 100`
+   - `ip rule add fwmark <tproxy.fwmark> table <tproxy.route_table>` (по умолчанию `1` / `100`)
+   - `ip route add local 0.0.0.0/0 dev lo table <tproxy.route_table>`
+   - применённые значения запоминаются в `/etc/xray/state/tproxy.state`: если поменять `tproxy.fwmark` или `tproxy.route_table`, прежние `ip rule` и таблица маршрутизации снимаются, а не остаются висеть в системе
+   - `--dry-run` печатает правила, ничего не применяя (используется в тестах)
 4. **Создание/очистка цепочек** `inet fw4 xray_tproxy` (вызов из `prerouting`) и таблицы `inet xray_self` (`type route hook output priority mangle`); при повторном запуске цепочка `xray_tproxy` очищается (`flush`), jump-правило не дублируется, таблица `xray_self` пересоздаётся. Устаревшая схема с `fw4 xray_output` удаляется автоматически
 
 5. **PREROUTING (`xray_tproxy`)** — порядок правил важен:
-   - `meta mark 2 return` — защита от петель (Xray-аутбаунды маркируют свои пакеты `mark = 2`)
-   - Bypass локальных адресов: `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`
+   - `meta mark <tproxy.mark> return` — защита от петель (Xray-аутбаунды маркируют свои пакеты этой меткой)
+   - Bypass подсетей из `routing.bypass_cidrs` (по умолчанию `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`)
    - Bypass DNS-резолверов: `77.88.8.8`, `77.88.8.1`, `1.1.1.1`, `1.0.0.1`, `45.90.28.0`, `45.90.30.0`
    - Bypass DHCP (UDP 67/68)
    - Bypass IP прокси-серверов из `config.json`
    - Bypass `br-guest` и `br-iot` (если интерфейсы существуют) — их трафик не проксируется
-   - **Блокировка QUIC** — `iifname <LAN> udp dport 443 drop` (до TProxy)
-   - **TProxy для LAN** — `iifname <LAN>` TCP/UDP → `tproxy ip to 127.0.0.1:12345 meta mark set 0x1 accept`
-   - **TProxy для трафика роутера** — правила без `iifname` для пакетов с `meta mark 0x1`, возвращённых из `xray_self` через таблицу 100
+   - **Блокировка QUIC** — `iifname <LAN> udp dport 443 drop` (до TProxy); правило создаётся только при `routing.block_quic: true`
+   - **TProxy для LAN** — `iifname <LAN>` TCP/UDP → `tproxy ip to 127.0.0.1:<tproxy.port> meta mark set <tproxy.fwmark> accept`
+   - **TProxy для трафика роутера** — правила без `iifname` для пакетов с `meta mark <tproxy.fwmark>`, возвращённых из `xray_self` через таблицу `<tproxy.route_table>`
 
 6. **OUTPUT (`inet xray_self`, `type route hook output priority mangle`)** — трафик самого роутера:
-   - `meta mark 2 return`
+   - `meta mark <tproxy.mark> return`
    - Те же bypass-правила (локальные сети, DNS, DHCP, IP прокси-серверов)
-   - `meta l4proto tcp/udp meta mark set 1` — маркировка, по которой пакет через policy routing возвращается в `prerouting` и попадает под TProxy
+   - `meta l4proto tcp/udp meta mark set <tproxy.fwmark>` — маркировка, по которой пакет через policy routing возвращается в `prerouting` и попадает под TProxy
 
 7. **Завершение** — запись в syslog (`logger -t update-nft`)
 
@@ -450,7 +453,7 @@ curl -fsSL https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/XPowerSpirit-Open
 
 **Запуск:** Вручную или автоматически:
 
-- Cron: `20 2 * * *` (ежедневно в 2:20, за 10 минут до `update-xray.sh`)
+- Cron: расписание из `settings.json → update.cron.scripts` (по умолчанию `20 2 * * *`, за 10 минут до `update-xray.sh`)
 - Hotplug: при событии `ifup wan`, перед `update-xray.sh`
 
 **Переход на самообновление (роутер, установленный прежней версией).** В такой системе `update-scripts.sh` и cron-записи ещё нет, поэтому нужен однократный bootstrap:
@@ -644,7 +647,8 @@ cat subscription.json | python3 xray-sub-parser.py --ua "XPower/1.2" --remarks "
    - Создаётся балансировщик `tag: "balancer"` со стратегией `leastLoad` и `fallbackTag: "direct"`
      (`selector`/`subjectSelector` сопоставляются с тегами outbound-ов **по префиксу** — по
      xtls.github.io/config/routing.html, xtls.github.io/config/observatory.html)
-   - **burstObservatory** на корневом уровне: `subjectSelector` = все прокси, `pingConfig` = `http://connectivitycheck.gstatic.com/generate_204`, `interval 1m`, `sampling 10`, `timeout 15s`, `httpMethod GET`
+   - **burstObservatory** на корневом уровне: `subjectSelector` = все прокси, `pingConfig` = `settings.json → health.probe_url`, `interval`/`sampling`/`timeout`/`httpMethod` — из `settings.json → balancer.pingConfig` (по умолчанию `1m`/`10`/`15s`/`GET`)
+   - Стратегия и её параметры — из `settings.json → balancer` (`strategy`, `strategySettings`); при `leastLoad` без `strategySettings` ключ `settings` в конфиг не добавляется
    - `leastLoad` выбирает outbound по данным observatory; если выбрать не удалось, используется `fallbackTag` → `direct`
 
 6. **Режим "hole" (DIRECT-конфиг)**:
@@ -654,9 +658,10 @@ cat subscription.json | python3 xray-sub-parser.py --ua "XPower/1.2" --remarks "
 
 7. **Базовая конфигурация:**
    - **Логирование:** значения берутся из пресета `log.preset` (по умолчанию `quiet` → `loglevel: "none"`, `access`/`error` = `none`), см. раздел «Пресеты журналирования»
-   - **DNS** (tag `dns-inbuilt`): `queryStrategy: "UseIPv4"`, `serveStale`, `serveExpiredTTL: 600`, `enableParallelQuery`, `disableFallbackIfMatch`
-     - `hosts`: DoH-домены закреплены за IP (`common.dot.dns.yandex.net` → `77.88.8.1/8.8`, `cloudflare-dns.com` → `1.0.0.1/1.1.1.1`, `dns.nextdns.io` → `45.90.28.0/45.90.30.0`)
-     - `servers`: Yandex DoH для `geosite:category-ru` (`expectedIPs: geoip:ru`, `skipFallback`), Cloudflare DoH, NextDNS DoH
+   - **DNS** (tag `dns-inbuilt`): `queryStrategy`, `disableCache`, `serveStale`, `serveExpiredTTL`, `disableFallback`, `disableFallbackIfMatch`, `enableParallelQuery` — из `settings.json → dns` (по умолчанию `UseIPv4`, `600`, параллельные запросы включены)
+     - `hosts` и `servers` берутся из `settings.json → dns` (см. раздел «settings.json»); встроенный набор (Yandex → Cloudflare → NextDNS) применяется только к старым `settings.json` без этой секции
+     - `hosts`: DoH-домены закреплены за IP (`common.dot.dns.yandex.net` → `77.88.8.1/8.8`, `dns.comss.one` → `185.146.157.78/195.133.25.16`, `cloudflare-dns.com` → `1.0.0.1/1.1.1.1`, `dns.nextdns.io` → `45.90.28.0/45.90.30.0`)
+     - `servers`: Yandex DoH для `geosite:category-ru` (`expectedIPs: geoip:ru`, `skipFallback`), затем comss.one DoH, Cloudflare DoH, NextDNS DoH
    - **Inbound:**
      - `tproxy-in`: `tunnel` (прежнее название протокола — `dokodemo-door`), `0.0.0.0:12345`, `allowedNetwork: tcp,udp`, `followRedirect: true`, `sockopt.tproxy: "tproxy"`, сниффинг `http`/`tls` с `routeOnly: true`
      - `dns-local`: `tunnel`, `127.0.0.1:5353`, `tcp,udp` — приём DNS от dnsmasq
@@ -667,7 +672,7 @@ cat subscription.json | python3 xray-sub-parser.py --ua "XPower/1.2" --remarks "
    3. `doh_domains` → `direct` (чтобы DNS-запросы не уходили в прокси)
    4. `block_domains` (`geosite:category-ads`) → `block`
    5. NTP (порт 123/UDP) → `direct`
-   6. QUIC (UDP/443) → `block` (VLESS+XTLS не поддерживает UDP)
+   6. QUIC (UDP/443) → `block` (VLESS+XTLS не поддерживает UDP); правило создаётся только при `routing.block_quic: true` — тот же ключ убирает `drop` из nftables
    7. `direct_ips` (`geoip:ru`, `geoip:private`) → `direct`
    8. `direct_domains` (`geosite:private`, `category-browser`, `category-cdn-ru`, `category-mobile`, `category-ru`) → `direct`
    9. `direct_protocols` (`protocol: ["bittorrent"]`) → `direct` — по результатам sniffing; требует включённого `sniffing` во входящем
@@ -767,12 +772,27 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
   "device_model": "Cudy WR3000S v1",
   "device_os": "OpenWrt",
   "ver_os": "25.12.4",
+  "tproxy": {
+    "port": 12345,
+    "dns_port": 5353,
+    "mark": 2,
+    "fwmark": 1,
+    "route_table": 100
+  },
   "routing": {
     "domainStrategy": "IPOnDemand",
+    "block_quic": true,
+    "bypass_cidrs": [
+      "127.0.0.0/8",
+      "10.0.0.0/8",
+      "172.16.0.0/12",
+      "192.168.0.0/16",
+      "169.254.0.0/16"
+    ],
     "doh_domains": [
       "common.dot.dns.yandex.net",
       "cloudflare-dns.com",
-      "dns.google",
+      "dns.comss.one",
       "dns.quad9.net",
       "doh.opendns.com",
       "dns.nextdns.io"
@@ -803,11 +823,55 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
     "geoip_url": "https://raw.githubusercontent.com/kirilllavrov/geoip-builder/release/geoip.dat",
     "geosite_url": "https://raw.githubusercontent.com/kirilllavrov/geosite-builder/release/geosite.dat"
   },
+  "dns": {
+    "queryStrategy": "UseIPv4",
+    "disableCache": false,
+    "serveStale": true,
+    "serveExpiredTTL": 600,
+    "disableFallback": false,
+    "disableFallbackIfMatch": true,
+    "enableParallelQuery": true,
+    "hosts": {
+      "common.dot.dns.yandex.net": ["77.88.8.1", "77.88.8.8"],
+      "cloudflare-dns.com": ["1.0.0.1", "1.1.1.1"],
+      "dns.comss.one": ["185.146.157.78", "195.133.25.16"],
+      "dns.nextdns.io": ["45.90.28.0", "45.90.30.0"]
+    },
+    "servers": [
+      {
+        "address": "https+local://common.dot.dns.yandex.net/dns-query",
+        "domains": ["geosite:category-ru"],
+        "expectedIPs": ["geoip:ru"],
+        "skipFallback": true
+      },
+      { "address": "https+local://dns.comss.one/dns-query", "skipFallback": false },
+      { "address": "https+local://cloudflare-dns.com/dns-query", "skipFallback": false },
+      { "address": "https+local://dns.nextdns.io", "skipFallback": false }
+    ],
+    "dnsmasq_fallback": "77.88.8.8"
+  },
+  "balancer": {
+    "strategy": "leastLoad",
+    "strategySettings": { "expected": 2 },
+    "pingConfig": {
+      "interval": "1m",
+      "sampling": 10,
+      "timeout": "15s",
+      "httpMethod": "GET"
+    }
+  },
+  "health": {
+    "probe_url": "https://connectivitycheck.gstatic.com/generate_204"
+  },
   "log": {
     "preset": "quiet"
   },
   "update": {
-    "archive_url": "https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/XPowerSpirit-OpenWRT/latest.zip"
+    "archive_url": "https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/XPowerSpirit-OpenWRT/latest.zip",
+    "cron": {
+      "scripts": "20 2 * * *",
+      "xray": "30 2 * * *"
+    }
   }
 }
 ```
@@ -823,7 +887,14 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 | `device_model` | string | Модель устройства (из dmesg) |
 | `device_os` | string | Операционная система (DISTRIB_ID) |
 | `ver_os` | string | Версия ОС (DISTRIB_RELEASE) |
+| `tproxy.port` | number | Порт `tproxy-in` в Xray; тот же порт получают правила nftables, диагностика и стенд |
+| `tproxy.dns_port` | number | Порт `dns-local` в Xray; он же прописывается в dnsmasq как `127.0.0.1#<порт>` |
+| `tproxy.mark` | number | Метка пакетов самого Xray (`sockopt.mark`) — по ней nftables узнаёт свой трафик и не зацикливает его |
+| `tproxy.fwmark` | number | Метка трафика роутера для policy routing. **Не должна совпадать с `tproxy.mark`** — генератор откажется собирать конфиг |
+| `tproxy.route_table` | number | Номер таблицы маршрутизации для `fwmark`; он же пишется в `/etc/iproute2/rt_tables` |
 | `routing.domainStrategy` | string | Стратегия маршрутизации (по умолчанию `IPOnDemand`) |
+| `routing.block_quic` | bool | Блокировать QUIC (UDP/443). Один переключатель на два слоя: правило Xray и `drop` в nftables. По умолчанию `true` |
+| `routing.bypass_cidrs` | array | Подсети, которые nftables не заворачивает в TProxy. По умолчанию локальные и служебные |
 | `routing.doh_domains` | array | DoH-домены → direct (защита от DNS-петель) |
 | `routing.block_domains` | array | Домены для блокировки (реклама) |
 | `routing.direct_ips` | array | IP-адреса напрямую (РФ + локальные) |
@@ -832,8 +903,20 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 | `routing.proxy_domains` | array | Домены через прокси (стриминг, игры) |
 | `geo.geoip_url` | string | URL geoip.dat |
 | `geo.geosite_url` | string | URL geosite.dat |
+| `dns.hosts` | object | Прибитые IP для DoH-доменов (обязательно для `https+local://`, иначе резолвер резолвит сам себя) |
+| `dns.servers` | array | Резолверы Xray: объекты с `address`, `domains`, `expectedIPs`, `skipFallback` |
+| `dns.queryStrategy` | string | `UseIP`, `UseIPv4` (по умолчанию), `UseIPv6`, `UseSystem` — какие записи запрашивать |
+| `dns.disableCache` / `dns.serveStale` / `dns.disableFallback` / `dns.disableFallbackIfMatch` / `dns.enableParallelQuery` | bool | Настройки DNS-модуля, имена — как в документации Xray |
+| `dns.serveExpiredTTL` | number | Срок жизни оптимистичного кэша, секунды |
+| `dns.dnsmasq_fallback` | string | Резервный апстрим dnsmasq: нужен, когда Xray ещё не поднялся |
+| `balancer.strategy` | string | `random`, `roundRobin`, `leastPing`, `leastLoad` (по умолчанию) |
+| `balancer.strategySettings` | object | Только для `leastLoad`: `expected`, `maxRTT`, `tolerance`, `baselines`, `costs` |
+| `balancer.pingConfig` | object | `interval`, `sampling`, `timeout`, `httpMethod`, `connectivity`. Адрес проверки задаётся не здесь, а в `health.probe_url` |
+| `health.probe_url` | string | Адрес проверки доступности: один на `burstObservatory` и на LED-индикатор |
 | `log.preset` | string | Пресет журналирования: `quiet` (по умолчанию), `normal`, `debug` |
 | `update.archive_url` | string | URL `latest.zip` для автообновления скриптов (`update-scripts.sh`) |
+| `update.cron.scripts` | string | Расписание обновления скриптов (5 полей cron), по умолчанию `20 2 * * *` |
+| `update.cron.xray` | string | Расписание обновления Xray и конфига, по умолчанию `30 2 * * *` |
 
 > **Примечание:** `settings.json` — единственный источник правил роутинга.
 > Обязательные ключи перечислены в `ROUTING_KEYS` (`xray-generate-config.py`). Если ключ
@@ -852,6 +935,45 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 >    /etc/xray/settings.json > /tmp/settings.new && mv /tmp/settings.new /etc/xray/settings.json
 > /usr/share/xray/update-xray.sh
 > ```
+>
+> Секция `dns` необязательна: если её нет, генератор берёт встроенный набор резолверов
+> (Yandex → Cloudflare → NextDNS) и пишет предупреждение в stderr. Чтобы перейти на
+> редактирование DNS через `settings.json`, скопируйте секцию из `settings.default.json`:
+>
+> ```bash
+> jq --slurpfile def /tmp/settings.default.json '.dns = $def[0].dns' \
+>    /etc/xray/settings.json > /tmp/settings.new && mv /tmp/settings.new /etc/xray/settings.json
+> /usr/share/xray/update-xray.sh
+> ```
+>
+> **Про `dns.hosts`:** каждый DoH-домен из `dns.servers` со схемой `https+local://` обязан
+> иметь закреплённый IP в `dns.hosts`, иначе Xray резолвит адрес собственного резолвера через
+> сам себя (петля). Генератор проверяет это и пишет предупреждение. Если сменить резолвер на
+> IP-адрес (например `https://1.1.1.1/dns-query`), запись в `hosts` не нужна.
+>
+> **Секции `tproxy`, `balancer`, `health` и ключи `routing.block_quic`,
+> `routing.bypass_cidrs`, `update.cron` необязательны:** без них применяются значения из
+> `settings.default.json`, записанные в коде. Секции `routing` (обязательные ключи) и `dns`
+> обязательны не были никогда — см. примечания выше.
+>
+> **Почему параметры TProxy в настройках.** Порт `12345`, порт DNS `5353`, метки `mark`/`fwmark`
+> и номер таблицы маршрутизации нужны сразу нескольким частям системы: генератору
+> (`config.json`), `update-nft.sh` (правила nftables), `init.d/xray` (снятие policy routing при
+> остановке), `diagnose-xray-tproxy.sh` и стенду. Рассогласование любого из них не даёт ошибки —
+> трафик просто уходит мимо прокси. Генератор дополнительно отказывается собирать конфиг,
+> если `tproxy.mark` и `tproxy.fwmark` совпадают: тогда защита от петель пропустит весь трафик
+> роутера мимо TProxy.
+>
+> **Про `health.probe_url`.** Один адрес на две проверки: `burstObservatory.pingConfig.destination`
+> в `config.json` и `net-check.sh` для LED индикации интернета. Поэтому `balancer.pingConfig.destination`
+> не поддерживается — генератор сообщит об ошибке и укажет на `health.probe_url`. Значение по
+> умолчанию отдаёт HTTP 204, как требует документация для `destination`.
+>
+> **Про `update.cron`.** Расписание живёт в настройках, а не в crontab: `update-xray.sh`
+> перезаписывает свои строки при каждом запуске (функция `sync_cron`), поэтому менять
+> `/etc/crontabs/root` руками не нужно. Расписание проверяется на 5 полей — иначе cron молча
+> не выполнит задачу. Чтобы применить новое значение сразу, запустите
+> `/usr/share/xray/update-xray.sh` вручную.
 >
 > **Примечание:** Настройки гостевой, IoT сетей и LAN (`--guest=*`, `--iot=*`, `--lan-ip=`) — это параметры установочного скрипта. Они применяются в UCI напрямую и не сохраняются в `settings.json`.
 
