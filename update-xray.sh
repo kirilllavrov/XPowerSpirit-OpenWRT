@@ -194,9 +194,22 @@ rotate_log() {
         echo "[*] Лог очищен: $log" >>"$LOG"
     fi
 }
-# Применяем к логам Xray
-rotate_log "/tmp/log/xray-access.log" 524288 # 512KB
-rotate_log "/tmp/log/xray-error.log" 262144  # 256KB
+# Порог ротации зависит от пресета log.preset (settings.json): на роутере журналы
+# выключены или маленькие, на стенде нужен подробный журнал, поэтому порог выше
+LOG_PRESET=$(settings_get ".log.preset" 2>/dev/null)
+[ -n "$LOG_PRESET" ] || LOG_PRESET="quiet"
+case "$LOG_PRESET" in
+debug)
+    ACCESS_MAX=2097152 # 2MB
+    ERROR_MAX=1048576  # 1MB
+    ;;
+*)
+    ACCESS_MAX=524288 # 512KB
+    ERROR_MAX=262144  # 256KB
+    ;;
+esac
+rotate_log "/tmp/log/xray-access.log" "$ACCESS_MAX"
+rotate_log "/tmp/log/xray-error.log" "$ERROR_MAX"
 rotate_log "$LOG" 262144
 
 # Проверка свободного места в /

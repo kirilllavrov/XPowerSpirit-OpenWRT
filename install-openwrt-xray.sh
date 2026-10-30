@@ -1,8 +1,14 @@
 #!/bin/sh
 # OpenWrt 25.12.x — Xray TProxy (IPv4-only)
 
-# Логируем установку
+# Логируем установку.
+# Ротация: одна предыдущая копия, иначе повторные прогоны (особенно в контейнере)
+# растили бы файл в tmpfs без предела.
 LOG_FILE="/tmp/xray_install.log"
+if [ -s "$LOG_FILE" ]; then
+    _install_log_size=$(stat -c%s "$LOG_FILE" 2>/dev/null || wc -c <"$LOG_FILE")
+    [ "${_install_log_size:-0}" -gt 262144 ] && mv -f "$LOG_FILE" "$LOG_FILE.prev"
+fi
 exec 1> >(tee -a "$LOG_FILE")
 exec 2>&1
 
@@ -55,6 +61,8 @@ IOT_NET="iot"
 IOT_IP="192.168.3.1"
 DL_IOT="10240"
 UL_IOT="10240"
+# quiet — минимум журналов (роутер), normal — предупреждения, debug — подробно (стенд)
+LOG_PRESET="quiet"
 
 
 # =============================================
@@ -253,6 +261,7 @@ for arg in "$@"; do
 	--iot-ul=*) UL_IOT="${arg#*=}" ;;
 	--lan-ip=*) LAN_IP="${arg#*=}" ;;
 	--sub=*) SUB_URL="${arg#*=}" ;;
+	--log=*) LOG_PRESET="${arg#*=}" ;;
 	*) echo "[!] Неизвестный аргумент: $arg" ;;
 	esac
 done
@@ -261,6 +270,11 @@ done
 if [ -z "$SUB_URL" ]; then
 	die "--sub=URL обязателен"
 fi
+
+case "$LOG_PRESET" in
+quiet | normal | debug) ;;
+*) die "--log=$LOG_PRESET: допустимые значения quiet, normal, debug" ;;
+esac
 
 # Создаём необходимые директории
 mkdir -p "$CONFIG_DIR" "$TMP_DIR" "$GEO_DIR" "$STATE_DIR" /tmp/log
@@ -328,7 +342,8 @@ fi
 settings_set ".subscription.url" "$SUB_URL"
 [ -n "$SUB_USER_AGENT" ] && settings_set ".subscription.user_agent" "$SUB_USER_AGENT"
 [ -n "$REMARKS_FILTER" ] && settings_set ".subscription.remarks_filter" "$REMARKS_FILTER"
-echo "[+] settings.json сохранён: $SETTINGS_JSON"
+settings_set ".log.preset" "$LOG_PRESET"
+echo "[+] settings.json сохранён: $SETTINGS_JSON (log.preset=$LOG_PRESET)"
 
 # =============================================
 # 4. Настраиваем LAN и отключаем IPv6
@@ -791,10 +806,17 @@ echo "[+] Sysctl настроен"
 # =============================================
 echo "11. Настройка Crontab..."
 
-# Busybox 25.12 исправляет cronloglevel: документированное значение — 7
-# (это же значение по умолчанию в OpenWrt 25.12); 9 даёт лишний шум в логе.
-uci set system.@system[0].cronloglevel='7'
+# Уровень сообщений crond в syslog (system.@system[0].cronloglevel). В OpenWrt 25.12
+# (busybox 1.37) значения означают: 5 — с отладочными сообщениями, 7 — исполнение
+# команд (значение OpenWrt по умолчанию), 9 — тишина. Пресет → уровень:
+case "$LOG_PRESET" in
+normal) CRON_LOGLEVEL=7 ;;
+debug) CRON_LOGLEVEL=5 ;;
+*) CRON_LOGLEVEL=9 ;; # quiet: на роутере не пишем ничего, экономим RAM-буфер logd
+esac
+uci set system.@system[0].cronloglevel="$CRON_LOGLEVEL"
 uci commit system
+echo "[+] cronloglevel=$CRON_LOGLEVEL (пресет журналирования: $LOG_PRESET)"
 
 SCRIPTS_CRON_ENTRY="20 2 * * * $SCRIPTS_UPDATER >>/tmp/log/xray-scripts.log 2>&1"
 CRON_ENTRY="30 2 * * * $UPDATER >>/tmp/log/xray-update.log 2>&1"

@@ -526,7 +526,7 @@ one-click-скрипты ставят версию `Latest`, поэтому ча
 
 | Использование | Где в проекте | Как в документации |
 |---|---|---|
-| `log.loglevel: "none"` + файлы access/error; каталог создают установщик и `init.d` | [xray-generate-config.py](./xray-generate-config.py), [install-openwrt-xray.sh](./install-openwrt-xray.sh) | `access`/`error`/`loglevel` — подтверждено; сам ядро каталог не создаёт |
+| `log.loglevel: "none"` + файлы access/error; каталог создают установщик и `init.d` | [xray-generate-config.py](./xray-generate-config.py), [install-openwrt-xray.sh](./install-openwrt-xray.sh) | `access`/`error`/`loglevel` — подтверждено; сам ядро каталог не создаёт. С 2026-10-30 значения приходят из пресета `log.preset`: `quiet` → `none`/`none`/`none`, `normal` → `warning`+error-файл, `debug` → `info`+access-файл (все значения документированы) |
 | `dns` c `hosts`, `queryStrategy`, `serveStale`, `serveExpiredTTL`, `disableFallbackIfMatch`, `enableParallelQuery` | [xray-generate-config.py](./xray-generate-config.py) | подтверждено |
 | `servers` в режиме `https+local://` (DOHL) + `domains`, `expectedIPs`, `skipFallback` | там же | подтверждено; DOHL не проходит routing |
 | `routing.domainStrategy: "IPOnDemand"`, правила `domain`/`ip`/`port`/`network`/`inboundTag` | [build_rules](./xray-generate-config.py) | подтверждено |

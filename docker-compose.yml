@@ -1,0 +1,21 @@
+# Стенд для прогонов без роутера:
+#   LOG_PRESET=debug docker compose run --rm stand   # подробный журнал (по умолчанию)
+#   LOG_PRESET=quiet docker compose run --rm stand   # как на роутере
+#
+# TProxy и nftables внутри контейнера не эмулируются — стенд проверяет пайплайн
+# (парсер → генератор → xray run -test) и регрессию tests/run.sh.
+services:
+  stand:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        XRAY_VERSION: ${XRAY_VERSION:-latest}
+    image: xpowerspirit-openwrt-stand:local
+    working_dir: /work
+    environment:
+      LOG_PRESET: ${LOG_PRESET:-debug}
+      TZ: Europe/Moscow
+    volumes:
+      - ./:/src:ro
+    command: ["/src/docker/run-stand.sh"]

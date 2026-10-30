@@ -41,6 +41,9 @@
     "geoip_url": "https://raw.githubusercontent.com/kirilllavrov/geoip-builder/release/geoip.dat",
     "geosite_url": "https://raw.githubusercontent.com/kirilllavrov/geosite-builder/release/geosite.dat"
   },
+  "log": {
+    "preset": "quiet"
+  },
   "update": {
     "archive_url": "https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/XPowerSpirit-OpenWRT/latest.zip"
   }

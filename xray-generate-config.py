@@ -54,10 +54,29 @@ ROUTING_KEYS = (
     "proxy_domains",
 )
 
+# Пресеты журналирования Xray. Роутер пишет минимум (журналы живут в tmpfs, то есть
+# в RAM), стенд в контейнере — подробно. Значения полей log.* — из официальной
+# документации: access/error — путь, спецзначение "none" отключает журнал;
+# loglevel — none|error|warning|info|debug, влияет только на журнал ошибок,
+# а на access влияет только значение "none".
+LOG_PRESETS = {
+    "quiet": {"loglevel": "none", "access": "none", "error": "none"},
+    "normal": {"loglevel": "warning", "access": "none", "error": "/tmp/log/xray-error.log"},
+    "debug": {
+        "loglevel": "info",
+        "access": "/tmp/log/xray-access.log",
+        "error": "/tmp/log/xray-error.log",
+    },
+}
+# Отсутствие log.preset в settings.json (старый файл) = quiet: поведение как раньше
+DEFAULT_LOG_PRESET = "quiet"
+
+LOG_CONFIG = {}
+
 
 def load_settings():
-    """Загружает routing из settings.json и проверяет обязательные ключи"""
-    global ROUTING_CONFIG
+    """Загружает routing и пресет журналирования из settings.json"""
+    global ROUTING_CONFIG, LOG_CONFIG
 
     if not os.path.isfile(SETTINGS_FILE):
         log_error(f"Нет {SETTINGS_FILE} — правила роутинга задаются только там")
@@ -84,6 +103,15 @@ def load_settings():
         sys.exit(1)
 
     ROUTING_CONFIG = {key: routing[key] for key in ROUTING_KEYS}
+
+    log_section = settings.get("log") or {}
+    preset = log_section.get("preset") or DEFAULT_LOG_PRESET
+    if preset not in LOG_PRESETS:
+        log_error(f"В {SETTINGS_FILE} → log.preset неизвестное значение: {preset!r}")
+        log_error(f"Допустимые значения: {', '.join(LOG_PRESETS)}")
+        sys.exit(1)
+    LOG_CONFIG = LOG_PRESETS[preset]
+    print(f"  → Пресет журналирования: {preset}", file=sys.stderr)
 
 
 # ============================================
@@ -126,11 +154,7 @@ def normalize_outbound(ob: dict) -> dict:
 def base_config() -> dict:
     """Возвращает базовую конфигурацию Xray с TProxy и DNS"""
     return {
-        "log": {
-            "loglevel": "none",
-            "access": "/tmp/log/xray-access.log",
-            "error": "/tmp/log/xray-error.log"
-        },
+        "log": dict(LOG_CONFIG),
         "dns": {
             "tag": "dns-inbuilt",
             "queryStrategy": "UseIPv4",

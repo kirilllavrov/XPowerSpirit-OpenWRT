@@ -109,8 +109,13 @@ ERR_LOG="/tmp/log/xray-error.log"
 if [ -s "$ERR_LOG" ]; then
     tail -3 "$ERR_LOG" | while read -r line; do printf "  → %s\n" "$line"; done
 else
-    # Пустой файл не доказывает отсутствие ошибок: журнал ошибок может не вестись
-    _warn "$ERR_LOG пуст или отсутствует — журнал ошибок Xray не ведётся"
+    # Пустой файл не доказывает отсутствие ошибок: журнал ошибок может быть отключён
+    PRESET=$(jq -r '.log.preset // empty' /etc/xray/settings.json 2>/dev/null)
+    if [ "$PRESET" = "quiet" ]; then
+        _ok "журнал ошибок отключён пресетом log.preset=quiet (это ожидаемо)"
+    else
+        _warn "$ERR_LOG пуст или отсутствует — журнал ошибок Xray не ведётся"
+    fi
 fi
 # init.d пишет в syslog через logger -t xray: второй источник, если файловый журнал пуст
 if command -v logread >/dev/null 2>&1; then

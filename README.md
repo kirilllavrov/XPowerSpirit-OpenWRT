@@ -176,6 +176,7 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
 | `--sub=URL` | URL подписки (обязательно) | — |
 | `--sub-ua=STRING` | User-Agent для запроса подписки (он же определяет формат подписки) | `XPower/1.0` (из `settings.default.json`) |
 | `--remarks=STRING` | Фильтр профиля по remarks (только для JSON-подписок) | — |
+| `--log=PRESET` | Пресет журналирования: `quiet`, `normal`, `debug`. Пишется в `settings.json` как `log.preset`, а в UCI выставляет `cronloglevel` (9 / 7 / 5) | `quiet` |
 | `--lan-ip=IP` | IP-адрес роутера в LAN | `192.168.1.1` |
 | `--guest=1` | Включить гостевую сеть + SQM | `0` |
 | `--guest-ip=IP` | IP-адрес шлюза гостевой сети | `192.168.2.1` |
@@ -338,7 +339,7 @@ curl -fsSL https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/XPowerSpirit-Open
 **Выполняет:**
 
 0. **Блокировка от параллельного запуска** — `/var/lock/xray-update.lock` (`flock -n`)
-1. **Ротация логов** — обнуляет `xray-access.log` при > 512 KB, `xray-error.log` и `xray-update.log` при > 256 KB
+1. **Ротация логов** — обнуляет `xray-access.log` при > 512 KB, `xray-error.log` и `xray-update.log` при > 256 KB. При `log.preset=debug` пороги выше (2 MB / 1 MB), при `quiet` журналов Xray нет вовсе
 2. **Проверка места** — требует минимум 10 MB свободного в `/`, иначе выход с ошибкой
 3. **Проверка HWID и подписки** — читает все настройки из единого `/etc/xray/settings.json`; останавливается, если `hwid` или `subscription.url` пусты
 4. **Обновление Xray**:
@@ -726,12 +727,12 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 /etc/hotplug.d/iface/99-xray-autoupdate  # Автообновление при ifup wan
 
 /tmp/log/                # создаётся установщиком и init.d (Xray не создаёт каталог сам)
-├── xray-access.log       # Логи доступа Xray (ротация при > 512 KB)
-├── xray-error.log        # Логи ошибок Xray (ротация при > 256 KB)
+├── xray-access.log       # Логи доступа Xray (только при log.preset=debug; ротация при > 512 KB, в debug — > 2 MB)
+├── xray-error.log        # Логи ошибок Xray (при quiet не создаётся; ротация при > 256 KB, в debug — > 1 MB)
 ├── xray-update.log       # Логи обновлений и cron-прогонов (ротация при > 256 KB)
 └── xray-scripts.log      # Логи самообновления скриптов (ротация при > 256 KB)
 
-/tmp/xray_install.log     # Логи установки
+/tmp/xray_install.log     # Логи установки (при > 256 KB предыдущая копия уходит в .prev)
 /tmp/setup-wifi.log       # Логи настройки Wi-Fi
 ```
 
@@ -783,6 +784,9 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
     "geoip_url": "https://raw.githubusercontent.com/kirilllavrov/geoip-builder/release/geoip.dat",
     "geosite_url": "https://raw.githubusercontent.com/kirilllavrov/geosite-builder/release/geosite.dat"
   },
+  "log": {
+    "preset": "quiet"
+  },
   "update": {
     "archive_url": "https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/XPowerSpirit-OpenWRT/latest.zip"
   }
@@ -808,6 +812,7 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 | `routing.proxy_domains` | array | Домены через прокси (стриминг, игры) |
 | `geo.geoip_url` | string | URL geoip.dat |
 | `geo.geosite_url` | string | URL geosite.dat |
+| `log.preset` | string | Пресет журналирования: `quiet` (по умолчанию), `normal`, `debug` |
 | `update.archive_url` | string | URL `latest.zip` для автообновления скриптов (`update-scripts.sh`) |
 
 > **Примечание:** `settings.json` — единственный источник правил роутинга.
@@ -830,8 +835,34 @@ python3 xray-generate-config.py --output /etc/xray/config.json < /tmp/parsed.jso
 >
 > **Примечание:** Настройки гостевой, IoT сетей и LAN (`--guest=*`, `--iot=*`, `--lan-ip=`) — это параметры установочного скрипта. Они применяются в UCI напрямую и не сохраняются в `settings.json`.
 
-**Чтение/запись из командной строки:**
+### Пресеты журналирования (`log.preset`)
 
+Один переключатель на всю подробность: уровень Xray и сообщения cron в syslog.
+
+| Пресет | `log.loglevel` | `log.access` | `log.error` | `cronloglevel` | Ротация `xray-access.log` / `xray-error.log` |
+| --- | --- | --- | --- | --- | --- |
+| `quiet` (по умолчанию) | `none` | `none` | `none` | 9 | 512 KB / 256 KB (файлов нет) |
+| `normal` | `warning` | `none` | `/tmp/log/xray-error.log` | 7 | 512 KB / 256 KB |
+| `debug` | `info` | `/tmp/log/xray-access.log` | `/tmp/log/xray-error.log` | 5 | 2 MB / 1 MB |
+
+- `quiet` — для роутера: журналы Xray отключены, cron молчит. Ошибки остаются только в `logread` (init.d пишет туда через `logger -t xray`).
+- `normal` — предупреждения и ошибки Xray пишутся в файл, журнал доступа выключен.
+- `debug` — для стенда: включается журнал доступа и уровень `info`.
+
+Значения `cronloglevel` — по документации OpenWrt для 25.12 (busybox 1.37): `5` — с отладочными сообщениями, `7` — исполнение команд (значение OpenWrt по умолчанию), `9` — тишина.
+
+`update-xray.sh` читает `log.preset` и применяет его при следующем запуске. `cronloglevel` в UCI скрипты не меняют — его выставляет только установщик по флагу `--log=`.
+
+Сменить пресет на уже установленном роутере:
+
+```bash
+# settings.json → пресет, UCI → уровень cron, затем пересборка config.json
+jq '.log.preset = "debug"' /etc/xray/settings.json > /tmp/s.json && mv /tmp/s.json /etc/xray/settings.json
+uci set system.@system[0].cronloglevel='5' && uci commit system && /etc/init.d/cron restart
+/usr/share/xray/update-xray.sh
+```
+
+**Чтение/запись из командной строки:**
 ```bash
 # Прочитать значение
 jq -r '.subscription.url' /etc/xray/settings.json
@@ -840,6 +871,34 @@ jq -r '.subscription.url' /etc/xray/settings.json
 jq --arg u 'XPower/2.0' '.subscription.user_agent = $u' \
     /etc/xray/settings.json > /tmp/settings.tmp && mv /tmp/settings.tmp /etc/xray/settings.json
 ```
+
+---
+
+## 🧪 Стенд в Docker (без роутера)
+
+Проверка парсера, генератора и валидности конфига ядром без устройства: контейнер с `python3`, `jq`, `curl` и настоящим Xray с гео-базами проекта. TProxy и nftables в контейнере не эмулируются — проверяются пайплайн и регрессия тестов.
+
+```bash
+# подробный журнал (по умолчанию LOG_PRESET=debug)
+docker compose run --rm stand
+
+# как на роутере: журналы Xray отключены
+LOG_PRESET=quiet docker compose run --rm stand
+
+# зафиксировать версию Xray в образе
+XRAY_VERSION=v26.10.29 docker compose build stand
+```
+
+Что делает прогон:
+
+1. собирает `settings.json` стенда из `settings.default.json` с выбранным пресетом;
+2. запускает `tests/run.sh` — если каталог `tests/` есть локально (в `.gitignore` и в архив он не входит);
+3. прогоняет пайплайн «подписка → `xray-sub-parser.py` → `xray-generate-config.py` → `xray run -test`»;
+4. печатает секцию `log` сгенерированного `config.json` и список журнальных файлов.
+
+Файлы стенда: [docker/Dockerfile](./docker/Dockerfile), [docker/run-stand.sh](./docker/run-stand.sh), [docker-compose.yml](./docker-compose.yml).
+
+> В пресете `debug` Xray открывает журнальные файлы уже на `xray run -test`, поэтому каталог `/tmp/log` должен существовать: на устройстве его создают установщик и `init.d`, в контейнере — `docker/run-stand.sh`.
 
 ---
 
