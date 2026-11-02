@@ -792,7 +792,10 @@ def build_rules(cfg: dict, proxies: list, direct_mode: bool = False) -> list:
 
     # DoH-запросы, прошедшие мимо dnsmasq (из браузера), не должны уходить в прокси
     rules.append({"domain": routing["doh_domains"], "outboundTag": DIRECT_TAG})
-    rules.append({"domain": routing["block_domains"], "outboundTag": BLOCK_TAG})
+    # Пустой список рекламы — это норма: блокировка тогда целиком на DNS
+    # (dns.block_domains). Правило без единого условия не создаём.
+    if routing["block_domains"]:
+        rules.append({"domain": routing["block_domains"], "outboundTag": BLOCK_TAG})
     # NTP напрямую: через прокси время не синхронизируется
     rules.append({"port": "123", "network": "udp", "outboundTag": DIRECT_TAG})
 

@@ -35,9 +35,7 @@
       "doh.opendns.com",
       "unfiltered.joindns4.eu"
     ],
-    "block_domains": [
-      "geosite:category-ads"
-    ],
+    "block_domains": [],
     "direct_ips": [
       "geoip:ru",
       "geoip:private"
