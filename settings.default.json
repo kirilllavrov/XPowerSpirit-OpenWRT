@@ -70,8 +70,8 @@
     ]
   },
   "geo": {
-    "geoip_url": "https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/geofiles/geoip.dat",
-    "geosite_url": "https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/geofiles/geosite.dat"
+    "geoip_url": "https://storage.yandexcloud.net/xpower/GEO/geoip.dat",
+    "geosite_url": "https://storage.yandexcloud.net/xpower/GEO/geosite.dat"
   },
   "dns": {
     "queryStrategy": "UseIPv4",
@@ -81,6 +81,10 @@
     "disableFallback": false,
     "disableFallbackIfMatch": true,
     "enableParallelQuery": true,
+    "block_domains": [
+      "geosite:category-ads"
+    ],
+    "block_rcode": 3,
     "hosts": {
       "common.dot.dns.yandex.net": [
         "77.88.8.1",

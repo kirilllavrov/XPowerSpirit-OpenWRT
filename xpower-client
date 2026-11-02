@@ -684,6 +684,11 @@ if isinstance(hosts_value, dict) and hosts_value:
         print("    %s  %s" % (name.ljust(28), joined))
     if hosts_default:
         print("    %s(эталон)%s" % (DIM, OFF))
+items("Блокировка DNS", "dns.block_domains")
+field("rcode отказа", "dns.block_rcode", lambda v: {
+    0: "%s — пустой ответ" % text(v),
+    3: "%s — NXDOMAIN" % text(v),
+}.get(v, text(v)))
 field("dnsmasq fallback", "dns.dnsmasq_fallback")
 
 section("Балансировщик")

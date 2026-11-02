@@ -105,6 +105,11 @@ DNS_ADDRESS_SCHEMES = (
 
 BALANCER_STRATEGIES = ("random", "roundRobin", "leastPing", "leastLoad")
 
+# Префиксы доменных паттернов из документации (RuleObject.domain). Без префикса
+# в routing — подстрока, но в dns.hosts документация задаёт full: по умолчанию.
+DOMAIN_PATTERN_PREFIXES = ("domain:", "full:", "keyword:", "regexp:", "dotless:",
+                           "geosite:", "ext:")
+
 # PolicyObject: bufferSize в КБ; ноль отбрасывает UDP-пакеты при переполнении
 # буфера — документация прямо предупреждает о неожиданных потерях
 POLICY_KEYS = ("handshake", "connIdle", "uplinkOnly", "downlinkOnly", "bufferSize")
@@ -388,9 +393,12 @@ def validate_dns() -> dict:
         "dns.serveExpiredTTL", raw.get("serveExpiredTTL", base["serveExpiredTTL"]))
     cfg["dnsmasq_fallback"] = field("str", base["dnsmasq_fallback"]).check(
         "dns.dnsmasq_fallback", raw.get("dnsmasq_fallback", base["dnsmasq_fallback"]))
+    cfg["block_rcode"] = field("int", base["block_rcode"], minimum=0, maximum=5).check(
+        "dns.block_rcode", raw.get("block_rcode", base["block_rcode"]))
 
     unknown = [k for k in raw
-               if k not in ("hosts", "servers", "dnsmasq_fallback", *DNS_TUNING_KEYS)]
+               if k not in ("hosts", "servers", "dnsmasq_fallback", "block_domains",
+                            "block_rcode", *DNS_TUNING_KEYS)]
     if unknown:
         warn(f"  [!] В {SETTINGS_FILE} → dns: неизвестные ключи проигнорированы: "
              f"{', '.join(unknown)}")
@@ -414,6 +422,27 @@ def validate_dns() -> dict:
         if not values or not all(isinstance(v, str) and v for v in values):
             fail_setting(f"dns.hosts[{name!r}]", "нужен IP или массив IP")
         clean_hosts[name] = list(values)
+
+    blocked = raw.get("block_domains", base.get("block_domains", []))
+    if not isinstance(blocked, list):
+        fail_setting("dns.block_domains", "ожидался массив доменных паттернов")
+    clean_blocked = []
+    for i, pattern in enumerate(blocked):
+        if not isinstance(pattern, str) or not pattern:
+            fail_setting(f"dns.block_domains[{i}]", "нужна непустая строка")
+        prefix = pattern.split(":", 1)[0] + ":" if ":" in pattern else ""
+        if prefix and prefix not in DOMAIN_PATTERN_PREFIXES:
+            raise SettingsError(
+                f"В {SETTINGS_FILE} → dns.block_domains[{i}]: недокументированный "
+                f"префикс {prefix!r} в {pattern!r}\n"
+                f"Документированные: {', '.join(DOMAIN_PATTERN_PREFIXES)}"
+            )
+        # Тот же ключ уже занят адресом резолвера — блокировка сломает его резолв
+        if pattern in clean_hosts:
+            fail_setting(f"dns.block_domains[{i}]",
+                         f"{pattern!r} уже задан в dns.hosts как IP резолвера")
+        clean_blocked.append(pattern)
+    cfg["block_domains"] = clean_blocked
 
     if not servers:
         fail_setting("dns.servers", "пустой список: без резолверов конфиг нерабочий")
@@ -599,9 +628,15 @@ def build_log(cfg: dict) -> dict:
 
 
 def build_dns(cfg: dict) -> dict:
+    hosts = {k: list(v) for k, v in cfg["dns"]["hosts"].items()}
+    # Блокировка на уровне DNS: hosts проверяется до серверов, а значение «#N»
+    # отвергает запрос с rcode N (документация: «#3» — с井号后加数字). Домен
+    # не получает адрес, поэтому соединение даже не начинается.
+    for pattern in cfg["dns"]["block_domains"]:
+        hosts[pattern] = f"#{cfg['dns']['block_rcode']}"
     dns = {
         "tag": DNS_TAG,
-        "hosts": {k: list(v) for k, v in cfg["dns"]["hosts"].items()},
+        "hosts": hosts,
         "servers": [dict(s) for s in cfg["dns"]["servers"]],
     }
     dns.update({key: cfg["dns"][key] for key in DNS_TUNING_KEYS})
