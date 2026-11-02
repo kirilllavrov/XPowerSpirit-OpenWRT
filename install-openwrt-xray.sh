@@ -302,7 +302,11 @@ fi
 echo "1. Устанавливаем Timezone и синхронизируем время..."
 uci set system.@system[0].zonename='Europe/Moscow'
 uci set system.@system[0].timezone='MSK-3'
+# Пресет normal пишет ошибки Xray в syslog: при warning это ~1,5 КБ/ч, а дефолтных
+# 128 КБ хватает меньше чем на сутки. 512 КБ — примерно двое суток истории.
+uci set system.@system[0].log_size='512'
 uci commit system
+/etc/init.d/log restart >/dev/null 2>&1
 
 ntpd -q -p ru.pool.ntp.org 2>/dev/null ||
 	ntpd -q -p time.google.com 2>/dev/null ||

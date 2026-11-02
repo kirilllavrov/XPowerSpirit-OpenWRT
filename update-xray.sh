@@ -206,6 +206,8 @@ debug)
     ;;
 esac
 rotate_log "/tmp/log/xray-access.log" "$ACCESS_MAX"
+# В пресете normal файла ошибок нет (Xray пишет в stdout → syslog), rotate_log
+# для отсутствующего файла ничего не делает. Пороги нужны для пресета debug.
 rotate_log "/tmp/log/xray-error.log" "$ERROR_MAX"
 rotate_log "$LOG" 262144
 

@@ -141,18 +141,26 @@ if [ -s "$ERR_LOG" ]; then
     tail -3 "$ERR_LOG" | while read -r line; do printf "  → %s\n" "$line"; done
 else
     # Пустой файл не доказывает отсутствие ошибок: журнал ошибок может быть отключён
+    # или, как в пресете normal, писаться не в файл, а в stdout → syslog
     PRESET=$(jq -r '.log.preset // empty' /etc/xray/settings.json 2>/dev/null)
-    if [ "$PRESET" = "quiet" ]; then
+    case "$PRESET" in
+    quiet)
         _ok "журнал ошибок отключён пресетом log.preset=quiet (это ожидаемо)"
-    else
+        ;;
+    debug)
         _warn "$ERR_LOG пуст или отсутствует — журнал ошибок Xray не ведётся"
-    fi
+        ;;
+    *)
+        _ok "журнал ошибок Xray пишется в syslog (log.preset=${PRESET:-normal}) — см. вывод ниже"
+        ;;
+    esac
 fi
-# init.d пишет в syslog через logger -t xray: второй источник, если файловый журнал пуст
+# В пресете normal ошибки Xray идут в syslog напрямую, плюс init.d пишет туда же
+# через logger -t xray — это основной источник, когда файлового журнала нет
 if command -v logread >/dev/null 2>&1; then
     SYSLOG_LINES=$(logread -e xray 2>/dev/null | tail -3)
     if [ -n "$SYSLOG_LINES" ]; then
-        printf "  syslog (logger -t xray):\n"
+        printf "  syslog (Xray и logger -t xray):\n"
         printf "%s\n" "$SYSLOG_LINES" | while read -r line; do printf "  → %s\n" "$line"; done
     fi
 fi

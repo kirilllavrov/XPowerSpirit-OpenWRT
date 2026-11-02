@@ -77,7 +77,10 @@ DNS_TAG = "dns-inbuilt"
 # и влияет только на журнал ошибок.
 LOG_PRESETS = {
     "quiet": {"loglevel": "none", "access": "none", "error": "none"},
-    "normal": {"loglevel": "warning", "access": "none", "error": "/tmp/log/xray-error.log"},
+    # error не указан → Xray пишет ошибки в stdout, procd отдаёт их в syslog, а logd
+    # ставит метку времени по /etc/TZ (MSK). Собственный файл журнала Go пишет в UTC:
+    # POSIX-строку MSK-3 из /etc/TZ он не разбирает, а zoneinfo в OpenWrt нет.
+    "normal": {"loglevel": "warning", "access": "none"},
     "debug": {
         "loglevel": "info",
         "access": "/tmp/log/xray-access.log",
