@@ -11,9 +11,6 @@ AGENTS.md
 test/
 tests/
 
-# --- Скачанные образы OpenWrt ---
-firmware/
-
 # --- Python cache ---
 __pycache__/
 *.pyc
