@@ -1,0 +1,170 @@
+{
+  "mode": "router",
+  "network": {
+    "upstream_gw": "",
+    "dhcp": true
+  },
+  "subscription": {
+    "url": "",
+    "user_agent": "XPower/1.2",
+    "remarks_filter": "Router",
+    "fallback_all": true
+  },
+  "hwid": "",
+  "device_model": "",
+  "device_os": "",
+  "ver_os": "",
+  "tproxy": {
+    "port": 12345,
+    "dns_port": 5353,
+    "mark": 2,
+    "fwmark": 1,
+    "route_table": 100,
+    "proxy_router_traffic": true
+  },
+  "routing": {
+    "domainStrategy": "IPOnDemand",
+    "direct_domain_strategy": "UseIPv4",
+    "direct_tcp_keepalive_interval": 30,
+    "proxy_tcp_keepalive_interval": 30,
+    "doh_domains": [
+      "common.dot.dns.yandex.net",
+      "cloudflare-dns.com",
+      "dns.google",
+      "dns.quad9.net",
+      "doh.opendns.com",
+      "unfiltered.joindns4.eu"
+    ],
+    "block_domains": [
+      "geosite:category-ads"
+    ],
+    "direct_ips": [
+      "geoip:ru",
+      "geoip:private"
+    ],
+    "direct_domains": [
+      "domain:ru",
+      "domain:su",
+      "domain:xn--p1ai",
+      "domain:рф",
+      "geosite:private",
+      "geosite:category-browser",
+      "geosite:category-cdn-ru",
+      "geosite:category-mobile",
+      "geosite:category-ru"
+    ],
+    "direct_protocols": [
+      "bittorrent"
+    ],
+    "proxy_domains": [
+      "geosite:category-streaming",
+      "geosite:category-games"
+    ],
+    "block_quic": true,
+    "bypass_cidrs": [
+      "127.0.0.0/8",
+      "10.0.0.0/8",
+      "172.16.0.0/12",
+      "192.168.0.0/16",
+      "169.254.0.0/16"
+    ]
+  },
+  "geo": {
+    "geoip_url": "https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/geofiles/geoip.dat",
+    "geosite_url": "https://storage.yandexcloud.net/flyz-cryp-olxn-mojw/geofiles/geosite.dat"
+  },
+  "dns": {
+    "queryStrategy": "UseIPv4",
+    "disableCache": false,
+    "serveStale": true,
+    "serveExpiredTTL": 600,
+    "disableFallback": false,
+    "disableFallbackIfMatch": true,
+    "enableParallelQuery": true,
+    "hosts": {
+      "common.dot.dns.yandex.net": [
+        "77.88.8.1",
+        "77.88.8.8"
+      ],
+      "cloudflare-dns.com": [
+        "1.0.0.1",
+        "1.1.1.1"
+      ],
+      "dns.google": [
+        "8.8.8.8",
+        "8.8.4.4"
+      ],
+      "dns.quad9.net": [
+        "9.9.9.9",
+        "149.112.112.112"
+      ],
+      "unfiltered.joindns4.eu": [
+        "86.54.11.100",
+        "86.54.11.200"
+      ]
+    },
+    "servers": [
+      {
+        "address": "https+local://common.dot.dns.yandex.net/dns-query",
+        "domains": [
+          "geosite:category-ru",
+          "domain:ru",
+          "domain:su",
+          "domain:xn--p1ai"
+        ],
+        "expectedIPs": [
+          "geoip:ru"
+        ],
+        "skipFallback": true
+      },
+      {
+        "address": "https+local://cloudflare-dns.com/dns-query",
+        "skipFallback": false
+      },
+      {
+        "address": "https+local://dns.quad9.net/dns-query",
+        "skipFallback": false
+      },
+      {
+        "address": "https+local://unfiltered.joindns4.eu/dns-query",
+        "skipFallback": false
+      }
+    ],
+    "dnsmasq_fallback": "77.88.8.8"
+  },
+  "balancer": {
+    "strategy": "leastLoad",
+    "strategySettings": {},
+    "streaming": {
+      "enabled": true,
+      "strategy": "leastPing"
+    },
+    "pingConfig": {
+      "interval": "1m",
+      "sampling": 10,
+      "timeout": "30s",
+      "httpMethod": "GET"
+    }
+  },
+  "policy": {
+    "handshake": 60,
+    "connIdle": 120,
+    "uplinkOnly": 0,
+    "downlinkOnly": 0,
+    "bufferSize": 32
+  },
+  "health": {
+    "probe_url": "https://connectivitycheck.gstatic.com/generate_204"
+  },
+  "log": {
+    "preset": "quiet"
+  },
+  "update": {
+    "archive_url": "https://storage.yandexcloud.net/xpower/OpenWRT/latest.zip",
+    "cron": {
+      "scripts": "20 2 * * *",
+      "subscription": "0 */2 * * *",
+      "xray": "30 2 * * *"
+    }
+  }
+}

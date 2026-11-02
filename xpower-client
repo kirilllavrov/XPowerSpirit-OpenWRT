@@ -1,0 +1,1386 @@
+#!/bin/sh
+
+CONFIG_DIR="${XRAY_CONFIG_DIR:-/etc/xray}"
+CONFIG_JSON="${XRAY_CONFIG_JSON:-$CONFIG_DIR/config.json}"
+SETTINGS_JSON="${XRAY_SETTINGS_JSON:-$CONFIG_DIR/settings.json}"
+SETTINGS_DEFAULTS="${XRAY_SETTINGS_DEFAULTS:-/usr/share/xray/settings.default.json}"
+XRAY_BIN="${XRAY_BIN:-/usr/bin/xray}"
+XRAY_INIT="${XRAY_INIT:-/etc/init.d/xray}"
+UPDATER="${XRAY_UPDATER:-/usr/share/xray/update-xray.sh}"
+NFT_UPDATER="${XRAY_NFT_UPDATER:-/usr/share/xray/update_nft.py}"
+
+# Оформление: цвета и иконки только при выводе в терминал.
+# NO_COLOR=1 или --no-color отключают их (журналы и скрипты получают чистый текст).
+plain=0
+case " $* " in
+*" --no-color "*) plain=1 ;;
+esac
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "$plain" = 0 ]; then
+    C_G=$(printf '\033[32m')
+    C_R=$(printf '\033[31m')
+    C_Y=$(printf '\033[33m')
+    C_D=$(printf '\033[2m')
+    C_B=$(printf '\033[1m')
+    C_0=$(printf '\033[0m')
+    I_OK='✔'
+    I_BAD='✖'
+    I_WARN='⚠'
+else
+    C_G=
+    C_R=
+    C_Y=
+    C_D=
+    C_B=
+    C_0=
+    I_OK='+'
+    I_BAD='x'
+    I_WARN='!'
+fi
+
+status_ok() { printf '%s%s%s %s\n' "$C_G" "$I_OK" "$C_0" "$*"; }
+status_bad() { printf '%s%s%s %s\n' "$C_R" "$I_BAD" "$C_0" "$*"; }
+status_warn() { printf '%s%s%s %s\n' "$C_Y" "$I_WARN" "$C_0" "$*"; }
+
+# Русское склонение: plural_ru 4 узел узла узлов → «узла»
+plural_ru() {
+    count=$1
+    case $((count % 100)) in
+    11 | 12 | 13 | 14)
+        printf '%s' "$4"
+        return
+        ;;
+    esac
+    case $((count % 10)) in
+    1) printf '%s' "$2" ;;
+    2 | 3 | 4) printf '%s' "$3" ;;
+    *) printf '%s' "$4" ;;
+    esac
+}
+
+# Человеко-понятная длительность: 3 ч 12 мин
+human_duration() {
+    seconds=$1
+    days=$((seconds / 86400))
+    hours=$(((seconds % 86400) / 3600))
+    minutes=$(((seconds % 3600) / 60))
+    if [ "$days" -gt 0 ]; then
+        printf '%d сут %d ч' "$days" "$hours"
+    elif [ "$hours" -gt 0 ]; then
+        printf '%d ч %d мин' "$hours" "$minutes"
+    else
+        printf '%d мин' "$minutes"
+    fi
+}
+
+# Аптайм процесса по /proc/<pid>/stat (busybox ps не умеет etime)
+proc_uptime() {
+    pid=$1
+    [ -r "/proc/$pid/stat" ] || return 1
+    start_ticks=$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null)
+    [ -n "$start_ticks" ] || return 1
+    ticks_per_sec=$(getconf CLK_TCK 2>/dev/null || echo 100)
+    uptime_sec=$(cut -d. -f1 /proc/uptime 2>/dev/null)
+    [ -n "$uptime_sec" ] || return 1
+    age=$((uptime_sec - start_ticks / ticks_per_sec))
+    [ "$age" -ge 0 ] || return 1
+    human_duration "$age"
+}
+
+# Внешний IP: cloudflare trace не входит в geosite:category-ipcheck,
+# поэтому запрос идёт через прокси и показывает реальный выход
+external_ip() {
+    # -4: показываем IPv4, если узел его поддерживает (иначе останется IPv6)
+    ip=$(curl -4 -fsS -m 6 https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null |
+        awk -F= '/^ip=/ {print $2; exit}')
+    if [ -z "$ip" ]; then
+        ip=$(curl -fsS -m 6 https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null |
+            awk -F= '/^ip=/ {print $2; exit}')
+    fi
+    if [ -z "$ip" ]; then
+        ip=$(curl -4 -fsS -m 6 https://check.torproject.org/api/ip 2>/dev/null |
+            sed -n 's/.*"IP":"\([^"]*\)".*/\1/p')
+    fi
+    printf '%s' "$ip"
+}
+
+# Профили из тегов proxy-<профиль>-<N>: «имя число» построчно
+profile_stats() {
+    python3 -B - "$CONFIG_JSON" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        config = json.load(source)
+except (OSError, ValueError):
+    sys.exit(1)
+
+groups = {}
+for outbound in config.get("outbounds") or []:
+    tag = outbound.get("tag") if isinstance(outbound, dict) else None
+    if not isinstance(tag, str) or not tag.startswith("proxy-"):
+        continue
+    name = tag[len("proxy-"):]
+    tail = name.rsplit("-", 1)[-1]
+    if tail.isdigit():
+        name = name.rsplit("-", 1)[0]
+    groups[name] = groups.get(name, 0) + 1
+
+for name in sorted(groups, key=lambda n: (-groups[n], n)):
+    print("%s %d" % (name, groups[name]))
+PY
+}
+
+# Пул балансировщиков: «tag (strategy)» через запятую
+balancer_stats() {
+    python3 -B - "$CONFIG_JSON" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        config = json.load(source)
+except (OSError, ValueError):
+    sys.exit(1)
+
+pools = []
+for balancer in (config.get("routing") or {}).get("balancers") or []:
+    if not isinstance(balancer, dict):
+        continue
+    strategy = (balancer.get("strategy") or {}).get("type") or "?"
+    pools.append("%s (%s)" % (balancer.get("tag", "?"), strategy))
+print(" + ".join(pools))
+PY
+}
+
+usage() {
+    cat <<'EOF'
+XPowerSpirit OpenWrt — управление Xray TProxy
+
+Использование: xpower-client <команда>
+
+  status       Статус Xray, TProxy, конфигурации и трафика
+  start        Запустить Xray
+  stop         Остановить Xray
+  restart      Перезапустить Xray
+  toggle       Переключить Xray
+  update       Обновить Xray, geo-базы и конфигурацию (--config-only — только конфиг)
+  test         Проверить интернет, DNS и TProxy
+  traffic      Показать статистику трафика по серверам
+  logs         Смотреть журнал Xray в реальном времени
+  config       Показать начало config.json
+  proxy-list   Список прокси-серверов из config.json
+  setup        Переприменить правила nftables
+  sub          Состояние подписки: профили, узлы, дата конфигурации
+  settings     Действующие настройки из settings.json
+  doctor       Полная диагностика (diagnose-xray-tproxy.sh)
+  help [команда]  Справка: общая или по одной команде
+
+Коды возврата: 0 — успех, 1 — ошибка выполнения, 2 — неверное использование.
+EOF
+}
+
+# Подробная справка по одной команде
+help_for() {
+    case "$1" in
+    "")
+        usage
+        return 0
+        ;;
+    status)
+        cat <<'EOF'
+status — статус Xray, TProxy, конфигурации и трафика.
+
+Показывает: запущен ли Xray и какой версии, настроены ли правила nftables и
+policy routing, размер и дату config.json, состояние автообновления, число
+прокси-серверов и суммарный трафик.
+
+Пример: xpower-client status
+EOF
+        ;;
+    sub)
+        cat <<'EOF'
+sub — состояние подписки и её параметры.
+
+Показывает URL (частично скрыт, полностью — с --full), User-Agent, фильтр
+профиля, HWID, дату и размер config.json, распределение узлов по профилям.
+
+  xpower-client sub                  состояние подписки
+  xpower-client sub --full           URL подписки целиком
+  xpower-client sub set <URL>        сменить URL и пересобрать конфиг
+  xpower-client sub ua <User-Agent>  сменить User-Agent и пересобрать конфиг
+
+После set/ua конфиг пересобирается сразу; при неудаче прежний config.json
+остаётся на месте.
+EOF
+        ;;
+    doctor)
+        cat <<'EOF'
+doctor — полная диагностика системы.
+
+Запускает diagnose-xray-tproxy.sh: процесс Xray, порты, nftables, policy
+routing, DNS, гео-файлы, сертификаты и маршрут до серверов.
+
+  xpower-client doctor              запустить диагностику
+  xpower-client doctor --download   скачать скрипт диагностики, если его нет
+
+Скрипт диагностики установщик не ставит: он нужен только для разбора проблем.
+EOF
+        ;;
+    update)
+        cat <<'EOF'
+update — обновить Xray, geo-базы и config.json по подписке.
+
+Эквивалент /usr/share/xray/update-xray.sh; аргументы передаются ему.
+  xpower-client update                 полное обновление (Xray, geo, конфиг)
+  xpower-client update --config-only   только подписка → config.json
+
+Все режимы и переменные: /usr/share/xray/update-xray.sh --help
+
+При ошибке прежний config.json остаётся рабочим.
+EOF
+        ;;
+    test)
+        cat <<'EOF'
+test — быстрая проверка: интернет, DNS через dnsmasq→Xray и перехват TProxy.
+EOF
+        ;;
+    traffic)
+        cat <<'EOF'
+traffic — статистика трафика по серверам из Xray API (StatsService).
+
+Требует запущенного Xray и включённого API в config.json.
+EOF
+        ;;
+    logs)
+        cat <<'EOF'
+logs — живой журнал Xray (logread -f). Выход — Ctrl+C.
+EOF
+        ;;
+    config)
+        cat <<'EOF'
+config — начало config.json (первые строки) для быстрой проверки.
+EOF
+        ;;
+    proxy-list)
+        cat <<'EOF'
+proxy-list — список прокси-серверов из config.json: тег, протокол, адрес.
+EOF
+        ;;
+    setup)
+        cat <<'EOF'
+setup — переприменить правила nftables (update_nft.py).
+Полезно после ручной правки settings.json → tproxy или routing.
+EOF
+        ;;
+    settings)
+        cat <<'EOF'
+settings — сводка действующих настроек из /etc/xray/settings.json
+по блокам: подписка, устройство, TProxy, маршрутизация, DNS,
+балансировщик, policy, health, журнал, geo-файлы, обновление.
+
+Значения, которых нет в settings.json, берутся из эталона
+/usr/share/xray/settings.default.json и помечаются как «(эталон)».
+URL подписки и HWID показываются частично.
+
+Только чтение: файл не изменяется. Правка — вручную или через
+xpower-client sub set / sub ua, затем update --config-only.
+EOF
+        ;;
+    start | stop | restart | toggle)
+        cat <<'EOF'
+start|stop|restart|toggle — управление службой Xray через init.d.
+toggle переключает: запущен → остановить, остановлен → запустить.
+EOF
+        ;;
+    help)
+        cat <<'EOF'
+help — справка.
+
+  xpower-client help            общий список команд
+  xpower-client help <команда>  подробности по команде
+EOF
+        ;;
+    *)
+        echo "Нет справки для команды: $1" >&2
+        usage >&2
+        return 2
+        ;;
+    esac
+}
+
+# Путь установки проекта
+require_settings() {
+    [ -f "$SETTINGS_JSON" ] || {
+        echo "Проект не установлен: нет $SETTINGS_JSON" >&2
+        echo "Запустите установщик: sh install.sh --sub=<URL>" >&2
+        return 1
+    }
+}
+
+require_config() {
+    [ -f "$CONFIG_JSON" ] || {
+        echo "Нет $CONFIG_JSON — конфигурация ещё не собрана." >&2
+        echo "Соберите: xpower-client update" >&2
+        return 1
+    }
+}
+
+# Скрывает середину токена: https://host/abc123def → https://host/abc1…3def
+mask_url() {
+    python3 -B - "$1" <<'PY'
+import sys
+
+url = sys.argv[1]
+if len(url) <= 24:
+    print(url)
+else:
+    print(url[:14] + "…" + url[-4:])
+PY
+}
+
+# Запись ключа в settings.json с сохранением прав и атомарной заменой
+write_setting() {
+    path="$1"
+    value="$2"
+    tmp="$SETTINGS_JSON.tmp"
+    jq --arg v "$value" "$path = \$v" "$SETTINGS_JSON" >"$tmp" || {
+        rm -f "$tmp"
+        echo "Не удалось изменить $path в $SETTINGS_JSON" >&2
+        return 1
+    }
+    chmod 600 "$tmp" 2>/dev/null
+    mv "$tmp" "$SETTINGS_JSON" || {
+        rm -f "$tmp"
+        echo "Не удалось записать $SETTINGS_JSON" >&2
+        return 1
+    }
+}
+
+run_update() {
+    [ -x "$UPDATER" ] || {
+        echo "Скрипт обновления не найден: $UPDATER" >&2
+        return 1
+    }
+    "$UPDATER"
+}
+
+do_sub() {
+    require_settings || return 1
+
+    case "$1" in
+    set)
+        new_url=${2:-}
+        case "$new_url" in
+        http://* | https://* | file://*) ;;
+        "")
+            echo "Использование: xpower-client sub set <URL>" >&2
+            return 2
+            ;;
+        *)
+            echo "URL должен начинаться с http://, https:// или file://" >&2
+            return 2
+            ;;
+        esac
+        write_setting ".subscription.url" "$new_url" || return 1
+        echo "URL подписки обновлён: $(mask_url "$new_url")"
+        echo "Пересобираю конфигурацию…"
+        run_update || {
+            echo "Обновление не удалось — прежний config.json остаётся рабочим" >&2
+            return 1
+        }
+        ;;
+    ua)
+        new_ua=${2:-}
+        if [ -z "$new_ua" ]; then
+            echo "Использование: xpower-client sub ua <User-Agent>" >&2
+            return 2
+        fi
+        write_setting ".subscription.user_agent" "$new_ua" || return 1
+        echo "User-Agent обновлён: $new_ua"
+        echo "Пересобираю конфигурацию…"
+        run_update || {
+            echo "Обновление не удалось — прежний config.json остаётся рабочим" >&2
+            return 1
+        }
+        ;;
+    "" | --full)
+        url=$(setting_value ".subscription.url")
+        if [ -z "$url" ]; then
+            echo "URL подписки не задан в $SETTINGS_JSON" >&2
+            echo "Задайте: xpower-client sub set <URL>" >&2
+            return 1
+        fi
+        echo "=== Подписка ==="
+        if [ "$1" = "--full" ]; then
+            echo "URL:              $url"
+        else
+            echo "URL:              $(mask_url "$url")   (полностью: sub --full)"
+        fi
+        echo "User-Agent:       $(setting_value ".subscription.user_agent")"
+        echo "Фильтр профиля:   $(setting_value ".subscription.remarks_filter")"
+        echo "Все профили:      $(setting_value ".subscription.fallback_all")"
+        echo "HWID:             $(setting_value ".hwid")"
+
+        if [ -f "$CONFIG_JSON" ]; then
+            size=$(wc -c <"$CONFIG_JSON" 2>/dev/null)
+            when=$(date -r "$CONFIG_JSON" '+%d.%m %H:%M' 2>/dev/null)
+            echo "Конфигурация:     $CONFIG_JSON ($(human_bytes "${size:-0}"), $when)"
+        else
+            echo "Конфигурация:     не собрана (xpower-client update)"
+        fi
+
+        python3 -B - "$CONFIG_JSON" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        config = json.load(source)
+except (OSError, ValueError):
+    print("Профили:          — (конфигурация не собрана)")
+    print("Балансировщики:   — (конфигурация не собрана)")
+    sys.exit(0)
+
+groups = {}
+for outbound in config.get("outbounds") or []:
+    tag = outbound.get("tag") if isinstance(outbound, dict) else None
+    if not isinstance(tag, str) or not tag.startswith("proxy-"):
+        continue
+    name = tag[len("proxy-"):]
+    name = name.rsplit("-", 1)[0] if name.rsplit("-", 1)[-1].isdigit() else name
+    groups[name] = groups.get(name, 0) + 1
+
+if groups:
+    print("Профили:")
+    for name in sorted(groups, key=lambda n: (-groups[n], n)):
+        print("  %-28s %3d" % (name, groups[name]))
+    print("Итого:            %d профилей, %d узлов" % (len(groups), sum(groups.values())))
+else:
+    print("Профили:          — (нет узлов proxy-* в конфигурации)")
+
+pools = []
+for tag in ("balancer", "balancer-stream"):
+    for balancer in (config.get("routing") or {}).get("balancers") or []:
+        if balancer.get("tag") == tag:
+            strategy = (balancer.get("strategy") or {}).get("type") or "?"
+            pools.append("%s (%s)" % (tag, strategy))
+if pools:
+    print("Балансировщики:   %s" % ", ".join(pools))
+PY
+        ;;
+    *)
+        echo "Неизвестная подкоманда sub: $1" >&2
+        echo "Использование: xpower-client sub [--full|set <URL>|ua <User-Agent>]" >&2
+        return 2
+        ;;
+    esac
+}
+
+# Сводка по settings.json: что реально действует, с пометкой значений из эталона
+do_settings() {
+    for arg in "$@"; do
+        case "$arg" in
+        --no-color) : ;;
+        *)
+            echo "Неизвестный параметр settings: $arg" >&2
+            echo "Использование: xpower-client settings" >&2
+            return 2
+            ;;
+        esac
+    done
+    require_settings || return 1
+
+    XP_C_B="$C_B" XP_C_D="$C_D" XP_C_0="$C_0" \
+        python3 -B - "$SETTINGS_JSON" "$SETTINGS_DEFAULTS" <<'PY'
+import json
+import os
+import sys
+
+SETTINGS_PATH, DEFAULTS_PATH = sys.argv[1], sys.argv[2]
+BOLD = os.environ.get("XP_C_B", "")
+DIM = os.environ.get("XP_C_D", "")
+OFF = os.environ.get("XP_C_0", "")
+WIDTH = 18
+
+
+def load(path):
+    try:
+        with open(path, encoding="utf-8") as source:
+            data = json.load(source)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+settings = load(SETTINGS_PATH) or {}
+defaults = load(DEFAULTS_PATH) or {}
+covered = []
+
+
+def raw(path):
+    """Значение из settings.json, иначе из эталона: (value, is_default)."""
+    for data, is_default in ((settings, False), (defaults, True)):
+        node = data
+        for key in path.split("."):
+            if not isinstance(node, dict) or key not in node:
+                node = None
+                break
+            node = node[key]
+        else:
+            return node, is_default
+    return None, True
+
+
+def text(value):
+    if value is None:
+        return "—"
+    if isinstance(value, bool):
+        return "да" if value else "нет"
+    if value == "":
+        return "—"
+    return str(value)
+
+
+def mask_url(url):
+    if not isinstance(url, str) or not url:
+        return "—"
+    return url if len(url) <= 24 else url[:14] + "…" + url[-4:]
+
+
+def mask_hwid(hwid):
+    if not isinstance(hwid, str) or not hwid:
+        return "—"
+    return hwid[:8] + "…" if len(hwid) > 8 else hwid[:3] + "…"
+
+
+def section(title):
+    print("\n%s%s%s" % (BOLD, title, OFF))
+
+
+def line(label, value):
+    print("  %s %s" % (label.ljust(WIDTH), value))
+
+
+def field(label, path, render=text):
+    value, is_default = raw(path)
+    covered.append(path)
+    mark = DIM + " (эталон)" + OFF if is_default else ""
+    line(label, "%s%s" % (render(value), mark))
+
+
+def items(label, path):
+    """Список в строку, если коротко; иначе — по элементу на строку."""
+    value, is_default = raw(path)
+    covered.append(path)
+    mark = DIM + " (эталон)" + OFF if is_default else ""
+    values = [text(item) for item in value] if isinstance(value, list) else []
+    if not values:
+        line(label, "—" + mark)
+    elif len(", ".join(values)) <= 52:
+        line(label, ", ".join(values) + mark)
+    else:
+        print("  %s" % label)
+        for item in values:
+            print("      %s" % item)
+        if mark:
+            print("      %s" % mark.strip())
+
+
+def blocks(label, path, render):
+    """Список объектов: каждый элемент — строка render(item)."""
+    value, is_default = raw(path)
+    covered.append(path)
+    entries = [render(item) for item in value] if isinstance(value, list) else []
+    if not entries:
+        line(label, "—")
+        return
+    print("  %s" % label)
+    for number, entry in enumerate(entries, 1):
+        print("    %d  %s" % (number, entry))
+    if is_default:
+        print("    %s(эталон)%s" % (DIM, OFF))
+
+
+def flatten(node, prefix=""):
+    if isinstance(node, dict):
+        if not node:
+            yield prefix, {}
+        for key, value in node.items():
+            yield from flatten(value, "%s.%s" % (prefix, key) if prefix else key)
+    else:
+        yield prefix, node
+
+
+def is_covered(path):
+    return any(path == done or path.startswith(done + ".") for done in covered)
+
+
+print("%sНастройки%s · %s" % (BOLD, OFF, SETTINGS_PATH))
+print("  %sэталон: %s%s" % (DIM, DEFAULTS_PATH if defaults else "не найден", OFF))
+
+section("Подписка")
+field("URL", "subscription.url", mask_url)
+field("User-Agent", "subscription.user_agent")
+field("Фильтр", "subscription.remarks_filter",
+      lambda v: text(v) if v else "все профили")
+field("fallback_all", "subscription.fallback_all",
+      lambda v: "да — взять все профили, если фильтр не совпал" if v else "нет")
+
+section("Устройство")
+field("Режим", "mode", lambda v: "шлюз за основным роутером" if v == "gateway"
+      else "основной роутер")
+field("Основной роутер", "network.upstream_gw",
+      lambda v: text(v) if v else "—")
+field("Свой DHCP", "network.dhcp", lambda v: "да" if v else "нет")
+field("HWID", "hwid", mask_hwid)
+field("Модель", "device_model")
+field("ОС", "device_os")
+field("Версия ОС", "ver_os")
+
+section("TProxy")
+for label, key in (("Порт", "port"), ("DNS-порт", "dns_port"),
+                   ("mark", "mark"), ("fwmark", "fwmark"),
+                   ("route table", "route_table")):
+    field(label, "tproxy.%s" % key)
+field("трафик устройства", "tproxy.proxy_router_traffic",
+      lambda v: "через прокси" if v else "напрямую")
+
+section("Маршрутизация")
+field("domainStrategy", "routing.domainStrategy")
+field("direct strategy", "routing.direct_domain_strategy")
+field("direct keepalive", "routing.direct_tcp_keepalive_interval")
+field("proxy keepalive", "routing.proxy_tcp_keepalive_interval")
+field("block_quic", "routing.block_quic")
+items("block", "routing.block_domains")
+items("direct (IP)", "routing.direct_ips")
+items("direct (домены)", "routing.direct_domains")
+items("direct (протоколы)", "routing.direct_protocols")
+items("proxy (домены)", "routing.proxy_domains")
+items("DoH-домены", "routing.doh_domains")
+items("bypass CIDR", "routing.bypass_cidrs")
+
+section("DNS")
+field("queryStrategy", "dns.queryStrategy")
+field("Кэш", "dns.disableCache", lambda v: "выключен" if v else "включён")
+field("serveStale", "dns.serveStale",
+      lambda v: "да, TTL %s" % text(raw("dns.serveExpiredTTL")[0]) if v else "нет")
+covered.append("dns.serveExpiredTTL")
+field("Fallback", "dns.disableFallback", lambda v: "выключен" if v else "включён")
+field("FallbackIfMatch", "dns.disableFallbackIfMatch",
+      lambda v: "да" if v else "нет")
+field("ParallelQuery", "dns.enableParallelQuery")
+blocks("servers", "dns.servers", lambda s: " ".join(
+    [text(s.get("address"))] + [
+        "%s: %s" % (name, ", ".join(map(str, s[name])))
+        for name in ("domains", "expectedIPs") if s.get(name)
+    ] + (["skipFallback"] if s.get("skipFallback") else [])))
+hosts_value, hosts_default = raw("dns.hosts")
+covered.append("dns.hosts")
+if isinstance(hosts_value, dict) and hosts_value:
+    print("  hosts")
+    for name, address in hosts_value.items():
+        joined = ", ".join(map(str, address)) if isinstance(address, list) else str(address)
+        print("    %s  %s" % (name.ljust(28), joined))
+    if hosts_default:
+        print("    %s(эталон)%s" % (DIM, OFF))
+field("dnsmasq fallback", "dns.dnsmasq_fallback")
+
+section("Балансировщик")
+field("strategy", "balancer.strategy")
+strategy_settings, _strategy_default = raw("balancer.strategySettings")
+covered.append("balancer.strategySettings")
+if strategy_settings:
+    line("settings", json.dumps(strategy_settings, ensure_ascii=False))
+field("стриминг", "balancer.streaming.enabled",
+      lambda v: "да, %s" % text(raw("balancer.streaming.strategy")[0]) if v else "нет")
+covered.append("balancer.streaming.strategy")
+field("проба", "balancer.pingConfig.interval",
+      lambda v: "%s · %s проб · таймаут %s · %s" % (
+          text(v), text(raw("balancer.pingConfig.sampling")[0]),
+          text(raw("balancer.pingConfig.timeout")[0]),
+          text(raw("balancer.pingConfig.httpMethod")[0])))
+for key in ("sampling", "timeout", "httpMethod"):
+    covered.append("balancer.pingConfig.%s" % key)
+
+section("Policy")
+field("handshake", "policy.handshake")
+field("connIdle", "policy.connIdle")
+field("uplinkOnly", "policy.uplinkOnly")
+field("downlinkOnly", "policy.downlinkOnly")
+field("bufferSize", "policy.bufferSize")
+
+section("Health")
+field("проба", "health.probe_url")
+
+section("Журнал")
+field("preset", "log.preset")
+
+section("Geo-файлы")
+field("geoip", "geo.geoip_url")
+field("geosite", "geo.geosite_url")
+
+section("Обновление")
+field("архив", "update.archive_url")
+field("скрипты", "update.cron.scripts")
+field("подписка", "update.cron.subscription")
+field("Xray+гео", "update.cron.xray")
+
+extra = [(path, value) for path, value in flatten(settings) if not is_covered(path)]
+if extra:
+    section("Прочее в settings.json")
+    for path, value in extra:
+        if isinstance(value, list):
+            value = ", ".join(map(str, value)) or "—"
+        line(path, text(value))
+
+print()
+PY
+}
+
+do_doctor() {
+    diag="${XRAY_DIAGNOSE:-/usr/share/xray/diagnose-xray-tproxy.sh}"
+
+    if [ ! -f "$diag" ]; then
+        if [ "$1" = "--download" ]; then
+            tmp_diag="/tmp/diagnose-xray-tproxy.sh"
+            url="${XRAY_DIAGNOSE_URL:-https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/main/diagnose-xray-tproxy.sh}"
+            echo "Скачиваю скрипт диагностики…"
+            curl -fsSL "$url" -o "$tmp_diag" || {
+                echo "Не удалось скачать $url" >&2
+                return 1
+            }
+            sh -n "$tmp_diag" || {
+                echo "Скачанный скрипт не прошёл проверку синтаксиса" >&2
+                rm -f "$tmp_diag"
+                return 1
+            }
+            diag="$tmp_diag"
+        else
+            echo "Скрипт диагностики не установлен: $diag" >&2
+            echo "Скачать и запустить: xpower-client doctor --download" >&2
+            return 1
+        fi
+    fi
+
+    shift 2>/dev/null || true
+    exec sh "$diag" "$@"
+}
+
+config_port() {
+    python3 -B - "$CONFIG_JSON" "$1" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        config = json.load(source)
+except (OSError, ValueError):
+    sys.exit(1)
+
+tag = sys.argv[2]
+for inbound in config.get("inbounds", []):
+    if isinstance(inbound, dict) and inbound.get("tag") == tag:
+        print(inbound.get("port", ""))
+        break
+else:
+    sys.exit(1)
+PY
+}
+
+api_port() {
+    python3 -B - "$CONFIG_JSON" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        listen = str(json.load(source).get("api", {}).get("listen", ""))
+except (OSError, ValueError):
+    sys.exit(1)
+
+if not listen:
+    sys.exit(1)
+print(listen.rsplit(":", 1)[-1])
+PY
+}
+
+setting_value() {
+    value=$(jq -r "$1 // empty" "$SETTINGS_JSON" 2>/dev/null)
+    if [ -z "$value" ]; then
+        value=$(jq -r "$1 // empty" "$SETTINGS_DEFAULTS" 2>/dev/null)
+    fi
+    printf '%s' "$value"
+}
+
+proxy_list() {
+    python3 -B - "$CONFIG_JSON" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        config = json.load(source)
+except (OSError, ValueError) as error:
+    print(f"Не удалось прочитать config.json: {error}", file=sys.stderr)
+    sys.exit(1)
+
+excluded = {"freedom", "blackhole", "dns", "loopback"}
+proxies = [outbound for outbound in config.get("outbounds", [])
+           if isinstance(outbound, dict)
+           and outbound.get("protocol") not in excluded]
+print(f"Прокси-серверов: {len(proxies)}")
+if not proxies:
+    print("  (DIRECT режим)")
+
+for outbound in proxies:
+    protocol = outbound.get("protocol", "?")
+    settings = outbound.get("settings") or {}
+    servers = settings.get("vnext") or settings.get("servers") or []
+    server = servers[0] if servers and isinstance(servers[0], dict) else {}
+    address = server.get("address", "?")
+    port = server.get("port", "?")
+    stream = outbound.get("streamSettings") or {}
+    transport = stream.get("method") or stream.get("network") or "?"
+    print(f"  [{outbound.get('tag', '?')}] {protocol} {address}:{port} "
+          f"({transport}/{stream.get('security', 'none')})")
+PY
+}
+
+human_bytes() {
+    awk -v bytes="${1:-0}" 'BEGIN {
+        split("Б КБ МБ ГБ ТБ", units, " ");
+        i = 1;
+        while (bytes >= 1024 && i < 5) { bytes /= 1024; i++ }
+        printf (i == 1 ? "%.0f %s" : "%.1f %s"), bytes, units[i];
+    }'
+}
+
+# Доля ветки маршрутизации (proxy|direct|block) в общем объёме, проценты
+traffic_share() {
+    printf '%s\n' "$1" | awk -v k="$2" '
+        /^TOTAL/ { total = $2 + $3 }
+        $1 == "GROUP" && $2 == k { branch = $3 + $4 }
+        END { printf "%d", (total > 0 && branch) ? int(branch * 100 / total + 0.5) : 0 }'
+}
+
+traffic_stats() {
+    [ -x "$XRAY_BIN" ] || return 1
+    port=$(api_port) || return 1
+    raw=$("$XRAY_BIN" api statsquery --server="127.0.0.1:$port" -pattern "" 2>/dev/null) ||
+        return 1
+    [ -n "$raw" ] || return 1
+
+    printf '%s' "$raw" | python3 -B -c '
+import json
+import re
+import sys
+
+raw = sys.stdin.read()
+try:
+    data = json.loads(raw)
+except ValueError:
+    data = None
+
+items = data.get("stat") or [] if isinstance(data, dict) else data
+pairs = []
+if isinstance(items, list):
+    for item in items:
+        if isinstance(item, dict):
+            try:
+                pairs.append((str(item.get("name", "")), int(item.get("value", 0) or 0)))
+            except (TypeError, ValueError):
+                continue
+
+if not pairs:
+    for chunk in raw.split("name:"):
+        quoted = chunk.split(chr(34))
+        value = re.search(r"value:\s*(\d+)", chunk)
+        if len(quoted) > 1 and value:
+            pairs.append((quoted[1], int(value.group(1))))
+
+if not pairs:
+    sys.exit(1)
+
+# Считаем только outbound: inbound>>>tproxy-in повторяет те же байты со стороны
+# клиента, и сумма inbound+outbound давала удвоенный объём
+total = [0, 0]
+nodes = {}
+# direct и block — не узлы, а ветки маршрутизации: показываем их отдельными группами
+groups = {"direct": [0, 0], "block": [0, 0]}
+groups["proxy"] = [0, 0]
+for name, value in pairs:
+    parts = name.split(">>>")
+    if len(parts) != 4 or parts[0] != "outbound" or parts[2] != "traffic":
+        continue
+    direction = parts[3]
+    if direction not in ("uplink", "downlink"):
+        continue
+    index = 0 if direction == "uplink" else 1
+    tag = parts[1]
+    total[index] += value
+    if tag.startswith("proxy-"):
+        groups["proxy"][index] += value
+        node = nodes.setdefault(tag, [0, 0])
+        node[index] += value
+    elif tag in groups:
+        groups[tag][index] += value
+
+print("TOTAL %d %d" % (total[0], total[1]))
+for kind in ("proxy", "direct", "block"):
+    if groups[kind][0] or groups[kind][1]:
+        print("GROUP %s %d %d" % (kind, groups[kind][0], groups[kind][1]))
+ranked = sorted(nodes.items(), key=lambda item: sum(item[1]), reverse=True)
+print("COUNT %d" % len(ranked))
+for tag, values in ranked:
+    print("NODE %s %d %d" % (tag, values[0], values[1]))
+' 2>/dev/null
+}
+
+show_traffic() {
+    stats=$(traffic_stats) || {
+        echo "Нет данных: Xray не запущен, API недоступен или счётчики не включены." >&2
+        echo "Перегенерируйте конфиг командой: xpower-client update" >&2
+        return 1
+    }
+
+    up=$(printf '%s\n' "$stats" | awk '/^TOTAL/ {print $2}')
+    down=$(printf '%s\n' "$stats" | awk '/^TOTAL/ {print $3}')
+    printf 'Через Xray: ↑ %s  ↓ %s\n' "$(human_bytes "$up")" "$(human_bytes "$down")"
+
+    # Доли веток маршрутизации: сколько ушло в туннель, сколько напрямую
+    printf '\n'
+    for kind in proxy direct block; do
+        line=$(printf '%s\n' "$stats" | awk -v k="GROUP $kind" '$1" "$2 == k {print $3, $4}')
+        [ -n "$line" ] || continue
+        set -- $line
+        share=$(traffic_share "$stats" "$kind")
+        case "$kind" in
+        proxy) label="Прокси " ;;
+        direct) label="Direct " ;;
+        *) label="Block  " ;;
+        esac
+        printf '  %s %s%%  ↑ %s  ↓ %s\n' "$label" "$share" \
+            "$(human_bytes "$1")" "$(human_bytes "$2")"
+    done
+    printf '\n'
+
+    nodes=$(printf '%s\n' "$stats" | awk '/^NODE/ {print}')
+    if [ -z "$nodes" ]; then
+        echo "Трафика через прокси-серверы пока не было."
+        return 0
+    fi
+    # %-24s в printf считает байты, а кириллица занимает два: таблица съезжала.
+    # Python выравнивает по числу символов, что и видит моноширинный шрифт
+    printf '%s\n' "$nodes" | python3 -B -c '
+import sys
+
+def human(size):
+    units = ("Б", "КБ", "МБ", "ГБ", "ТБ")
+    index = 0
+    size = float(size)
+    while size >= 1024 and index < 4:
+        size /= 1024
+        index += 1
+    return "%.0f %s" % (size, units[index]) if index == 0 else "%.1f %s" % (size, units[index])
+
+rows = []
+for line in sys.stdin:
+    parts = line.split()
+    if len(parts) != 4 or parts[0] != "NODE":
+        continue
+    rows.append((parts[1], human(int(parts[2])), human(int(parts[3]))))
+if not rows:
+    sys.exit(0)
+
+tag_width = max([len("сервер")] + [len(r[0]) for r in rows])
+up_width = max([len("отдано")] + [len(r[1]) for r in rows])
+down_width = max([len("принято")] + [len(r[2]) for r in rows])
+
+print("  %s  %s  %s" % ("сервер".ljust(tag_width),
+                        "отдано".rjust(up_width), "принято".rjust(down_width)))
+for tag, up, down in rows:
+    print("  %s  %s  %s" % (tag.ljust(tag_width), up.rjust(up_width), down.rjust(down_width)))
+'
+}
+
+do_status() {
+    mode="compact"
+    net=1
+    for arg in "$@"; do
+        case "$arg" in
+        --full) mode="full" ;;
+        --short) mode="short" ;;
+        --no-net) net=0 ;;
+        --no-color) : ;;
+        *)
+            echo "Неизвестный параметр status: $arg" >&2
+            echo "Использование: xpower-client status [--full|--short] [--no-net]" >&2
+            return 2
+            ;;
+        esac
+    done
+
+    pid=$(pidof xray 2>/dev/null | awk '{print $1}')
+    if [ -n "$pid" ]; then
+        running=1
+        started="работает $(proc_uptime "$pid" 2>/dev/null || echo '?')"
+    else
+        running=0
+        started="остановлен"
+    fi
+    version=""
+    [ -x "$XRAY_BIN" ] && version=$("$XRAY_BIN" version 2>/dev/null | head -1 | awk '{print $2}')
+
+    model=$(setting_value '.device_model')
+    os_ver=$(setting_value '.ver_os')
+    deploy_mode=$(setting_value '.mode')
+    [ -n "$deploy_mode" ] || deploy_mode=router
+    tproxy_port=$(config_port tproxy-in 2>/dev/null)
+    dns_port=$(setting_value '.tproxy.dns_port')
+    fwmark=$(setting_value '.tproxy.fwmark')
+    table=$(setting_value '.tproxy.route_table')
+
+    nft_ok=0
+    if nft list chain inet fw4 xray_tproxy >/dev/null 2>&1 &&
+        nft list table inet xray_self >/dev/null 2>&1; then
+        nft_ok=1
+    fi
+    bypass=$(nft list chain inet fw4 xray_tproxy 2>/dev/null | grep -c 'return')
+
+    rule_ok=0
+    if [ -n "$fwmark" ] && [ -n "$table" ]; then
+        fwmark_hex=$(printf '0x%x' "$fwmark" 2>/dev/null)
+        if ip rule show 2>/dev/null |
+            grep -Eq "fwmark (${fwmark_hex}|0x0*${fwmark}|${fwmark}) lookup (${table}|xray)"; then
+            rule_ok=1
+        fi
+    fi
+
+    dns_ok=0
+    if [ -n "$dns_port" ] &&
+        uci -q get dhcp.@dnsmasq[0].server 2>/dev/null | grep -q "127.0.0.1#$dns_port"; then
+        dns_ok=1
+    fi
+
+    config_ok=0
+    config_size=""
+    config_when=""
+    if [ -f "$CONFIG_JSON" ]; then
+        config_ok=1
+        config_size=$(human_bytes "$(wc -c <"$CONFIG_JSON" | tr -d ' ')")
+        config_when=$(date -r "$CONFIG_JSON" '+%d.%m %H:%M' 2>/dev/null)
+    fi
+
+    profiles=$(profile_stats 2>/dev/null)
+    profile_count=$(printf '%s\n' "$profiles" | awk 'NF {n++} END {print n+0}')
+    node_count=$(printf '%s\n' "$profiles" | awk 'NF {s+=$NF} END {print s+0}')
+    top_profiles=$(printf '%s\n' "$profiles" | head -3 |
+        awk 'NF {printf "%s%s %s", sep, $1, $NF; sep=" · "}')
+    pools=$(balancer_stats 2>/dev/null)
+
+    cron_sub=$(crontab -l 2>/dev/null | grep -F "$UPDATER --config-only" | head -1 | cut -d' ' -f1-5)
+    cron_xray=$(crontab -l 2>/dev/null | grep -F "$UPDATER >>" | head -1 | cut -d' ' -f1-5)
+
+    wan_iface=$(ip route 2>/dev/null | awk '/^default/ {print $5; exit}')
+    wan_gw=$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}')
+    wan_ip=""
+    wan_ssid=""
+    if [ -n "$wan_iface" ]; then
+        wan_ip=$(ip -4 addr show "$wan_iface" 2>/dev/null | awk '/inet / {print $2; exit}')
+        case "$wan_iface" in
+        *sta*) wan_ssid=$(iw dev "$wan_iface" link 2>/dev/null | sed -n 's/.*SSID: //p' | head -1) ;;
+        esac
+    fi
+
+    traffic=""
+    if stats=$(traffic_stats 2>/dev/null); then
+        up=$(printf '%s\n' "$stats" | awk '/^TOTAL/ {print $2}')
+        down=$(printf '%s\n' "$stats" | awk '/^TOTAL/ {print $3}')
+        used=$(printf '%s\n' "$stats" | grep -c '^NODE')
+        share_proxy=$(traffic_share "$stats" proxy)
+        share_direct=$(traffic_share "$stats" direct)
+        traffic=$(printf '↑ %s ↓ %s · прокси %s%% / direct %s%% · узлов: %s' \
+            "$(human_bytes "${up:-0}")" "$(human_bytes "${down:-0}")" \
+            "$share_proxy" "$share_direct" "$used")
+    fi
+
+    sub_url=$(setting_value '.subscription.url')
+    hwid=$(setting_value '.hwid')
+
+    # --- короткий режим: одна строка ---
+    if [ "$mode" = "short" ]; then
+        [ "$running" = 1 ] && mark="$C_G$I_OK$C_0" || mark="$C_R$I_BAD$C_0"
+        volumes=""
+        if stats=$(traffic_stats 2>/dev/null); then
+            up=$(printf '%s\n' "$stats" | awk '/^TOTAL/ {print $2}')
+            down=$(printf '%s\n' "$stats" | awk '/^TOTAL/ {print $3}')
+            volumes=" · ↑$(human_bytes "${up:-0}") ↓$(human_bytes "${down:-0}")"
+        fi
+        printf '%s Xray %s · %s %s%s\n' "$mark" "${version:-?}" "$node_count" \
+            "$(plural_ru "$node_count" узел узла узлов)" "$volumes"
+        return 0
+    fi
+
+    # --- заголовок ---
+    printf '%sXPowerSpirit%s' "$C_B" "$C_0"
+    [ -n "$model" ] && printf ' · %s' "$model"
+    [ -n "$os_ver" ] && printf ' · OpenWrt %s' "$os_ver"
+    [ "$deploy_mode" = "gateway" ] && printf ' · шлюз'
+    printf '\n'
+
+    if [ "$running" = 1 ]; then
+        status_ok "Xray ${version:-?} $started"
+    else
+        status_bad "Xray остановлен${version:+ (версия $version)}"
+    fi
+
+    if [ "$nft_ok" = 1 ] && [ "$rule_ok" = 1 ]; then
+        status_ok "TProxy: порт ${tproxy_port:-?} · fwmark $fwmark → table $table · bypass $bypass"
+    elif [ "$nft_ok" = 1 ]; then
+        status_warn "TProxy: правила есть, но нет ip rule для fwmark $fwmark → table $table"
+    else
+        status_bad "TProxy: правила nftables не загружены (xpower-client setup)"
+    fi
+
+    if [ "$dns_ok" = 1 ]; then
+        status_ok "DNS: dnsmasq → 127.0.0.1:$dns_port"
+    elif [ -n "$dns_port" ]; then
+        status_warn "DNS: dnsmasq не перенаправлен на 127.0.0.1:$dns_port"
+    else
+        status_warn "DNS: порт не задан (tproxy.dns_port)"
+    fi
+
+    if [ "$config_ok" = 1 ] && [ -n "$sub_url" ]; then
+        status_ok "Подписка: $(mask_url "$sub_url") · HWID $(printf '%s' "${hwid:-—}" | cut -c1-8)… · конфиг $config_when"
+    elif [ "$config_ok" = 1 ]; then
+        status_warn "Подписка: URL не задан · конфиг $config_when"
+    else
+        status_bad "Конфигурация не собрана (xpower-client update)"
+    fi
+
+    [ -n "$traffic" ] && printf '  %sТрафик:%s %s\n' "$C_D" "$C_0" "$traffic"
+
+    if [ "$net" = 1 ]; then
+        ext=$(external_ip)
+        if [ -n "$ext" ]; then
+            printf '  %sВнешний IP:%s %s %s(через прокси)%s\n' "$C_D" "$C_0" "$ext" "$C_D" "$C_0"
+        else
+            printf '  %sВнешний IP: нет ответа — проверьте сеть (test)%s\n' "$C_Y" "$C_0"
+        fi
+    fi
+
+    # --- детали ---
+    printf '\n'
+    if [ "$profile_count" -gt 0 ]; then
+        extra=""
+        [ "$profile_count" -gt 3 ] && extra=" +$((profile_count - 3))"
+        nodes_word=$(plural_ru "$node_count" узел узла узлов)
+        if [ "$profile_count" -eq 1 ]; then
+            printf '  Узлы:        %s %s в профиле %s\n' \
+                "$node_count" "$nodes_word" "$top_profiles"
+        else
+            printf '  Узлы:        %s %s в %s профилях (%s%s)\n' \
+                "$node_count" "$nodes_word" "$profile_count" "$top_profiles" "$extra"
+        fi
+    else
+        printf '  Узлы:        нет узлов proxy-* в конфигурации\n'
+    fi
+    [ -n "$pools" ] && printf '  Пул:         %s\n' "$pools"
+
+    if [ -n "$wan_iface" ]; then
+        wan_line="$wan_iface"
+        [ -n "$wan_ssid" ] && wan_line="$wan_line ($wan_ssid)"
+        [ -n "$wan_ip" ] && wan_line="$wan_line $wan_ip"
+        [ -n "$wan_gw" ] && wan_line="$wan_line · шлюз $wan_gw"
+        if [ "$deploy_mode" = "gateway" ]; then
+            printf '  LAN:         %s · режим: шлюз\n' "$wan_line"
+        else
+            printf '  WAN:         %s\n' "$wan_line"
+        fi
+    elif [ "$deploy_mode" = "gateway" ]; then
+        printf '  LAN:         маршрута по умолчанию нет · режим: шлюз\n'
+    else
+        printf '  WAN:         маршрута по умолчанию нет\n'
+    fi
+
+    update_line=""
+    [ -n "$cron_sub" ] && update_line="подписка $cron_sub"
+    [ -n "$cron_xray" ] && update_line="${update_line:+$update_line · }Xray+гео $cron_xray"
+    [ -n "$config_when" ] && update_line="${update_line:+$update_line · }конфиг $config_when"
+    [ -n "$config_size" ] && update_line="$update_line ($config_size)"
+    [ -n "$update_line" ] && printf '  Обновление:  %s\n' "$update_line"
+
+    if [ "$mode" = "full" ] && [ "$config_ok" = 1 ]; then
+        printf '\n'
+        proxy_list
+    fi
+
+    printf '\n%sДетали:%s proxy-list · traffic · sub · doctor · test\n' "$C_D" "$C_0"
+}
+
+do_test() {
+    failed=0
+    probe=$(setting_value '.health.probe_url')
+
+    printf 'Интернет: '
+    if [ -n "$probe" ] && curl -fsS --max-time 5 "$probe" -o /dev/null 2>/dev/null; then
+        echo "OK"
+    else
+        echo "ошибка проверки ${probe:-health.probe_url не задан}"
+        failed=1
+    fi
+
+    dns_port=$(config_port dns-local 2>/dev/null || true)
+    if [ -z "$dns_port" ]; then
+        echo "DNS Xray: отключён (dns-local отсутствует)"
+    elif uci -q show 'dhcp.@dnsmasq[0].server' 2>/dev/null |
+        grep -qF "127.0.0.1#$dns_port" &&
+        resolveip -4 example.com >/dev/null 2>&1; then
+        echo "DNS Xray: OK (порт $dns_port через системный резолвер)"
+    else
+        echo "DNS Xray: dnsmasq не настроен на порт $dns_port или example.com не разрешён"
+        failed=1
+    fi
+
+    tproxy_port=$(config_port tproxy-in 2>/dev/null || true)
+    if [ -n "$tproxy_port" ] && nft list chain inet fw4 xray_tproxy 2>/dev/null |
+        grep -q "tproxy ip to 127.0.0.1:$tproxy_port"; then
+        echo "TProxy:   правило для порта $tproxy_port найдено"
+    else
+        echo "TProxy:   правило не найдено"
+        failed=1
+    fi
+
+    if [ "$failed" -eq 0 ]; then
+        return 0
+    fi
+    return 1
+}
+
+do_config() {
+    [ -f "$CONFIG_JSON" ] || {
+        echo "config.json не найден: $CONFIG_JSON" >&2
+        return 1
+    }
+    python3 -B - "$CONFIG_JSON" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        text = json.dumps(json.load(source), indent=2, ensure_ascii=False)
+except (OSError, ValueError) as error:
+    print(f"Не удалось прочитать config.json: {error}", file=sys.stderr)
+    sys.exit(1)
+
+lines = text.splitlines()
+print("\n".join(lines[:100]))
+if len(lines) > 100:
+    print(f"... (ещё {len(lines) - 100} строк)")
+PY
+}
+
+require_init() {
+    [ -x "$XRAY_INIT" ] || {
+        echo "Init-скрипт Xray не найден: $XRAY_INIT" >&2
+        return 1
+    }
+}
+
+command=${1:-}
+# Любая команда с -h/--help показывает свою справку
+case "${2:-}" in
+-h | --help)
+    help_for "$command"
+    exit 0
+    ;;
+esac
+
+case "$command" in
+    "")
+        # Без команды — это ошибка вызова, а не «неизвестная команда»
+        usage >&2
+        exit 2
+        ;;
+
+    status)
+        shift
+        do_status "$@"
+        exit $?
+        ;;
+    start | stop | restart)
+        require_init || exit 1
+        "$XRAY_INIT" "$command"
+        ;;
+    toggle)
+        require_init || exit 1
+        if pidof xray >/dev/null 2>&1; then
+            "$XRAY_INIT" stop
+        else
+            "$XRAY_INIT" start
+        fi
+        ;;
+    update)
+        [ -x "$UPDATER" ] || {
+            echo "Скрипт обновления не найден: $UPDATER" >&2
+            exit 1
+        }
+        shift
+        exec "$UPDATER" "$@"
+        ;;
+    test)
+        do_test
+        ;;
+    traffic)
+        show_traffic
+        ;;
+    logs)
+        if command -v logread >/dev/null 2>&1; then
+            exec logread -f -e xray
+        fi
+        exec tail -f /tmp/log/xray-error.log /tmp/log/xray-update.log
+        ;;
+    config)
+        do_config
+        ;;
+    proxy-list)
+        proxy_list
+        exit $?
+        ;;
+    settings)
+        shift
+        do_settings "$@"
+        exit $?
+        ;;
+    setup)
+        [ -f "$NFT_UPDATER" ] || {
+            echo "Скрипт настройки nftables не найден: $NFT_UPDATER" >&2
+            exit 1
+        }
+        exec python3 -B "$NFT_UPDATER"
+        ;;
+    help)
+        shift
+        help_for "${1:-}"
+        exit $?
+        ;;
+    sub)
+        shift
+        do_sub "$@"
+        exit $?
+        ;;
+    doctor)
+        shift
+        do_doctor "$@"
+        exit $?
+        ;;
+    -h | --help)
+        usage
+        ;;
+    *)
+        echo "Неизвестная команда: ${command:-<пусто>}" >&2
+        echo "Список команд: xpower-client help" >&2
+        exit 2
+        ;;
+esac

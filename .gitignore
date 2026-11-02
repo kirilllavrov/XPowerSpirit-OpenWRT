@@ -1,0 +1,25 @@
+# --- Локальные настройки редакторов и кэш инструментов ---
+.codebase-memory/
+.vscode/
+AGENTS.md
+.github/*
+!.github/workflows/
+!.github/scripts/
+.mcp.json
+*.swp
+*.swo
+test/
+tests/
+
+# --- Скачанные образы OpenWrt ---
+firmware/
+
+# --- Python cache ---
+__pycache__/
+*.pyc
+
+# --- Локальные материалы, не публикуемые в репозитории ---
+# Стенд и документация для работы на своей машине: в репозиторий не коммитятся
+docker/
+docker-compose.yml
+PROJECT-NOTES.md
