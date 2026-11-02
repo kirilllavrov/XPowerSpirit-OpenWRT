@@ -42,7 +42,16 @@ RT_TABLES = "/etc/iproute2/rt_tables"
 
 TAG = "update-nft"
 NFT_TABLE = "inet xray_self"
+# Цепочка fw4, использовавшаяся до версии с собственной таблицей: остаётся только
+# для миграции — при применении правил её нужно убрать вместе с jump
 FW4_CHAIN = "inet fw4 xray_tproxy"
+# TProxy для транзитного трафика живёт в собственной таблице с хуком prerouting.
+# Раньше правила лежали в цепочке fw4, но `fw4 reload` (любой ifup) удаляет её
+# вместе с jump: проксирование пропадало молча до следующего прогона cron.
+NFT_PREROUTING = "inet xray_prerouting"
+# Хук раньше fw4 (у него priority mangle): пакет должен попасть в TProxy до того,
+# как фаервол примет по нему решение
+PREROUTING_PRIORITY = ("mangle", "-", "5")
 IPV4_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 # Правило bypass, как его печатает `nft list chain`:
 # `ip daddr { 1.1.1.1, 8.8.8.8 } return`; набор может печататься с переносами
@@ -427,8 +436,8 @@ def rollback(reason: str) -> None:
     log(reason)
     print(f"[X] {reason}", file=sys.stderr)
     nft("delete", "table", NFT_TABLE, quiet=True)
-    nft("flush", "chain", FW4_CHAIN, quiet=True)
-    nft("delete", "chain", FW4_CHAIN, quiet=True)
+    nft("delete", "table", NFT_PREROUTING, quiet=True)
+    remove_legacy_fw4_chain()
     while ip_del_rule_true(CFG["fwmark"], CFG["route_table"]):
         pass
     ip("route", "flush", "table", str(CFG["route_table"]), quiet=True)
@@ -508,20 +517,29 @@ def update_rt_tables(table: int) -> None:
         f.write("\n".join(lines) + "\n")
 
 
-def ensure_fw4_chain() -> None:
-    """Цепочка xray_tproxy в fw4 с jump из prerouting"""
-    listing = nft("list", "chain", FW4_CHAIN, capture=True, quiet=True)
-    if "chain xray_tproxy" in listing:
-        nft("flush", "chain", FW4_CHAIN)
-    else:
-        nft("add", "chain", FW4_CHAIN)
-    # fw4 пересобирает свои цепочки при каждом reload (`ifup`, `service firewall
-    # reload`, смена UCI): jump пропадает, а наша цепочка остаётся. Без jump
-    # трафик уходит мимо прокси молча, поэтому проверяем его всегда, а не только
-    # при создании цепочки.
+def remove_legacy_fw4_chain() -> None:
+    """
+    Убирает цепочку xray_tproxy и jump из fw4 — остатки прежней схемы. Если их
+    не удалить, после миграции останется мёртвый jump в пустую цепочку.
+    """
     prerouting = nft("list", "chain", "inet fw4 prerouting", capture=True, quiet=True)
-    if "jump xray_tproxy" not in prerouting:
-        nft("add", "rule", "inet", "fw4", "prerouting", "jump", "xray_tproxy")
+    for handle in re.findall(r"jump xray_tproxy[^\n]*# handle (\d+)", prerouting):
+        nft("delete", "rule", "inet", "fw4", "prerouting", "handle", handle, quiet=True)
+    nft("flush", "chain", FW4_CHAIN, quiet=True)
+    nft("delete", "chain", FW4_CHAIN, quiet=True)
+
+
+def ensure_prerouting_chain() -> None:
+    """
+    Таблица с собственной цепочкой prerouting. В отличие от цепочки внутри fw4,
+    её не сносит `fw4 reload`: таблица живёт отдельно, и правила TProxy
+    переживают любой ifup и перезагрузку фаервола.
+    """
+    nft("delete", "table", NFT_PREROUTING, quiet=True)
+    nft("add", "table", NFT_PREROUTING)
+    nft("add", "chain", NFT_PREROUTING, "prerouting",
+        "{", "type", "filter", "hook", "prerouting", "priority", *PREROUTING_PRIORITY,
+        ";", "policy", "accept;", "}")
 
 
 def apply_rules(lan: str, guest: str, iot: str) -> None:
@@ -532,34 +550,34 @@ def apply_rules(lan: str, guest: str, iot: str) -> None:
 
     # ---------- PREROUTING (xray_tproxy) ----------
     # Пакеты, уже отмаркированные Xray, пропускаем — защита от петель
-    nft("add", "rule", "inet", "fw4", "xray_tproxy", "meta", "mark", str(mark), "return")
-    nft("add", "rule", "inet", "fw4", "xray_tproxy", "ip", "daddr", "{", bypass, "}", "return")
+    nft("add", "rule", NFT_PREROUTING, "prerouting", "meta", "mark", str(mark), "return")
+    nft("add", "rule", NFT_PREROUTING, "prerouting", "ip", "daddr", "{", bypass, "}", "return")
     if dns_list:
-        nft("add", "rule", "inet", "fw4", "xray_tproxy", "ip", "daddr", "{", dns_list, "}",
+        nft("add", "rule", NFT_PREROUTING, "prerouting", "ip", "daddr", "{", dns_list, "}",
             "return")
-    nft("add", "rule", "inet", "fw4", "xray_tproxy", "udp", "dport", "{", "67,", "68", "}",
+    nft("add", "rule", NFT_PREROUTING, "prerouting", "udp", "dport", "{", "67,", "68", "}",
         "return")
     for addr in SERVER_IPS:
-        nft("add", "rule", "inet", "fw4", "xray_tproxy", "ip", "daddr", addr, "return")
+        nft("add", "rule", NFT_PREROUTING, "prerouting", "ip", "daddr", addr, "return")
     if guest:
-        nft("add", "rule", "inet", "fw4", "xray_tproxy", "iifname", guest, "return")
+        nft("add", "rule", NFT_PREROUTING, "prerouting", "iifname", guest, "return")
     if iot:
-        nft("add", "rule", "inet", "fw4", "xray_tproxy", "iifname", iot, "return")
+        nft("add", "rule", NFT_PREROUTING, "prerouting", "iifname", iot, "return")
 
     # QUIC блокируется ДО TProxy, иначе пакет уйдёт в Xray до проверки.
     # Тот же переключатель (routing.block_quic) убирает правило и из config.json
     if CFG["block_quic"]:
-        nft("add", "rule", "inet", "fw4", "xray_tproxy", "iifname", lan,
+        nft("add", "rule", NFT_PREROUTING, "prerouting", "iifname", lan,
             "udp", "dport", "443", "drop")
 
     # В gateway-режиме IPv6 клиентам раздаёт основной роутер, а правила TProxy
     # здесь только для IPv4 — без этого правила IPv6-трафик уходил бы мимо прокси
     if CFG["mode"] == "gateway":
-        nft("add", "rule", "inet", "fw4", "xray_tproxy", "iifname", lan,
+        nft("add", "rule", NFT_PREROUTING, "prerouting", "iifname", lan,
             "meta", "nfproto", "ipv6", "drop")
 
     for proto in ("tcp", "udp"):
-        nft("add", "rule", "inet", "fw4", "xray_tproxy", "iifname", lan,
+        nft("add", "rule", NFT_PREROUTING, "prerouting", "iifname", lan,
             "meta", "l4proto", proto, "tproxy", "ip", "to", f"127.0.0.1:{port}",
             "meta", "mark", "set", str(fwmark), "accept")
 
@@ -570,7 +588,7 @@ def apply_rules(lan: str, guest: str, iot: str) -> None:
 
     # Трафик самого роутера приходит сюда уже отмаркированным из xray_self
     for proto in ("tcp", "udp"):
-        nft("add", "rule", "inet", "fw4", "xray_tproxy", "meta", "mark", str(fwmark),
+        nft("add", "rule", NFT_PREROUTING, "prerouting", "meta", "mark", str(fwmark),
             "meta", "l4proto", proto, "tproxy", "ip", "to", f"127.0.0.1:{port}", "accept")
 
     # ---------- OUTPUT (трафик самого роутера) ----------
@@ -614,27 +632,30 @@ def verify_rules() -> None:
     port, mark = CFG["port"], CFG["mark"]
     fwmark, table = CFG["fwmark"], CFG["route_table"]
 
-    chain = nft("list", "chain", FW4_CHAIN, capture=True, quiet=True)
+    chain = nft("list", "table", NFT_PREROUTING, capture=True, quiet=True)
+    if "type filter hook prerouting priority mangle - 5" not in chain:
+        rollback("Цепочка xray_prerouting должна быть type filter hook prerouting "
+                 "priority mangle - 5")
     if f"tproxy ip to 127.0.0.1:{port}" not in chain:
-        rollback(f"В цепочке xray_tproxy нет правила: tproxy ip to 127.0.0.1:{port}")
+        rollback(f"В таблице xray_prerouting нет правила: tproxy ip to 127.0.0.1:{port}")
     if CFG["block_quic"] and "udp dport 443 drop" not in chain:
-        rollback("В цепочке xray_tproxy нет правила: udp dport 443 drop")
+        rollback("В таблице xray_prerouting нет правила: udp dport 443 drop")
     if not re.search(rf"mark (0x0*{mark}|{mark}) return", chain):
-        rollback(f"В цепочке xray_tproxy нет защиты от петель (mark {mark} return)")
+        rollback(f"В таблице xray_prerouting нет защиты от петель (mark {mark} return)")
     bypass = bypass_targets(chain)
     missing = [address for address in RESOLVERS if address not in bypass]
     if missing:
-        rollback("В цепочке xray_tproxy нет bypass для DNS-серверов ("
+        rollback("В таблице xray_prerouting нет bypass для DNS-серверов ("
                  f"{', '.join(missing)})")
     # Адреса серверов прокси добавляются отдельными правилами (без набора { }),
     # поэтому ищутся по строке, а не через bypass_targets
     missing_servers = [address for address in SERVER_IPS
                        if not re.search(rf"ip daddr {re.escape(address)}\s+return", chain)]
     if missing_servers:
-        rollback("В цепочке xray_tproxy нет bypass для серверов прокси ("
+        rollback("В таблице xray_prerouting нет bypass для серверов прокси ("
                  f"{', '.join(missing_servers)})")
     if CFG["mode"] == "gateway" and "meta nfproto ipv6 drop" not in chain:
-        rollback("В цепочке xray_tproxy нет блокировки IPv6 от клиентов "
+        rollback("В таблице xray_prerouting нет блокировки IPv6 от клиентов "
                  "(meta nfproto ipv6 drop)")
 
     # Трафик самого устройства проксируется только при proxy_router_traffic
@@ -693,8 +714,10 @@ def main() -> None:
         write_state(fwmark, table)
         update_rt_tables(table)
 
-    ensure_fw4_chain()
+    ensure_prerouting_chain()
     apply_rules(lan, guest if by_iface else "", iot if by_iface_iot else "")
+    if not DRY_RUN:
+        remove_legacy_fw4_chain()
 
     if not DRY_RUN:
         verify_rules()
