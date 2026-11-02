@@ -62,19 +62,16 @@ else
     _warn "Mark $TPROXY_MARK не найден (может быть не указан явно)"
 fi
 
-# 4. nftables (inet fw4, цепочка xray_tproxy)
-printf "\n[4] nftables (inet fw4 xray_tproxy):\n"
-CHAIN_EXISTS=$(nft list chain inet fw4 xray_tproxy 2>/dev/null)
+# 4. nftables (таблица inet xray_prerouting с собственным хуком prerouting)
+printf "\n[4] nftables (inet xray_prerouting):\n"
+CHAIN_EXISTS=$(nft list table inet xray_prerouting 2>/dev/null)
 if [ -n "$CHAIN_EXISTS" ]; then
-    _ok "Цепочка inet fw4 xray_tproxy загружена"
-    
-    # Проверяем, что цепочка вызывается из prerouting
-    JUMP_EXISTS=$(nft list chain inet fw4 prerouting 2>/dev/null | grep -q "jump xray_tproxy" && echo "1" || echo "0")
-    if [ "$JUMP_EXISTS" = "1" ]; then
-        _ok "jump в xray_tproxy из prerouting настроен"
-    else
-        _warn "jump в xray_tproxy не найден (возможно, другая интеграция)"
-    fi
+    _ok "Таблица inet xray_prerouting загружена"
+
+    # Правила живут в собственной таблице с хуком prerouting — fw4 их не сносит
+    echo "$CHAIN_EXISTS" | grep -q "type filter hook prerouting priority mangle - 5" && \
+        _ok "Хук prerouting priority mangle - 5 настроен (раньше fw4)" || \
+        _warn "Хук prerouting priority mangle - 5 не найден"
     
     # Проверяем bypass DNS (порт 53)
     echo "$CHAIN_EXISTS" | grep -qE 'dport.*53.*return' && \
@@ -95,7 +92,7 @@ if [ -n "$CHAIN_EXISTS" ]; then
         _ok "Блокировка QUIC настроена" || \
         _warn "Блокировка QUIC не настроена"
 else
-    _fail "Цепочка inet fw4 xray_tproxy отсутствует!"
+    _fail "Таблица inet xray_prerouting отсутствует — TProxy не работает!"
 fi
 
 # 5. OUTPUT: трафик самого роутера (отдельная таблица type route)
@@ -186,7 +183,7 @@ nslookup google.com 77.88.8.8 2>/dev/null | grep -q "Address:" && _ok "Внеш�
 
 # Рекомендации
 printf "\n============= РЕКОМЕНДАЦИИ =============\n"
-if ! nft list chain inet fw4 xray_tproxy 2>/dev/null | grep -q "tproxy ip to 127.0.0.1:$TPROXY_PORT"; then
+if ! nft list table inet xray_prerouting 2>/dev/null | grep -q "tproxy ip to 127.0.0.1:$TPROXY_PORT"; then
     printf "[FIX NFT] TProxy правила отсутствуют — выполни:\n"
     printf "  python3 -B /usr/share/xray/update_nft.py\n"
 fi
