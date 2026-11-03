@@ -100,9 +100,9 @@
         "9.9.9.9",
         "149.112.112.112"
       ],
-      "unfiltered.joindns4.eu": [
-        "86.54.11.100",
-        "86.54.11.200"
+      "doh.ffmuc.net": [
+        "5.1.66.255",
+        "185.150.99.255"
       ]
     },
     "servers": [
@@ -126,11 +126,11 @@
         "skipFallback": false
       },
       {
-        "address": "https+local://dns.quad9.net/dns-query",
+        "address": "quic+local://dns.quad9.net",
         "skipFallback": false
       },
       {
-        "address": "https+local://unfiltered.joindns4.eu/dns-query",
+        "address": "https+local://doh.ffmuc.net/dns-query",
         "skipFallback": false
       }
     ],
