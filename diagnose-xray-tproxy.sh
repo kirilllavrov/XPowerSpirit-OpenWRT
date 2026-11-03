@@ -73,10 +73,27 @@ if [ -n "$CHAIN_EXISTS" ]; then
         _ok "Хук prerouting priority mangle - 5 настроен (раньше fw4)" || \
         _warn "Хук prerouting priority mangle - 5 не найден"
     
-    # Проверяем bypass DNS (порт 53)
-    echo "$CHAIN_EXISTS" | grep -qE 'dport.*53.*return' && \
-        _ok "DNS (порт 53) исключён из TProxy" || \
-        _warn "DNS (порт 53) не исключён явно (может быть не нужно)"
+    # Резолверы исключаются по адресу, а не по порту: update_nft.py добавляет
+    # ip daddr из dns.hosts и литеральных адресов dns.servers, портового правила
+    # с 53 в цепочке нет — проверять надо адрес из config.json.
+    # В jq из OpenWrt нет oniguruma, поэтому test()/match() недоступны:
+    # «только цифры и точки» проверяется через explode
+    if ! RESOLVER_IP=$(jq -r '[(.dns.hosts // {})[] | if type == "array" then .[] else . end]
+        | map(select(type == "string" and length > 0
+                     and (explode | any(. == 46))
+                     and (explode | all(. == 46 or (. >= 48 and . <= 57)))))
+        | first // empty' "$CFG" 2>/dev/null); then
+        _warn "jq не смог разобрать $CFG — bypass DNS не проверить"
+        RESOLVER_IP=""
+    fi
+    RESOLVER_RE=$(printf '%s' "$RESOLVER_IP" | sed 's/\./\\./g')
+    if [ -z "$RESOLVER_IP" ]; then
+        _warn "В $CFG нет IP резолверов (dns.hosts) — bypass DNS не проверить"
+    elif printf '%s\n' "$CHAIN_EXISTS" | grep -qE "(^|[^0-9.])$RESOLVER_RE([^0-9.]|$)"; then
+        _ok "DNS-резолвер $RESOLVER_IP исключён из TProxy"
+    else
+        _warn "Bypass для DNS-резолверов не найден: DoH может зациклиться"
+    fi
 
     # Проверяем bypass прокси-серверов
     BYPASS_CNT=$(echo "$CHAIN_EXISTS" | grep -c "ip daddr.*return")
@@ -124,7 +141,7 @@ fi
 # 6. Routing
 printf "\n[6] Policy Routing:\n"
 ip rule show 2>/dev/null | grep -qE "fwmark (0x0*$TPROXY_FWMARK|$TPROXY_FWMARK) lookup ($ROUTE_TABLE|xray)" && _ok "ip rule fwmark $TPROXY_FWMARK → table $ROUTE_TABLE" || _fail "ip rule отсутствует"
-ip route show table 100 2>/dev/null | grep -q "local default" && _ok "Таблица 100: local default dev lo" || _fail "Таблица 100 неверна"
+ip route show table "$ROUTE_TABLE" 2>/dev/null | grep -q "local default" && _ok "Таблица $ROUTE_TABLE: local default dev lo" || _fail "Таблица $ROUTE_TABLE неверна"
 
 # 7. dnsmasq → Xray DNS (tproxy.dns_port)
 printf "\n[7] DNS Forwarding (dnsmasq → Xray:%s):\n" "$DNS_PORT"

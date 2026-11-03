@@ -752,7 +752,13 @@ stop_service() {
         | grep 'jump xray_tproxy' | sed 's/.*handle //' | head -1)
     [ -n "$_handle" ] && nft delete rule inet fw4 prerouting handle "$_handle" 2>/dev/null
 
-    # Чистим цепочки и таблицу само-маршрутизации (type route)
+    # Правила TProxy живут в собственной таблице с хуком prerouting. Удалять её
+    # обязательно: при остановленном Xray они продолжают заворачивать трафик
+    # клиентов на 127.0.0.1:<port>, где никто не слушает — LAN остаётся без
+    # интернета, хотя служба «остановлена»
+    nft delete table inet xray_prerouting 2>/dev/null
+
+    # Чистим цепочки прежней схемы и таблицу само-маршрутизации (type route)
     nft flush chain inet fw4 xray_tproxy 2>/dev/null
     nft delete chain inet fw4 xray_tproxy 2>/dev/null
     nft delete table inet xray_self 2>/dev/null
