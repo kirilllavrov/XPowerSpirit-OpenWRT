@@ -228,8 +228,6 @@ def balancer_defaults() -> dict:
                                            streaming.get("enabled")),
             "strategy": field("str", enum=BALANCER_STRATEGIES).check(
                 "balancer.streaming.strategy", streaming.get("strategy")),
-            "profile": field("str").check("balancer.streaming.profile",
-                                          streaming.get("profile", "")),
         },
         "pingConfig": dict(ping_config),
     }
@@ -560,9 +558,7 @@ def validate_balancer() -> dict:
     cfg["streaming"]["strategy"] = field("str", defaults["streaming"]["strategy"],
                                          enum=BALANCER_STRATEGIES).check(
         "balancer.streaming.strategy", cfg["streaming"]["strategy"])
-    # profile — подстрока remarks второго профиля подписки; пусто — пул из основного
-    cfg["streaming"]["profile"] = field("str").check(
-        "balancer.streaming.profile", cfg["streaming"].get("profile", ""))
+
 
     ping = raw.get("pingConfig") or {}
     if not isinstance(ping, dict):
@@ -746,9 +742,9 @@ def build_balancer(cfg: dict, tags: list, tag: str = BALANCER_TAG,
 
 def streaming_pool(cfg: dict, proxies: list, stream_proxies: list = None) -> list:
     """
-    Прокси для пула игр и стриминга. Если в подписке нашёлся отдельный профиль
-    (balancer.streaming.profile) — берём его серверы, иначе пул собирается из
-    основного профиля. Пустой список — пул не нужен.
+    Прокси для пула игр и стриминга. Если парсер отдал узлы отдельного профиля
+    (settings.json → subscription.remarks_streaming) — берём их, иначе пул
+    собирается из основного профиля. Пустой список — пул не нужен.
     """
     if not cfg["balancer"]["streaming"]["enabled"]:
         return []

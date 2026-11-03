@@ -239,7 +239,10 @@ REMARKS_FILTER="$(settings_get ".subscription.remarks_filter")"
 [ -n "$REMARKS_FILTER" ] && echo "→ Фильтр remarks: $REMARKS_FILTER" >>"$LOG"
 # Отдельный профиль для пула игр и стриминга: российские входные узлы отправляют
 # трафик дальше на европейские, поэтому для стриминга берётся группа стран напрямую
-STREAM_REMARKS="$(settings_get ".balancer.streaming.profile")"
+# Ключ живёт в subscription (раздел владельца): balancer эталон перезаписывает,
+# и профиль стриминга сбрасывался бы при каждом hotplug. Старый ключ читаем как запасной
+STREAM_REMARKS="$(settings_get ".subscription.remarks_streaming")"
+[ -z "$STREAM_REMARKS" ] && STREAM_REMARKS="$(settings_get ".balancer.streaming.profile")"
 [ -n "$STREAM_REMARKS" ] && echo "→ Профиль стриминга: $STREAM_REMARKS" >>"$LOG"
 
 # ============================

@@ -8,7 +8,8 @@
     "url": "",
     "user_agent": "XPower/1.2",
     "remarks_filter": "Router",
-    "fallback_all": true
+    "fallback_all": true,
+    "remarks_streaming": ""
   },
   "hwid": "",
   "device_model": "",
@@ -141,8 +142,7 @@
     "strategySettings": {},
     "streaming": {
       "enabled": true,
-      "strategy": "leastPing",
-      "profile": ""
+      "strategy": "leastPing"
     },
     "pingConfig": {
       "interval": "1m",
