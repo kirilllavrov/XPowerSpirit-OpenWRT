@@ -112,10 +112,12 @@
           "geosite:category-ru",
           "domain:ru",
           "domain:su",
-          "domain:xn--p1ai"
+          "domain:xn--p1ai",
+          "domain:рф"
         ],
         "expectedIPs": [
-          "geoip:ru"
+          "geoip:ru",
+          "*"
         ],
         "skipFallback": true
       },
