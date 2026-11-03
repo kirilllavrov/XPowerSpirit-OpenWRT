@@ -33,8 +33,7 @@
       "cloudflare-dns.com",
       "dns.google",
       "dns.quad9.net",
-      "doh.opendns.com",
-      "unfiltered.joindns4.eu"
+      "doh.ffmuc.net"
     ],
     "block_domains": [],
     "direct_ips": [
