@@ -21,7 +21,7 @@ uci commit system
 service led restart
 
 # LED 1: Xray трафик (wps мигает при трафике через lo)
-uci add system led
+uci add system led >/dev/null
 uci set system.@led[-1].name='Xray_Status'
 uci set system.@led[-1].sysfs='white:wps'
 uci set system.@led[-1].trigger='netdev'
@@ -35,9 +35,16 @@ service led restart
 cat > /usr/share/xray/net-check.sh << 'EOF'
 #!/bin/sh
 # Адрес проверки берётся из настроек: он же используется burstObservatory,
-# поэтому лампочка и балансировщик проверяют один и тот же endpoint
-PROBE_URL=$(jq -r '.health.probe_url // empty' /etc/xray/settings.json 2>/dev/null)
-[ -n "$PROBE_URL" ] || PROBE_URL="https://connectivitycheck.gstatic.com/generate_204"
+# поэтому лампочка и балансировщик проверяют один и тот же endpoint.
+# Второго набора значений по умолчанию нет: если ключа нет в settings.json,
+# он берётся из эталона — иначе адрес в коде разошёлся бы с эталоном
+SETTINGS=/etc/xray/settings.json
+DEFAULTS=/usr/share/xray/settings.default.json
+PROBE_URL=$(jq -r '.health.probe_url // empty' "$SETTINGS" 2>/dev/null)
+[ -n "$PROBE_URL" ] || PROBE_URL=$(jq -r '.health.probe_url // empty' "$DEFAULTS" 2>/dev/null)
+# Проверять нечего — состояние лампочки не трогаем: незаполненные настройки
+# не означают «интернета нет»
+[ -n "$PROBE_URL" ] || exit 1
 if curl -fs --max-time 5 "$PROBE_URL" >/dev/null 2>&1; then
     echo "default-on" > /sys/class/leds/white:wan-online/trigger
 else

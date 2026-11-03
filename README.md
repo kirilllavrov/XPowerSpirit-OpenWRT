@@ -127,10 +127,12 @@ curl -fsSL https://raw.githubusercontent.com/kirilllavrov/XPowerSpirit-OpenWRT/m
   (рассчитан на Cudy WR3000S v1, для других моделей имена в `/sys/class/leds/` надо поправить).
 - Удаляет **все** существующие LED-конфигурации (`system.@led`), затем создаёт две свои:
   `Xray_Status` (мигает по трафику интерфейса `lo`, то есть по работе прокси) и индикатор интернета
-  через `net-check.sh` с ежесекундным cron.
+  через `net-check.sh` с cron раз в минуту (`* * * * *`). Штатные LED после этого остаются без
+  UCI-настроек: `white:status` досвечивает последним состоянием, `wlan-*` продолжают работать
+  через mac80211.
 - Адрес проверки берётся из `/etc/xray/settings.json → health.probe_url` — тот же, что у
-  `burstObservatory`; если настройки нет, используется
-  `https://connectivitycheck.gstatic.com/generate_204`.
+  `burstObservatory`; если ключа там нет, он берётся из эталона
+  `/usr/share/xray/settings.default.json`. Если адреса нет нигде, состояние лампочки не меняется.
 
 ## 🧰 xpower-client
 
