@@ -375,6 +375,14 @@ def collect_profile(profile: dict, seen_tags: set) -> tuple[list, bool]:
     return nodes, hole
 
 
+def split_filters(value: str) -> list:
+    """Разбивает фильтр remarks на части: «Франция, Германия» → два фильтра.
+    Несколько профилей нужны, когда провайдер раскладывает страны по отдельным
+    группам: для пула стриминга одного сервера мало."""
+    parts = [chunk.strip().lower() for chunk in str(value or "").split(",")]
+    return [part for part in parts if part]
+
+
 def parse_subscription(raw_data: str, remarks_filter: str = '',
                        fallback_all: bool = False,
                        remarks_streaming: str = '') -> dict:
@@ -402,7 +410,6 @@ def parse_subscription(raw_data: str, remarks_filter: str = '',
     nodes = []
     seen_tags = set()
     found_profile = False
-    chosen_remarks = "" if remarks_filter else str(profiles[0].get("remarks") or "")
 
     for profile in profiles:
         if remarks_filter and remarks_filter.lower() not in str(profile.get("remarks") or "").lower():
@@ -410,8 +417,6 @@ def parse_subscription(raw_data: str, remarks_filter: str = '',
             continue
 
         found_profile = True
-        if remarks_filter:
-            chosen_remarks = str(profile.get("remarks") or "")
         warn(f"  → Используем профиль: {profile.get('remarks', '')}")
         profile_nodes, profile_hole = collect_profile(profile, seen_tags)
         nodes.extend(profile_nodes)
@@ -429,28 +434,27 @@ def parse_subscription(raw_data: str, remarks_filter: str = '',
     result = {"hole": hole, "outbounds": dedup_outbounds(nodes)}
 
     # Отдельный профиль для пула игр и стриминга. Теги узлов уже содержат имя
-    # профиля (proxy_tag), поэтому две группы в одном конфиге не конфликтуют
-    if remarks_streaming:
-        if remarks_streaming.lower() in str(chosen_remarks).lower():
-            warn("  → Профиль стриминга совпал с основным — отдельный пул не нужен")
+    # профиля (proxy_tag), поэтому две группы в одном конфиге не конфликтуют.
+    # Фильтров может быть несколько через запятую: у провайдера страны бывают
+    # разложены по отдельным профилям, а пулу нужен не один сервер
+    filters = split_filters(remarks_streaming)
+    if filters:
+        matched = [p for p in profiles
+                   if any(f in str(p.get("remarks") or "").lower() for f in filters)]
+        if not matched:
+            warn(f"  [!] Профили стриминга '{', '.join(filters)}' не найдены — "
+                 f"пул соберётся из основного профиля")
         else:
-            stream_profile = next(
-                (p for p in profiles
-                 if remarks_streaming.lower() in str(p.get("remarks") or "").lower()),
-                None)
-            if stream_profile is None:
-                warn(f"  [!] Профиль стриминга '{remarks_streaming}' не найден — "
-                     f"пул соберётся из основного профиля")
-            else:
-                stream_nodes, _ = collect_profile(stream_profile, seen_tags)
-                stream_nodes = dedup_outbounds(stream_nodes)
-                warn(f"  → Пул стриминга: {stream_profile.get('remarks', '')} "
-                     f"({len(stream_nodes)} прокси)")
-                if stream_nodes:
-                    result["streaming"] = {
-                        "remarks": stream_profile.get("remarks", ""),
-                        "outbounds": stream_nodes,
-                    }
+            stream_nodes = []
+            for profile in matched:
+                profile_nodes, _ = collect_profile(profile, seen_tags)
+                stream_nodes.extend(profile_nodes)
+                warn(f"  → Пул стриминга: {profile.get('remarks', '')} "
+                     f"({len(profile_nodes)} прокси)")
+            stream_nodes = dedup_outbounds(stream_nodes)
+            names = ", ".join(str(p.get("remarks", "")) for p in matched)
+            if stream_nodes:
+                result["streaming"] = {"remarks": names, "outbounds": stream_nodes}
 
     return result
 
@@ -467,8 +471,8 @@ def main() -> None:
                         help='Отпечаток устройства (заголовок x-hwid) для загрузки по URL')
     parser.add_argument('--remarks', default='', help='Фильтр профилей по remarks (подстрока)')
     parser.add_argument('--remarks-streaming', default='',
-                        help='Профиль для пула игр и стриминга (подстрока remarks). '
-                             'Пусто — пул берётся из основного профиля')
+                        help='Профили для пула игр и стриминга (подстроки remarks '
+                             'через запятую). Пусто — пул берётся из основного профиля')
     parser.add_argument('--fallback-all', action='store_true',
                         help='Если профиль не найден — разобрать все профили вместо отказа')
     args = parser.parse_args()
