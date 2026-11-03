@@ -237,6 +237,10 @@ echo "→ User-Agent: $SUB_USER_AGENT" >>"$LOG"
 # Читаем фильтр remarks для JSON-формата
 REMARKS_FILTER="$(settings_get ".subscription.remarks_filter")"
 [ -n "$REMARKS_FILTER" ] && echo "→ Фильтр remarks: $REMARKS_FILTER" >>"$LOG"
+# Отдельный профиль для пула игр и стриминга: российские входные узлы отправляют
+# трафик дальше на европейские, поэтому для стриминга берётся группа стран напрямую
+STREAM_REMARKS="$(settings_get ".balancer.streaming.profile")"
+[ -n "$STREAM_REMARKS" ] && echo "→ Профиль стриминга: $STREAM_REMARKS" >>"$LOG"
 
 # ============================
 #   Обновление Xray
@@ -462,6 +466,7 @@ generate_config() {
     # Единый пайплайн: парсер (JSON, с автоопределением по --ua) → генератор
     set -- --ua "$SUB_USER_AGENT"
     [ -n "$REMARKS_FILTER" ] && set -- "$@" --remarks "$REMARKS_FILTER"
+    [ -n "$STREAM_REMARKS" ] && set -- "$@" --remarks-streaming "$STREAM_REMARKS"
     # fallback_all: профиль переименован — берём все профили вместо отказа
     # (settings_get отдаёт boolean как 1/0)
     [ "$(settings_get ".subscription.fallback_all" 2>/dev/null)" = "1" ] \

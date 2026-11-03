@@ -141,7 +141,8 @@
     "strategySettings": {},
     "streaming": {
       "enabled": true,
-      "strategy": "leastPing"
+      "strategy": "leastPing",
+      "profile": ""
     },
     "pingConfig": {
       "interval": "1m",

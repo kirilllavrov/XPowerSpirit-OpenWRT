@@ -376,13 +376,19 @@ def collect_profile(profile: dict, seen_tags: set) -> tuple[list, bool]:
 
 
 def parse_subscription(raw_data: str, remarks_filter: str = '',
-                       fallback_all: bool = False) -> dict:
+                       fallback_all: bool = False,
+                       remarks_streaming: str = '') -> dict:
     """
     Разбирает подписку и возвращает {"hole": bool, "outbounds": [...]}.
 
     fallback_all: если профиль по remarks не найден, разобрать все профили вместо
     отказа. Роутер обновляется без человека: конфиг с лишними серверами лучше, чем
     тихо остановившиеся обновления из-за переименования профиля у провайдера.
+
+    remarks_streaming: второй профиль для пула игр и стриминга. В подписке
+    российские входные узлы отправляют трафик дальше на европейские, поэтому
+    для стриминга берётся группа стран напрямую. Профиль необязателен: нет
+    группы — пул соберётся из основного профиля.
     """
     profiles = load_profiles(raw_data)
     if not profiles:
@@ -396,6 +402,7 @@ def parse_subscription(raw_data: str, remarks_filter: str = '',
     nodes = []
     seen_tags = set()
     found_profile = False
+    chosen_remarks = "" if remarks_filter else str(profiles[0].get("remarks") or "")
 
     for profile in profiles:
         if remarks_filter and remarks_filter.lower() not in str(profile.get("remarks") or "").lower():
@@ -403,6 +410,8 @@ def parse_subscription(raw_data: str, remarks_filter: str = '',
             continue
 
         found_profile = True
+        if remarks_filter:
+            chosen_remarks = str(profile.get("remarks") or "")
         warn(f"  → Используем профиль: {profile.get('remarks', '')}")
         profile_nodes, profile_hole = collect_profile(profile, seen_tags)
         nodes.extend(profile_nodes)
@@ -417,7 +426,33 @@ def parse_subscription(raw_data: str, remarks_filter: str = '',
             warn("  [!] fallback_all: берём все профили вместо отказа")
             return parse_subscription(raw_data, '', False)
 
-    return {"hole": hole, "outbounds": dedup_outbounds(nodes)}
+    result = {"hole": hole, "outbounds": dedup_outbounds(nodes)}
+
+    # Отдельный профиль для пула игр и стриминга. Теги узлов уже содержат имя
+    # профиля (proxy_tag), поэтому две группы в одном конфиге не конфликтуют
+    if remarks_streaming:
+        if remarks_streaming.lower() in str(chosen_remarks).lower():
+            warn("  → Профиль стриминга совпал с основным — отдельный пул не нужен")
+        else:
+            stream_profile = next(
+                (p for p in profiles
+                 if remarks_streaming.lower() in str(p.get("remarks") or "").lower()),
+                None)
+            if stream_profile is None:
+                warn(f"  [!] Профиль стриминга '{remarks_streaming}' не найден — "
+                     f"пул соберётся из основного профиля")
+            else:
+                stream_nodes, _ = collect_profile(stream_profile, seen_tags)
+                stream_nodes = dedup_outbounds(stream_nodes)
+                warn(f"  → Пул стриминга: {stream_profile.get('remarks', '')} "
+                     f"({len(stream_nodes)} прокси)")
+                if stream_nodes:
+                    result["streaming"] = {
+                        "remarks": stream_profile.get("remarks", ""),
+                        "outbounds": stream_nodes,
+                    }
+
+    return result
 
 
 # -----------------------------
@@ -431,6 +466,9 @@ def main() -> None:
     parser.add_argument('--hwid', default='',
                         help='Отпечаток устройства (заголовок x-hwid) для загрузки по URL')
     parser.add_argument('--remarks', default='', help='Фильтр профилей по remarks (подстрока)')
+    parser.add_argument('--remarks-streaming', default='',
+                        help='Профиль для пула игр и стриминга (подстрока remarks). '
+                             'Пусто — пул берётся из основного профиля')
     parser.add_argument('--fallback-all', action='store_true',
                         help='Если профиль не найден — разобрать все профили вместо отказа')
     args = parser.parse_args()
@@ -448,7 +486,8 @@ def main() -> None:
         sys.exit(1)
 
     warn("  → Разбор JSON-подписки")
-    result = parse_subscription(data, args.remarks, args.fallback_all)
+    result = parse_subscription(data, args.remarks, args.fallback_all,
+                                args.remarks_streaming)
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
     # hole — осознанный сигнал провайдера (DIRECT), пустой результат без hole —

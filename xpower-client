@@ -700,6 +700,8 @@ if strategy_settings:
 field("стриминг", "balancer.streaming.enabled",
       lambda v: "да, %s" % text(raw("balancer.streaming.strategy")[0]) if v else "нет")
 covered.append("balancer.streaming.strategy")
+field("профиль стриминга", "balancer.streaming.profile",
+      lambda v: text(v) if v else "— (пул из основного профиля)")
 field("проба", "balancer.pingConfig.interval",
       lambda v: "%s · %s проб · таймаут %s · %s" % (
           text(v), text(raw("balancer.pingConfig.sampling")[0]),
