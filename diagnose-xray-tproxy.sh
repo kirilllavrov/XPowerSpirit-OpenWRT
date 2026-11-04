@@ -37,6 +37,11 @@ if [ -z "$TPROXY_PORT" ] || [ -z "$DNS_PORT" ] || [ -z "$TPROXY_MARK" ] ||
     exit 1
 fi
 
+# Правила nftables получают счётчики (counter packets N bytes N) перед вердиктом:
+# update_nft.py добавляет их ради диагностики. В проверках они допускаются,
+# но не обязательны, чтобы диагностика работала с обеими версиями правил
+COUNTER_RE="( counter packets [0-9]+ bytes [0-9]+)?"
+
 # 1. Процесс
 printf "[1] Xray process:\n"
 pgrep -a xray >/dev/null && _ok "Xray запущен" || _fail "Xray НЕ запущен"
@@ -105,7 +110,7 @@ if [ -n "$CHAIN_EXISTS" ]; then
         _fail "TProxy на порт $TPROXY_PORT НЕ настроен!"
 
     # Проверяем блокировку QUIC
-    echo "$CHAIN_EXISTS" | grep -q "udp dport 443 drop" && \
+    echo "$CHAIN_EXISTS" | grep -qE "udp dport 443$COUNTER_RE drop" && \
         _ok "Блокировка QUIC настроена" || \
         _warn "Блокировка QUIC не настроена"
 else
@@ -122,11 +127,12 @@ if [ -n "$SELF_CHAIN" ]; then
         _fail "Цепочка xray_self есть, но без type route — mark не повлияет на маршрутизацию"
     fi
 
-    echo "$SELF_CHAIN" | grep -qE "meta mark (0x0*$TPROXY_MARK|$TPROXY_MARK) return" && \
+
+    echo "$SELF_CHAIN" | grep -qE "meta mark (0x0*$TPROXY_MARK|$TPROXY_MARK)$COUNTER_RE return" && \
         _ok "Loop prevention (mark $TPROXY_MARK return) настроена" || \
         _warn "Loop prevention (mark $TPROXY_MARK return) не найдена"
 
-    echo "$SELF_CHAIN" | grep -qE "mark set (0x0*$TPROXY_FWMARK|$(printf '0x%08x' "$TPROXY_FWMARK")|$TPROXY_FWMARK)\$" && \
+    echo "$SELF_CHAIN" | grep -qE "mark set (0x0*$TPROXY_FWMARK|$(printf '0x%08x' "$TPROXY_FWMARK")|$TPROXY_FWMARK)$COUNTER_RE\$" && \
         _ok "Маркировка трафика роутера (mark $TPROXY_FWMARK) настроена" || \
         _warn "Маркировка трафика роутера не найдена"
 else

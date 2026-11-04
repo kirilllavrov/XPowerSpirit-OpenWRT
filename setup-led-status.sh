@@ -40,15 +40,32 @@ cat > /usr/share/xray/net-check.sh << 'EOF'
 # он берётся из эталона — иначе адрес в коде разошёлся бы с эталоном
 SETTINGS=/etc/xray/settings.json
 DEFAULTS=/usr/share/xray/settings.default.json
+FAILS=/tmp/.xray-wan-check-fails
+LED=/sys/class/leds/white:wan-online/trigger
+
 PROBE_URL=$(jq -r '.health.probe_url // empty' "$SETTINGS" 2>/dev/null)
 [ -n "$PROBE_URL" ] || PROBE_URL=$(jq -r '.health.probe_url // empty' "$DEFAULTS" 2>/dev/null)
 # Проверять нечего — состояние лампочки не трогаем: незаполненные настройки
 # не означают «интернета нет»
 [ -n "$PROBE_URL" ] || exit 1
+
+# Проверка идёт через прокси, поэтому без запущенного Xray интернета для
+# клиентов нет: гасим сразу и не тратим запрос впустую
+if ! pidof xray >/dev/null 2>&1; then
+    echo "none" > "$LED"
+    exit 0
+fi
+
 if curl -fs --max-time 5 "$PROBE_URL" >/dev/null 2>&1; then
-    echo "default-on" > /sys/class/leds/white:wan-online/trigger
+    echo 0 > "$FAILS"
+    echo "default-on" > "$LED"
 else
-    echo "none" > /sys/class/leds/white:wan-online/trigger
+    # Одиночный сбой (потерянный пакет, таймаут узла) не должен гасить
+    # индикатор: гасим после двух промахов подряд, то есть примерно через 2 минуты
+    fails=$(cat "$FAILS" 2>/dev/null || echo 0)
+    fails=$((fails + 1))
+    echo "$fails" > "$FAILS"
+    [ "$fails" -ge 2 ] && echo "none" > "$LED"
 fi
 exit 0
 EOF

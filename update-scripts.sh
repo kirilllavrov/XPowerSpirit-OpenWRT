@@ -39,7 +39,7 @@ ARCHIVE_URL="${XRAY_SCRIPTS_URL:-}"
 
 # Файлы, которые разрешено заменять автоматически. Здесь же — сам этот скрипт:
 # его замена безопасна, потому что mv подменяет имя, а не содержимое inode.
-SCRIPTS="xray-common.sh xray_settings.py xray-generate-config.py xray-sub-parser.py update_nft.py update-xray.sh update-scripts.sh xpower-client"
+SCRIPTS="xray-common.sh xray_settings.py xray-generate-config.py xray-sub-parser.py update_nft.py update-xray.sh update-scripts.sh xpower-client diagnose-xray-tproxy.sh"
 
 MODE="apply"
 

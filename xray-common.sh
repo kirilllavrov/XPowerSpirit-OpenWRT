@@ -171,7 +171,7 @@ rotate_log() {
 # Каждая попытка ограничена по времени: ntpd -q на молчащем сервере висит
 # минутами, а sync_time вызывается из start_service и из hotplug, то есть от
 # него зависит, когда поднимется прокси и начнётся автообновление.
-#   XRAY_NTP_TRY_TIMEOUT   — предел на один сервер, секунды (8)
+#   XRAY_NTP_TRY_TIMEOUT   — предел на один сервер, секунды (5)
 #   XRAY_NTP_TOTAL_BUDGET  — предел на весь перебор, секунды (20)
 #   XRAY_SYNC_MARKER       — маркер «время уже выставлено» в tmpfs (сбрасывается
 #                            перезагрузкой), чтобы hotplug не синхронизировался
@@ -214,7 +214,7 @@ _ntp_try() {
 }
 
 sync_time() {
-    local gateway server limit budget started elapsed
+    local gateway server limit budget started elapsed seen
 
     # Второй вызов в этой же загрузке не нужен: время уже выставлено
     [ -f "$SYNC_TIME_MARKER" ] && return 0
@@ -224,17 +224,29 @@ sync_time() {
         return 1
     fi
 
-    limit="${XRAY_NTP_TRY_TIMEOUT:-8}"
+    limit="${XRAY_NTP_TRY_TIMEOUT:-5}"
     budget="${XRAY_NTP_TOTAL_BUDGET:-20}"
 
     # Шлюз провайдера часто отвечает по NTP и ближе всех остальных
     gateway=$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}')
 
+    # Порядок — по фактическому отклику, замеренному на устройстве:
+    # time.google.com ~2 с, pool.ntp.org ~3 с, а шлюз и серверы пула OpenWrt
+    # из UCI молчат дольше таймаута (~10 с). Пока они стояли первыми, бюджет
+    # исчерпывался на них, и быстрые серверы не проверялись вовсе — при каждой
+    # загрузке время оставалось неверным, а Xray стартовал до синхронизации.
     started=$(_uptime_sec)
-    for server in "$gateway" \
+    seen=" "
+    for server in time.google.com pool.ntp.org \
         $(uci -q get system.ntp.server 2>/dev/null) \
-        0.openwrt.pool.ntp.org pool.ntp.org time.google.com; do
+        "$gateway"; do
         [ -n "$server" ] || continue
+        # Один и тот же сервер не опрашиваем дважды: UCI-список пула OpenWrt
+        # пересекается с явно заданными именами
+        case "$seen" in
+        *" $server "*) continue ;;
+        esac
+        seen="$seen$server "
 
         elapsed=$(( $(_uptime_sec) - started ))
         if [ "$elapsed" -ge "$budget" ]; then

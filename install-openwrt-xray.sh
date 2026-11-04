@@ -46,6 +46,7 @@ SETTINGS_DEFAULTS="$GEO_DIR/settings.default.json"
 STATE_DIR="/etc/xray/state"
 COMMON_SH="/usr/share/xray/xray-common.sh"
 CLI_TOOL="/usr/share/xray/xpower-client"
+DIAGNOSE="/usr/share/xray/diagnose-xray-tproxy.sh"
 
 # Значения из CLI (если не указаны — берутся из settings.default.json)
 SUB_USER_AGENT=""
@@ -328,6 +329,9 @@ install_script "update_nft.py" "$NFT_UPDATER"
 install_script "update-scripts.sh" "$SCRIPTS_UPDATER"
 install_script "xray-common.sh" "$COMMON_SH"
 install_script "xpower-client" "$CLI_TOOL"
+# Диагностика нужна команде `xpower-client doctor`: без неё она отвечает
+# «Скрипт диагностики не установлен» и просит скачать его вручную
+install_script "diagnose-xray-tproxy.sh" "$DIAGNOSE"
 ln -sf "$CLI_TOOL" /usr/bin/xpower-client || die "Не удалось создать /usr/bin/xpower-client"
 
 # Библиотека нужна остальным шагам установщика (settings_set, архитектура, SHA)
@@ -398,6 +402,10 @@ if [ "$MODE" = "gateway" ]; then
 	uci set dhcp.lan.ignore='1'
 	uci set dhcp.lan.dhcpv6='disabled'
 	uci set dhcp.lan.ra='disabled'
+	# ip6assign — заводское значение: с ним br-lan получает ULA, и если odhcpd
+	# когда-нибудь включат, IPv6 начнёт раздаваться мимо прокси (правила TProxy
+	# только для IPv4)
+	uci -q delete network.lan.ip6assign
 	uci -q delete dhcp.lan.start
 	uci -q delete dhcp.lan.limit
 	uci commit network
@@ -419,6 +427,9 @@ else
 	uci set network.wan.ipv6='0'
 	uci set dhcp.lan.dhcpv6='disabled'
 	uci set dhcp.lan.ra='disabled'
+	# Заводской ip6assign даёт br-lan адрес ULA: пока odhcpd выключен это
+	# безвредно, но при его включении IPv6 пошёл бы мимо прокси
+	uci -q delete network.lan.ip6assign
 	uci -q delete network.wan6
 	uci commit network
 	uci commit dhcp
