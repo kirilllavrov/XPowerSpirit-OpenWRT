@@ -100,9 +100,18 @@ if [ -n "$CHAIN_EXISTS" ]; then
         _warn "Bypass для DNS-резолверов не найден: DoH может зациклиться"
     fi
 
-    # Проверяем bypass прокси-серверов
-    BYPASS_CNT=$(echo "$CHAIN_EXISTS" | grep -c "ip daddr.*return")
-    [ "$BYPASS_CNT" -gt 0 ] && _ok "Bypass для серверов: $BYPASS_CNT правил" || _warn "Bypass для серверов не найден"
+    # Адреса узлов живут в именованном наборе @nodes: их число берётся из самого
+    # набора, а не подсчётом правил `ip daddr … return` — в цепочке таких правил
+    # теперь три (подсети, DNS-резолверы, набор), и счётчик правил ничего не говорит
+    if echo "$CHAIN_EXISTS" | grep -q "ip daddr @nodes"; then
+        NODES_LIST=$(nft list set inet xray_prerouting nodes 2>/dev/null)
+        NODES_CNT=$(echo "$NODES_LIST" | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | wc -l | tr -d ' ')
+        [ "${NODES_CNT:-0}" -gt 0 ] && \
+            _ok "Bypass для серверов: набор @nodes, ${NODES_CNT} адресов" || \
+            _warn "Набор @nodes пуст — трафик к узлам пойдёт через TProxy"
+    else
+        _warn "Bypass для серверов не найден (нет правила ip daddr @nodes)"
+    fi
 
     # Проверяем TProxy правилa
     echo "$CHAIN_EXISTS" | grep -q "tproxy ip to 127.0.0.1:$TPROXY_PORT" && \

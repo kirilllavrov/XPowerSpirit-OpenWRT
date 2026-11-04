@@ -239,6 +239,43 @@ def outbound_key(ob: dict) -> str:
     return json.dumps(body, sort_keys=True, ensure_ascii=False)
 
 
+def node_addresses(profiles: list) -> list:
+    """
+    Адреса ВСЕХ узлов подписки, включая профили, которые роутер не выбирает:
+    по ним update_nft.py строит bypass, чтобы трафик к узлам не заворачивался
+    в TProxy. Нужно на случай, когда клиент в LAN запускает собственный Xray
+    с той же подпиской: его профиль может не совпадать с выбранным на роутере.
+
+    Сохраняются только адреса — ни UUID, ни ключей, ни REALITY в файл не попадает.
+    """
+    found = set()
+    for profile in profiles:
+        for ob in profile.get("outbounds") or []:
+            if not isinstance(ob, dict):
+                continue
+            if str(ob.get("protocol") or "") in SERVICE_PROTOCOLS:
+                continue
+            if is_hole(ob):
+                continue
+            settings = ob.get("settings")
+            if not isinstance(settings, dict):
+                continue
+            targets = list(settings.get("vnext") or [])
+            # Shadowsocks/Trojan задают сервер в servers[].address
+            targets += list(settings.get("servers") or [])
+            for target in targets:
+                if not isinstance(target, dict):
+                    continue
+                addr = target.get("address")
+                if not isinstance(addr, str):
+                    continue
+                addr = addr.strip()
+                if not addr or addr in PLACEHOLDER_ADDRESSES:
+                    continue
+                found.add(addr)
+    return sorted(found)
+
+
 def dedup_outbounds(outbounds: list) -> list:
     """
     Убирает повторяющиеся серверы: профили подписки пересекаются, и один сервер
@@ -400,7 +437,7 @@ def parse_subscription(raw_data: str, remarks_filter: str = '',
     """
     profiles = load_profiles(raw_data)
     if not profiles:
-        return {"hole": False, "outbounds": []}
+        return {"hole": False, "outbounds": [], "node_addresses": []}
 
     if len(profiles) > 1 and not remarks_filter:
         warn(f"  [!] В подписке {len(profiles)} профилей, фильтр remarks не задан — "
@@ -431,7 +468,8 @@ def parse_subscription(raw_data: str, remarks_filter: str = '',
             warn("  [!] fallback_all: берём все профили вместо отказа")
             return parse_subscription(raw_data, '', False)
 
-    result = {"hole": hole, "outbounds": dedup_outbounds(nodes)}
+    result = {"hole": hole, "outbounds": dedup_outbounds(nodes),
+              "node_addresses": node_addresses(profiles)}
 
     # Отдельный профиль для пула игр и стриминга. Теги узлов уже содержат имя
     # профиля (proxy_tag), поэтому две группы в одном конфиге не конфликтуют.

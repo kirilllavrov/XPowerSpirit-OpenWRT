@@ -38,6 +38,8 @@ from xray_settings import (  # noqa: E402  (путь к модулю выста�
 CONF = os.environ.get("XRAY_CONFIG_JSON", "/etc/xray/config.json")
 SETTINGS_JSON = os.environ.get("XRAY_SETTINGS_JSON", DEFAULT_SETTINGS_FILE)
 STATE_FILE = os.environ.get("XRAY_TPROXY_STATE", "/etc/xray/state/tproxy.state")
+# Адреса всех узлов подписки (пишет update-xray.sh при каждом обновлении)
+NODES_FILE = os.environ.get("XRAY_NODES_FILE", "/etc/xray/state/subscription-nodes.txt")
 RT_TABLES = "/etc/iproute2/rt_tables"
 
 TAG = "update-nft"
@@ -57,6 +59,11 @@ IPV4_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 # и понять, срабатывает ли bypass или TProxy, по правилам нельзя — приходится
 # смотреть статистику Xray. Печатается в том же виде, что и в verify_rules.
 COUNTER = ("counter",)
+# Имя набора адресов узлов: одно правило `ip daddr @nodes return` вместо правила
+# на каждый адрес. У подписки бывает десятки узлов, а правила в цепочке
+# проверяются последовательно — набор ищет по хешу и стоит одинаково при любом
+# размере списка.
+NODES_SET = "nodes"
 # `counter packets 0 bytes 0` между условием и вердиктом: сам counter в проверках
 # не нужен, но и мешать не должен
 COUNTER_RE = r"(?: counter packets \d+ bytes \d*)?"
@@ -384,9 +391,17 @@ def server_ips() -> list:
     соединение с сервером заворачивается само в себя. В подписках адрес часто
     задан доменом, поэтому имена резолвятся; если не удалось — работаем без них,
     правила TProxy от этого не перестают быть верными.
+
+    Берутся два источника: outbound'ы текущего config.json и список адресов всех
+    узлов подписки (subscription-nodes.txt, пишется update-xray.sh). Второй нужен
+    для профилей, которые роутер не выбрал: клиент в LAN может запустить свой Xray
+    с той же подпиской и другим профилем, и его трафик к узлу не должен
+    заворачиваться в TProxy повторно.
     """
     addrs = set()
     unresolved = []
+
+    seen = set()
     for ob in _config().get("outbounds", []):
         settings = ob.get("settings") if isinstance(ob, dict) else None
         if not isinstance(settings, dict):
@@ -398,18 +413,41 @@ def server_ips() -> list:
             if not isinstance(target, dict):
                 continue
             addr = target.get("address")
-            if is_ipv4(addr):
-                addrs.add(addr)
-            elif isinstance(addr, str) and addr:
-                resolved = resolve_ipv4(addr)
-                if resolved:
-                    addrs.update(resolved)
-                else:
-                    unresolved.append(addr)
+            if isinstance(addr, str) and addr and addr not in seen:
+                seen.add(addr)
+                _collect_address(addr, addrs, unresolved)
+
+    for addr in _nodes_file_addresses():
+        if addr not in seen:
+            seen.add(addr)
+            _collect_address(addr, addrs, unresolved)
+
     if unresolved:
         log("не удалось определить IP серверов прокси: " + ", ".join(unresolved) +
             " — их трафик пойдёт через TProxy")
     return sorted(addrs)
+
+
+def _collect_address(addr: str, addrs: set, unresolved: list) -> None:
+    """IP добавляется как есть, имя резолвится"""
+    if is_ipv4(addr):
+        addrs.add(addr)
+        return
+    resolved = resolve_ipv4(addr)
+    if resolved:
+        addrs.update(resolved)
+    else:
+        unresolved.append(addr)
+
+
+def _nodes_file_addresses() -> list:
+    """Адреса всех узлов подписки из state-файла (по строке на адрес)"""
+    try:
+        with open(NODES_FILE, encoding="utf-8", errors="replace") as source:
+            return [line.strip() for line in source
+                    if line.strip() and not line.startswith("#")]
+    except OSError:
+        return []
 
 
 def dns_ips() -> list:
@@ -565,8 +603,9 @@ def apply_rules(lan: str, guest: str, iot: str) -> None:
             *COUNTER, "return")
     nft("add", "rule", NFT_PREROUTING, "prerouting", "udp", "dport", "{", "67,", "68", "}",
         *COUNTER, "return")
-    for addr in SERVER_IPS:
-        nft("add", "rule", NFT_PREROUTING, "prerouting", "ip", "daddr", addr, *COUNTER, "return")
+    if add_nodes_set(NFT_PREROUTING):
+        nft("add", "rule", NFT_PREROUTING, "prerouting", "ip", "daddr", "@" + NODES_SET,
+            *COUNTER, "return")
     if guest:
         nft("add", "rule", NFT_PREROUTING, "prerouting", "iifname", guest, *COUNTER, "return")
     if iot:
@@ -613,12 +652,25 @@ def apply_rules(lan: str, guest: str, iot: str) -> None:
     if dns_list:
         nft("add", "rule", NFT_TABLE, "output", "ip", "daddr", "{", dns_list, "}", *COUNTER, "return")
     nft("add", "rule", NFT_TABLE, "output", "udp", "dport", "{", "67,", "68", "}", *COUNTER, "return")
-    for addr in SERVER_IPS:
-        nft("add", "rule", NFT_TABLE, "output", "ip", "daddr", addr, *COUNTER, "return")
+    if add_nodes_set(NFT_TABLE):
+        nft("add", "rule", NFT_TABLE, "output", "ip", "daddr", "@" + NODES_SET,
+            *COUNTER, "return")
     # fwmark → table: пакет возвращается в prerouting, где его ловит TProxy
     for proto in ("tcp", "udp"):
         nft("add", "rule", NFT_TABLE, "output", "meta", "l4proto", proto,
             "meta", "mark", "set", str(fwmark), *COUNTER)
+
+
+def add_nodes_set(table: str) -> bool:
+    """
+    Создаёт набор адресов узлов в таблице. False — адресов нет, правило не нужно:
+    без узлов (прямой конфиг, подписка не разобрана) набор был бы пустым.
+    """
+    if not SERVER_IPS:
+        return False
+    nft("add", "set", table, NODES_SET, "{", "type", "ipv4_addr;", "}")
+    nft("add", "element", table, NODES_SET, "{", ", ".join(SERVER_IPS), "}")
+    return True
 
 
 def bypass_targets(chain_listing: str) -> set:
@@ -656,14 +708,18 @@ def verify_rules() -> None:
     if missing:
         rollback("В таблице xray_prerouting нет bypass для DNS-серверов ("
                  f"{', '.join(missing)})")
-    # Адреса серверов прокси добавляются отдельными правилами (без набора { }),
-    # поэтому ищутся по строке, а не через bypass_targets
-    missing_servers = [address for address in SERVER_IPS
-                       if not re.search(rf"ip daddr {re.escape(address)}"
-                                        + COUNTER_RE + r"\s+return", chain)]
-    if missing_servers:
-        rollback("В таблице xray_prerouting нет bypass для серверов прокси ("
-                 f"{', '.join(missing_servers)})")
+    # Адреса серверов прокси живут в именованном наборе @nodes: проверяем, что
+    # правило с ним есть, а сами адреса — в элементах набора
+    if SERVER_IPS:
+        if f"ip daddr @{NODES_SET}" not in chain:
+            rollback(f"В таблице xray_prerouting нет bypass для серверов прокси "
+                     f"(ip daddr @{NODES_SET} return)")
+        listed = nft("list", "set", NFT_PREROUTING, NODES_SET, capture=True, quiet=True)
+        present = set(re.findall(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", listed))
+        missing_servers = [address for address in SERVER_IPS if address not in present]
+        if missing_servers:
+            rollback("В наборе адресов узлов нет адресов серверов прокси ("
+                     f"{', '.join(missing_servers)})")
     if CFG["mode"] == "gateway" and not re.search(
             r"meta nfproto ipv6" + COUNTER_RE + r" drop", chain):
         rollback("В таблице xray_prerouting нет блокировки IPv6 от клиентов "
